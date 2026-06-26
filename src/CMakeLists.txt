@@ -207,6 +207,10 @@ if (ENABLE_QT) # Or any other hypothetical future frontends
     add_subdirectory(citra_meta)
 endif()
 
+if (DEKOPON)
+    add_subdirectory(citra_switch)
+endif()
+
 if (ENABLE_LIBRETRO)
     add_subdirectory(citra_libretro)
 endif()
