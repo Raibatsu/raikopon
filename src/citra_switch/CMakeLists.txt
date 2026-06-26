@@ -3,6 +3,17 @@ add_executable(citra_switch
     citra_switch.cpp
 )
 
+# EGL provided by switch-mesa
+find_path(SWITCH_GL_INCLUDE_DIR EGL/egl.h REQUIRED)
+find_library(SWITCH_EGL EGL REQUIRED)
+find_library(SWITCH_GLESV2 GLESv2 REQUIRED)
+find_library(SWITCH_GLAPI glapi REQUIRED)
+find_library(SWITCH_DRM_NOUVEAU drm_nouveau REQUIRED)
+
+target_include_directories(citra_switch PRIVATE ${SWITCH_GL_INCLUDE_DIR})
+target_link_libraries(citra_switch PRIVATE
+    ${SWITCH_EGL} ${SWITCH_GLESV2} ${SWITCH_GLAPI} ${SWITCH_DRM_NOUVEAU})
+
 nx_generate_nacp(OUTPUT dekopon.nacp
     NAME "Dekopon"
     AUTHOR "Azahar Team \& PalindromicBreadLoaf"
