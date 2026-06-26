@@ -84,7 +84,8 @@
 	url = https://github.com/bylaws/libadrenotools
 [submodule "oaknut"]
 	path = externals/oaknut
-	url = https://github.com/merryhime/oaknut.git
+	url = https://github.com/PalindromicBreadLoaf/oaknut-nx.git
+	branch = switch
 [submodule "compatibility-list"]
 	path = dist/compatibility_list
 	url = https://github.com/azahar-emu/compatibility-list

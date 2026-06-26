@@ -14,6 +14,8 @@
 #include <sys/types.h>
 #include <sys/sysctl.h>
 // clang-format on
+#elif defined(__SWITCH__)
+// Switch being a known-standard target we know that everything here works on it
 #elif !defined(_WIN32)
 #ifndef __FreeBSD__
 #include <asm/hwcap.h>
@@ -88,6 +90,15 @@ static CPUCaps Detect() {
     caps.crc32 = true;
     caps.sha1 = true;
     caps.sha2 = true;
+#elif defined(__SWITCH__)
+    // Cortex A57 implements all of these.
+    caps.fp = true;
+    caps.asimd = true;
+    caps.aes = true;
+    caps.crc32 = true;
+    caps.sha1 = true;
+    caps.sha2 = true;
+    caps.cpu_string = GetCPUString();
 #else
     caps.cpu_string = GetCPUString();
 

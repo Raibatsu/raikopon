@@ -39,12 +39,15 @@ else()
     target_link_libraries(boost_serialization PUBLIC boost)
 
     # Boost::iostreams
-    add_library(
-        boost_iostreams
-        STATIC
+    set(boost_iostreams_SRC
         ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/file_descriptor.cpp
-        ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/mapped_file.cpp
     )
+    # Libnx lacks mmap, but it's also not needed
+    if (NOT DEKOPON)
+        list(APPEND boost_iostreams_SRC
+            ${CMAKE_SOURCE_DIR}/externals/boost/libs/iostreams/src/mapped_file.cpp)
+    endif()
+    add_library(boost_iostreams STATIC ${boost_iostreams_SRC})
     target_link_libraries(boost_iostreams PUBLIC boost)
     # Add additional boost libs here; remember to ALIAS them in the root CMakeLists!
 endif()
@@ -72,6 +75,11 @@ else()
     set(CRYPTOPP_BUILD_TESTING OFF CACHE BOOL "")
     set(CRYPTOPP_INSTALL OFF CACHE BOOL "")
     add_subdirectory(cryptopp EXCLUDE_FROM_ALL)
+    if (DEKOPON)
+        # Use arc4random from libnx over the Unix /dev/urandom
+        target_compile_definitions(cryptopp PUBLIC OS_RNG_AVAILABLE NONBLOCKING_RNG_AVAILABLE)
+        target_compile_definitions(cryptopp PRIVATE USE_FREEBSD_ARC4RANDOM)
+    endif()
 endif()
 
 # dds-ktx
@@ -317,7 +325,11 @@ else()
 endif()
 
 # OpenSSL
-if (USE_SYSTEM_OPENSSL)
+if (DEKOPON)
+    # Stub this for now
+    # TODO: Maybe come back to this?
+    set(OPENSSL_LIBRARIES "")
+elseif (USE_SYSTEM_OPENSSL)
     find_package(OpenSSL 1.1)
     set(OPENSSL_LIBRARIES OpenSSL::SSL OpenSSL::Crypto)
 else()
@@ -358,7 +370,9 @@ else()
     target_include_directories(httplib INTERFACE ./httplib)
     target_disable_warnings(httplib)
 endif()
-target_compile_options(httplib INTERFACE -DCPPHTTPLIB_OPENSSL_SUPPORT)
+if (NOT DEKOPON)
+    target_compile_options(httplib INTERFACE -DCPPHTTPLIB_OPENSSL_SUPPORT)
+endif()
 target_link_libraries(httplib INTERFACE ${OPENSSL_LIBRARIES})
 
 if (UNIX AND NOT APPLE)

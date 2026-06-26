@@ -107,9 +107,9 @@ endif()
 
 # Nintendo Switch target detection.
 if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
-    set(AZAHAR_SWITCH ON)
+    set(DEKOPON ON)
     set(ARCHITECTURE "arm64")
-    message(STATUS "Building for Nintendo Switch (Horizon homebrew).")
+    message(STATUS "Building for Nintendo Switch")
 endif()
 
 # Track which options were explicitly set by the user (for libretro conflict detection)
@@ -192,7 +192,7 @@ if(ENABLE_LIBRETRO)
 endif()
 
 # Resolve options for the Nintendo Switch build.
-if (AZAHAR_SWITCH)
+if (DEKOPON)
     set(ENABLE_QT OFF CACHE BOOL "Disabled for Switch" FORCE)
     set(ENABLE_QT_TRANSLATION OFF CACHE BOOL "Disabled for Switch" FORCE)
     set(ENABLE_QT_UPDATE_CHECKER OFF CACHE BOOL "Disabled for Switch" FORCE)

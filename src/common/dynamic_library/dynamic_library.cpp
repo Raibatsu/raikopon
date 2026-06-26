@@ -5,6 +5,8 @@
 #include <fmt/format.h>
 #if defined(_WIN32)
 #include <windows.h>
+#elif defined(__SWITCH__)
+// Horizon has no dlopen nor has a need for it  :>)
 #else
 #include <dlfcn.h>
 #endif
@@ -25,6 +27,7 @@ DynamicLibrary::~DynamicLibrary() {
     if (handle) {
 #if defined(_WIN32)
         FreeLibrary(reinterpret_cast<HMODULE>(handle));
+#elif defined(__SWITCH__)
 #else
         dlclose(handle);
 #endif // defined(_WIN32)
@@ -47,6 +50,10 @@ bool DynamicLibrary::Load(std::string_view filename) {
         load_error = message;
         return false;
     }
+#elif defined(__SWITCH__)
+    (void)filename;
+    load_error = "Dynamic library loading is not supported";
+    return false;
 #else
     handle = dlopen(filename.data(), RTLD_LAZY);
     if (!handle) {
@@ -60,6 +67,9 @@ bool DynamicLibrary::Load(std::string_view filename) {
 void* DynamicLibrary::GetRawSymbol(std::string_view name) const {
 #if defined(_WIN32)
     return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(handle), name.data()));
+#elif defined(__SWITCH__)
+    (void)name;
+    return nullptr;
 #else
     return dlsym(handle, name.data());
 #endif // defined(_WIN32)
