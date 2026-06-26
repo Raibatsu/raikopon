@@ -88,6 +88,24 @@ void close_gl(void) {
         libGL = NULL;
     }
 }
+#elif defined(__SWITCH__)
+// Stub this to prevent compilation errors. Switch doesn't use it anyways.
+static void* libGL;
+
+static
+int open_gl(void) {
+    return 0;
+}
+
+static
+void close_gl(void) {
+}
+
+static
+void* get_proc(const char *namez) {
+    (void)namez;
+    return NULL;
+}
 #else
 #include <dlfcn.h>
 static void* libGL;
@@ -137,6 +155,7 @@ void close_gl(void) {
 }
 #endif
 
+#ifndef __SWITCH__
 static
 void* get_proc(const char *namez) {
     void* result = NULL;
@@ -157,6 +176,7 @@ void* get_proc(const char *namez) {
 
     return result;
 }
+#endif // __SWITCH__
 
 int gladLoadGL(void) {
     int status = 0;

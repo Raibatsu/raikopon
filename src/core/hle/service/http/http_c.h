@@ -324,8 +324,10 @@ public:
     void MakeRequest();
     void MakeRequestNonSSL(httplib::Request& request, const URLInfo& url_info,
                            std::vector<Context::RequestHeader>& pending_headers);
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
     void MakeRequestSSL(httplib::Request& request, const URLInfo& url_info,
                         std::vector<Context::RequestHeader>& pending_headers);
+#endif
     bool ContentProvider(size_t offset, size_t length, httplib::DataSink& sink);
     bool ChunkedContentProvider(size_t offset, httplib::DataSink& sink);
     std::size_t HandleHeaderWrite(std::vector<Context::RequestHeader>& pending_headers,

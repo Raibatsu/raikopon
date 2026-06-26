@@ -38,7 +38,10 @@
 #include <cerrno>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#ifndef __SWITCH__
+// Horizon has no <ifaddrs.h> This is skipped below
 #include <ifaddrs.h>
+#endif
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
@@ -2334,9 +2337,10 @@ std::optional<SOC_U::InterfaceInfo> SOC_U::GetDefaultInterfaceInfo() {
             break;
         }
     }
-#elif !(defined(ANDROID) && defined(HAVE_LIBRETRO))
+#elif !(defined(ANDROID) && defined(HAVE_LIBRETRO)) && !defined(__SWITCH__)
     // Libretro Android builds target API 21, but getifaddrs() requires API 24+.
     // Standalone Android (minSdk 29) and other platforms have getifaddrs().
+    //Libnx has no getifaddrs
     struct ifaddrs* ifaddr;
     struct ifaddrs* ifa;
     if (getifaddrs(&ifaddr) == -1) {

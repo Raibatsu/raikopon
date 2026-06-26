@@ -369,7 +369,14 @@ void Context::MakeRequest() {
     }
 
     if (url_info.is_https) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
         MakeRequestSSL(request, url_info, pending_headers);
+#else
+        // TODO: Networking
+        LOG_ERROR(Service_HTTP, "HTTPS request to {} unsupported: built without OpenSSL",
+                  url_info.host);
+        state = RequestState::Completed;
+#endif
     } else {
         MakeRequestNonSSL(request, url_info, pending_headers);
     }
@@ -395,6 +402,7 @@ void Context::MakeRequestNonSSL(httplib::Request& request, const URLInfo& url_in
     }
 }
 
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
 void Context::MakeRequestSSL(httplib::Request& request, const URLInfo& url_info,
                              std::vector<Context::RequestHeader>& pending_headers) {
     httplib::Error error{-1};
@@ -452,6 +460,7 @@ void Context::MakeRequestSSL(httplib::Request& request, const URLInfo& url_info,
         state = RequestState::ReceivingBody;
     }
 }
+#endif // CPPHTTPLIB_OPENSSL_SUPPORT
 
 bool Context::ContentProvider(size_t offset, size_t length, httplib::DataSink& sink) {
     if (!post_data_raw.empty()) {

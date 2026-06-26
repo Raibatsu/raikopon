@@ -58,6 +58,13 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
     SetThreadPriority(handle, windows_priority);
 }
 
+#elif defined(__SWITCH__)
+
+void SetCurrentThreadPriority(ThreadPriority new_priority) {
+    // TODO: Threading priorities
+    (void)new_priority;
+}
+
 #else
 
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
@@ -106,6 +113,9 @@ void SetCurrentThreadName(const char* name) {
         errno = e;
         LOG_ERROR(Common, "Failed to set thread name to '{}': {}", truncated, GetLastErrorMsg());
     }
+#elif defined(__SWITCH__)
+    // Not possible and unnecessary on Switch
+    (void)name;
 #else
     pthread_setname_np(pthread_self(), name);
 #endif

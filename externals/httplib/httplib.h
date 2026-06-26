@@ -172,7 +172,8 @@ using socket_t = SOCKET;
 #else // not _WIN32
 
 #include <arpa/inet.h>
-#if !defined(_AIX) && !defined(__MVS__)
+#if !defined(_AIX) && !defined(__MVS__) && !defined(__SWITCH__)
+// Horizon has no <ifaddrs.h>
 #include <ifaddrs.h>
 #endif
 #ifdef __MVS__
@@ -193,10 +194,16 @@ using socket_t = SOCKET;
 #endif
 #include <csignal>
 #include <pthread.h>
+#ifndef __SWITCH__
+// Horizon has no <sys/mman.h>
 #include <sys/mman.h>
+#endif
 #include <sys/select.h>
 #include <sys/socket.h>
+#ifndef __SWITCH__
+// Horizon has no AF_UNIX sockets
 #include <sys/un.h>
+#endif
 #include <unistd.h>
 
 using socket_t = int;
@@ -2593,6 +2600,10 @@ inline bool mmap::open(const char *path) {
   }
 
   addr_ = ::MapViewOfFile(hMapping_, FILE_MAP_READ, 0, 0, 0);
+#elif defined(__SWITCH__)
+  // Horizon has no mmap
+  (void)path;
+  return false;
 #else
   fd_ = ::open(path, O_RDONLY);
   if (fd_ == -1) { return false; }
@@ -2637,6 +2648,8 @@ inline void mmap::close() {
     ::CloseHandle(hFile_);
     hFile_ = INVALID_HANDLE_VALUE;
   }
+#elif defined(__SWITCH__)
+  // Nothing is ever mapped on Horizon
 #else
   if (addr_ != nullptr) {
     munmap(addr_, size_);
@@ -2968,7 +2981,7 @@ socket_t create_socket(const std::string &host, const std::string &ip, int port,
     hints.ai_flags = socket_flags;
   }
 
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__SWITCH__)
   if (hints.ai_family == AF_UNIX) {
     const auto addrlen = host.length();
     if (addrlen > sizeof(sockaddr_un::sun_path)) return INVALID_SOCKET;
@@ -3119,7 +3132,8 @@ inline bool bind_ip_address(socket_t sock, const std::string &host) {
   return ret;
 }
 
-#if !defined _WIN32 && !defined ANDROID && !defined _AIX && !defined __MVS__
+#if !defined _WIN32 && !defined ANDROID && !defined _AIX && !defined __MVS__ &&        \
+    !defined __SWITCH__
 #define USE_IF2IP
 #endif
 
@@ -3279,7 +3293,7 @@ inline void get_remote_ip_and_port(socket_t sock, std::string &ip, int &port) {
 
   if (!getpeername(sock, reinterpret_cast<struct sockaddr *>(&addr),
                    &addr_len)) {
-#ifndef _WIN32
+#if !defined(_WIN32) && !defined(__SWITCH__)
     if (addr.ss_family == AF_UNIX) {
 #if defined(__linux__)
       struct ucred ucred;
