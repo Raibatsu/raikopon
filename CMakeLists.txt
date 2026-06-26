@@ -105,6 +105,13 @@ else()
     set(DEFAULT_ENABLE_OPENGL ON)
 endif()
 
+# Nintendo Switch target detection.
+if (CMAKE_SYSTEM_NAME STREQUAL "NintendoSwitch")
+    set(AZAHAR_SWITCH ON)
+    set(ARCHITECTURE "arm64")
+    message(STATUS "Building for Nintendo Switch (Horizon homebrew).")
+endif()
+
 # Track which options were explicitly set by the user (for libretro conflict detection)
 set(_LIBRETRO_INCOMPATIBLE_OPTIONS
     ENABLE_SDL2 ENABLE_QT ENABLE_WEB_SERVICE ENABLE_SCRIPTING ENABLE_GDBSTUB
@@ -182,6 +189,41 @@ if(ENABLE_LIBRETRO)
     foreach(_opt IN LISTS _LIBRETRO_INCOMPATIBLE_OPTIONS)
         set(${_opt} OFF CACHE BOOL "Disabled for libretro" FORCE)
     endforeach()
+endif()
+
+# Resolve options for the Nintendo Switch build.
+if (AZAHAR_SWITCH)
+    set(ENABLE_QT OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_QT_TRANSLATION OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_QT_UPDATE_CHECKER OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_ROOM OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_ROOM_STANDALONE OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_WEB_SERVICE OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_SCRIPTING OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_GDBSTUB OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_TESTS OFF CACHE BOOL "Disabled for Switch" FORCE)
+
+    # Desktop audio / input / IPC backends are unavailable on Horizon
+    # TODO: Replace with libnx
+    set(ENABLE_CUBEB OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_OPENAL OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_LIBUSB OFF CACHE BOOL "Disabled for Switch" FORCE)
+    set(ENABLE_DISCORD_RPC OFF CACHE BOOL "Disabled for Switch" FORCE)
+
+    # TODO: Replace with libnx
+    set(ENABLE_SDL2 OFF CACHE BOOL "Disabled for Switch" FORCE)
+
+    # x86_64-only optimisation flag.
+    set(ENABLE_SSE42 OFF CACHE BOOL "Disabled for Switch" FORCE)
+
+    # Switch-mesa provides OpenGL
+    # TODO: Implemenet Deko3D renderer
+    set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for Switch" FORCE)
+    set(ENABLE_OPENGL ON CACHE BOOL "Enabled for Switch (GLES)" FORCE)
+    set(ENABLE_VULKAN OFF CACHE BOOL "No Vulkan driver on Switch" FORCE)
+
+    # Source-level platform define for #ifdef __SWITCH__
+    add_definitions(-D__SWITCH__)
 endif()
 
 # Pass the following values to C++ land
