@@ -122,6 +122,17 @@ if ("arm64" IN_LIST ARCHITECTURE)
     else()
         add_subdirectory(oaknut EXCLUDE_FROM_ALL)
     endif()
+
+    if (DEKOPON)
+        # Isolate the libnx calls in their own TU and hand them to oaknut through a libnx-free header due to duplicate, differing definitions of u128.
+        add_library(oaknut_horizon_jit STATIC
+            switch_stubs/oaknut/horizon_jit.cpp
+            switch_stubs/oaknut/horizon_jit.h
+        )
+        target_include_directories(oaknut_horizon_jit PUBLIC switch_stubs)
+        target_include_directories(oaknut INTERFACE
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/switch_stubs>)
+    endif()
 endif()
 
 # Dynarmic
