@@ -958,6 +958,12 @@ void SetUserPath(const std::string& path) {
         user_path = "/";
         g_paths.emplace(UserPath::ConfigDir, user_path + CONFIG_DIR DIR_SEP);
         g_paths.emplace(UserPath::CacheDir, user_path + CACHE_DIR DIR_SEP);
+#elif defined(__SWITCH__)
+        // Default dir for stuff
+        user_path = "sdmc:/switch/dekopon/";
+        FileUtil::CreateFullPath(user_path);
+        g_paths.emplace(UserPath::ConfigDir, user_path + CONFIG_DIR DIR_SEP);
+        g_paths.emplace(UserPath::CacheDir, user_path + CACHE_DIR DIR_SEP);
 #else
         std::string& legacy_citra_user_path = g_paths[UserPath::LegacyCitraUserDir];
         std::string& legacy_lime3ds_user_path = g_paths[UserPath::LegacyLime3DSUserDir];
@@ -1028,6 +1034,17 @@ void SetUserPath(const std::string& path) {
     g_paths.emplace(UserPath::LoadDir, user_path + LOAD_DIR DIR_SEP);
     g_paths.emplace(UserPath::StatesDir, user_path + STATES_DIR DIR_SEP);
     g_paths.emplace(UserPath::IconsDir, user_path + ICONS_DIR DIR_SEP);
+
+#ifdef __SWITCH__
+    // There is no first run setup on Switch
+    // TODO: Maybe that?
+    for (const UserPath sub :
+         {UserPath::ConfigDir, UserPath::SysDataDir, UserPath::NANDDir, UserPath::SDMCDir,
+          UserPath::ShaderDir, UserPath::LoadDir, UserPath::LogDir}) {
+        FileUtil::CreateFullPath(g_paths[sub]);
+    }
+#endif
+
     g_default_paths = g_paths;
 }
 
@@ -1468,6 +1485,23 @@ static std::size_t pread(int fd, void* buf, std::size_t count, uint64_t offset) 
         return std::numeric_limits<std::size_t>::max();
     }
     return read_bytes;
+}
+#elif defined(__SWITCH__)
+static std::size_t pread(int fd, void* buf, std::size_t count, uint64_t offset) {
+    // Emulate pread with lseek + read.
+    const off_t orig = lseek(fd, 0, SEEK_CUR);
+    if (orig == static_cast<off_t>(-1)) {
+        return std::numeric_limits<std::size_t>::max();
+    }
+    if (lseek(fd, static_cast<off_t>(offset), SEEK_SET) == static_cast<off_t>(-1)) {
+        return std::numeric_limits<std::size_t>::max();
+    }
+    const ssize_t read_bytes = read(fd, buf, count);
+    lseek(fd, orig, SEEK_SET);
+    if (read_bytes < 0) {
+        return std::numeric_limits<std::size_t>::max();
+    }
+    return static_cast<std::size_t>(read_bytes);
 }
 #else
 #define pread ::pread

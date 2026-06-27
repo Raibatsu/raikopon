@@ -1,6 +1,9 @@
 # Dekopon frontend
 add_executable(citra_switch
     citra_switch.cpp
+    config.cpp
+    config.h
+    default_ini.h
 )
 
 # EGL provided by switch-mesa
@@ -11,6 +14,7 @@ find_library(SWITCH_GLAPI glapi REQUIRED)
 find_library(SWITCH_DRM_NOUVEAU drm_nouveau REQUIRED)
 
 target_include_directories(citra_switch PRIVATE ${SWITCH_GL_INCLUDE_DIR})
+target_link_libraries(citra_switch PRIVATE citra_common inih)
 target_link_libraries(citra_switch PRIVATE
     ${SWITCH_EGL} ${SWITCH_GLESV2} ${SWITCH_GLAPI} ${SWITCH_DRM_NOUVEAU})
 
