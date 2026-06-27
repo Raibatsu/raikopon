@@ -9,6 +9,8 @@
 #include <EGL/eglext.h>
 #include <GLES3/gl3.h>
 
+#include "citra_switch/config.h"
+
 namespace {
 
 EGLDisplay s_display = EGL_NO_DISPLAY;
@@ -96,7 +98,12 @@ int main(int argc, char* argv[]) {
     if (have_socket) {
         nxlinkStdio();
     }
-    std::printf("Dekopon, an Azahar port for the Nintendo Switch\n");
+    std::printf("Dekopon: an Azahar port for the Nintendo Switch\n");
+
+    // Resolve SD-card dirs and create folders/files if not present
+    const int launch_count = SwitchFrontend::Bootstrap();
+    std::printf("FS & logging up (launch #%d). Logs are located at sdmc:/switch/dekopon/log/\n",
+                launch_count);
 
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
@@ -105,6 +112,7 @@ int main(int argc, char* argv[]) {
     NWindow* window = nwindowGetDefault();
     if (!InitEgl(window)) {
         std::printf("EGL initialisation failed.\n");
+        SwitchFrontend::Shutdown();
         if (have_socket) {
             socketExit();
         }
@@ -133,6 +141,7 @@ int main(int argc, char* argv[]) {
     }
 
     ExitEgl();
+    SwitchFrontend::Shutdown();
     if (have_socket) {
         socketExit();
     }
