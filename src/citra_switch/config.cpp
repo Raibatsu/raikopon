@@ -88,6 +88,8 @@ private:
         // Core
         ReadSetting("Core", Settings::values.use_cpu_jit);
         ReadSetting("Core", Settings::values.cpu_clock_percentage);
+        Settings::values.is_new_3ds =
+            config->GetBoolean("Core", Settings::values.is_new_3ds.GetLabel(), false);
 
         // Renderer
         ReadSetting("Renderer", Settings::values.graphics_api);
@@ -117,7 +119,8 @@ private:
 
         ss << "[Core]\n";
         ss << "use_cpu_jit = " << (v.use_cpu_jit.GetValue() ? "true" : "false") << '\n';
-        ss << "cpu_clock_percentage = " << v.cpu_clock_percentage.GetValue() << "\n\n";
+        ss << "cpu_clock_percentage = " << v.cpu_clock_percentage.GetValue() << '\n';
+        ss << "is_new_3ds = " << (v.is_new_3ds.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[Renderer]\n";
         ss << "graphics_api = " << static_cast<int>(v.graphics_api.GetValue()) << '\n';

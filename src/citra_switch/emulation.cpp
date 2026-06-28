@@ -9,6 +9,7 @@
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
 #include "common/file_util.h"
+#include "common/horizon_thread.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
 #include "core/core.h"
@@ -64,6 +65,10 @@ std::string ResolveRomPath(const std::string& rom_arg) {
 }
 
 void EmuThread(std::string path) {
+    if (!Common::Horizon::PinCurrentThread(2)) {
+        LOG_WARNING(Frontend, "Failed to pin emulation thread to core 2");
+    }
+
     auto& system = Core::System::GetInstance();
     EmuWindow_Switch* window = GetEmuWindow();
     if (!window) {
