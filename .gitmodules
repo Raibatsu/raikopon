@@ -107,4 +107,5 @@
 	url = https://github.com/azahar-emu/dllwalker
 [submodule "externals/cryptopp"]
 	path = externals/cryptopp
-	url = https://github.com/cryptopp-modern/cryptopp-modern.git
+	url = https://github.com/PalindromicBreadLoaf/cryptopp-modern-nx.git
+	branch = switch
