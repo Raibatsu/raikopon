@@ -14,9 +14,6 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
-#include "core/core.h"
-#include "video_core/gpu.h"
-#include "video_core/renderer_base.h"
 
 namespace {
 
@@ -56,7 +53,8 @@ public:
           egl_surface{eglCreatePbufferSurface(display, config, pbuffer_attribs.data())},
           egl_context{eglCreateContext(display, config, share, context_attribs.data())} {
         if (egl_surface == EGL_NO_SURFACE) {
-            LOG_WARNING(Frontend, "eglCreatePbufferSurface() failed (0x{:x})s",
+            LOG_WARNING(Frontend,
+                        "eglCreatePbufferSurface() failed (0x{:x})",
                         eglGetError());
         }
         ASSERT_MSG(egl_context != EGL_NO_CONTEXT, "eglCreateContext() failed: 0x{:x}",
@@ -69,7 +67,9 @@ public:
     }
 
     void MakeCurrent() override {
-        eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
+        if (eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context) != EGL_TRUE) {
+            LOG_CRITICAL(Frontend, "Shared-context eglMakeCurrent() failed: 0x{:x}", eglGetError());
+        }
     }
 
     void DoneCurrent() override {
@@ -96,9 +96,6 @@ EmuWindow_Switch::EmuWindow_Switch(void* native_window, bool is_secondary)
     }
 
     window_info.render_surface = native_window;
-
-    // The emulation thread renders the 3DS framebuffers through this while the main thread keeps the window context for Present().
-    core_context = CreateSharedContext();
 
     UpdateCurrentFramebufferLayout(window_width, window_height);
     is_valid = true;
@@ -152,8 +149,7 @@ bool EmuWindow_Switch::CreateEGLContext(void* native_window) {
         window_height = kSwitchScreenHeight;
     }
 
-    egl_context =
-        eglCreateContext(egl_display, egl_config, EGL_NO_CONTEXT, context_attribs.data());
+    egl_context = eglCreateContext(egl_display, egl_config, EGL_NO_CONTEXT, context_attribs.data());
     if (egl_context == EGL_NO_CONTEXT) {
         LOG_CRITICAL(Frontend, "eglCreateContext() failed: 0x{:x}", eglGetError());
         return false;
@@ -192,11 +188,13 @@ void EmuWindow_Switch::DestroyEGLContext() {
 }
 
 void EmuWindow_Switch::MakeCurrent() {
-    core_context->MakeCurrent();
+    if (eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context) != EGL_TRUE) {
+        LOG_CRITICAL(Frontend, "Window-context eglMakeCurrent() failed: 0x{:x}", eglGetError());
+    }
 }
 
 void EmuWindow_Switch::DoneCurrent() {
-    core_context->DoneCurrent();
+    eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 }
 
 void EmuWindow_Switch::PollEvents() {
@@ -204,32 +202,12 @@ void EmuWindow_Switch::PollEvents() {
 }
 
 void EmuWindow_Switch::SwapBuffers() {
+    eglSwapInterval(egl_display, Settings::values.use_vsync.GetValue() ? 1 : 0);
     eglSwapBuffers(egl_display, egl_surface);
 }
 
 std::unique_ptr<Frontend::GraphicsContext> EmuWindow_Switch::CreateSharedContext() const {
     return std::make_unique<SharedContext_Switch>(egl_display, egl_config, egl_context);
-}
-
-void EmuWindow_Switch::Present() {
-    if (!is_valid) {
-        return;
-    }
-    auto& system = Core::System::GetInstance();
-
-    // The window context lives on this thread
-    eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    if (system.IsPoweredOn()) {
-        eglSwapInterval(egl_display, Settings::values.use_vsync.GetValue() ? 1 : 0);
-        // Blit the latest frame the emulation thread rendered into the mailbox.
-        system.GPU().Renderer().TryPresent(0);
-    }
-
-    eglSwapBuffers(egl_display, egl_surface);
 }
 
 void EmuWindow_Switch::PresentClear() {
@@ -261,12 +239,6 @@ bool CreateWindow(void* native_window) {
         return false;
     }
     return true;
-}
-
-void PresentFrame() {
-    if (s_window) {
-        s_window->Present();
-    }
 }
 
 void ClearFrame() {
