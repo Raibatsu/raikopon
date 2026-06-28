@@ -8,6 +8,8 @@ add_executable(citra_switch
     emu_window.h
     emulation.cpp
     horizon_sys_stubs.cpp
+    input.cpp
+    input.h
 )
 
 # EGL provided by switch-mesa

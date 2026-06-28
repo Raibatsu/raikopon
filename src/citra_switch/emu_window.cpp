@@ -198,7 +198,7 @@ void EmuWindow_Switch::DoneCurrent() {
 }
 
 void EmuWindow_Switch::PollEvents() {
-    // TODO: Input and applet events
+    // main thread handles this
 }
 
 void EmuWindow_Switch::SwapBuffers() {
