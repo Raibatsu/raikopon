@@ -13,6 +13,7 @@
 #include "common/settings.h"
 #include "citra_switch/config.h"
 #include "citra_switch/default_ini.h"
+#include "core/hle/service/service.h"
 
 namespace {
 
@@ -101,6 +102,11 @@ private:
 
         // Miscellaneous
         ReadSetting("Miscellaneous", Settings::values.log_filter);
+
+        // The core expects every known service module to have an explicit setting and crashes if not.
+        for (const auto& service_module : Service::service_module_map) {
+            Settings::values.lle_modules.emplace(service_module.name, false);
+        }
 
         launch_count = config->GetInteger("Switch", "launch_count", 0) + 1;
     }

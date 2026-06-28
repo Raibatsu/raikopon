@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdio>
+#include <string>
 #include <switch.h>
 
 #include "citra_switch/config.h"
@@ -34,13 +35,32 @@ int main(int argc, char* argv[]) {
     }
     std::printf("EmuWindow worky.\n");
 
-    while (appletMainLoop()) {
-        padUpdate(&pad);
-        if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
-            break;
-        }
+    // Either take argv[1] or search sdmc:/switch/dekopon/roms/ for roms.
+    const std::string rom_arg = (argc > 1 && argv[1] != nullptr) ? argv[1] : std::string{};
 
-        SwitchFrontend::PresentFrame();
+    if (SwitchFrontend::BootRom(rom_arg)) {
+        std::printf("Booting ROM...\n");
+        while (appletMainLoop()) {
+            padUpdate(&pad);
+            if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
+                break;
+            }
+            if (!SwitchFrontend::IsRunning()) {
+                std::printf("Emulation stopped.\n");
+                break;
+            }
+            SwitchFrontend::PresentFrame();
+        }
+        SwitchFrontend::StopRom();
+    } else {
+        std::printf("No ROM to boot. Put one in sdmc:/switch/dekopon/roms/.\n");
+        while (appletMainLoop()) {
+            padUpdate(&pad);
+            if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
+                break;
+            }
+            SwitchFrontend::ClearFrame();
+        }
     }
 
     SwitchFrontend::DestroyWindow();

@@ -216,6 +216,10 @@ if (DEKOPON)
     # x86_64-only optimisation flag.
     set(ENABLE_SSE42 OFF CACHE BOOL "Disabled for Switch" FORCE)
 
+    # LTO miscompiles/misterminates the .eh_frame on the aarch64 NRO target
+    # TODO: Fix this
+    set(ENABLE_LTO OFF CACHE BOOL "Disabled for Switch)" FORCE)
+
     # Switch-mesa provides OpenGL
     # TODO: Implemenet Deko3D renderer
     set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for Switch" FORCE)
