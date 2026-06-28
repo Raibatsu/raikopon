@@ -29,9 +29,6 @@ public:
         return is_valid;
     }
 
-    /// Present the latest emulated frame from the renderer's mailbox to the window.
-    void Present();
-
     /// Clear the default framebuffer to a solid colour and present.
     void PresentClear();
 
@@ -43,9 +40,6 @@ private:
     EGLSurface egl_surface{EGL_NO_SURFACE};
     EGLContext egl_context{EGL_NO_CONTEXT};
     EGLConfig egl_config{};
-
-    // Shared context handed to the emulation thread via MakeCurrent().
-    std::unique_ptr<GraphicsContext> core_context;
 
     int window_width{};
     int window_height{};

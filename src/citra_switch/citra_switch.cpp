@@ -49,7 +49,7 @@ int main(int argc, char* argv[]) {
                 std::printf("Emulation stopped.\n");
                 break;
             }
-            SwitchFrontend::PresentFrame();
+            svcSleepThread(1'000'000);
         }
         SwitchFrontend::StopRom();
     } else {

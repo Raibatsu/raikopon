@@ -40,7 +40,7 @@ public:
 
     void Run(const ShaderSetup& setup, ShaderUnit& state, u32 offset) const {
         program(&setup.uniforms, &state,
-                reinterpret_cast<const std::byte*>(code_mem->ptr()) +
+                reinterpret_cast<const std::byte*>(code_mem->xptr()) +
                     instruction_labels[offset].offset());
     }
 

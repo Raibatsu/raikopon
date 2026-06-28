@@ -41,8 +41,7 @@ std::string ResolveRomPath(const std::string& rom_arg) {
         if (IsLoadableRom(rom_arg)) {
             return rom_arg;
         }
-        LOG_WARNING(Frontend, "ROM argument '{}' is not a loadable 3DS title",
-                    rom_arg);
+        LOG_WARNING(Frontend, "ROM argument '{}' is not a loadable 3DS title", rom_arg);
     }
 
     const std::string roms_dir = FileUtil::GetUserPath(FileUtil::UserPath::UserDir) + "roms/";
@@ -73,7 +72,7 @@ void EmuThread(std::string path) {
         return;
     }
 
-    // The renderer is created on this thread through the window's shared context.
+    // Mesa's Switch driver cannot reliably present renderbuffers across shared contexts
     window->MakeCurrent();
 
     const Core::System::ResultStatus load_result = system.Load(*window, path);
@@ -91,8 +90,7 @@ void EmuThread(std::string path) {
 
     // Load any cached disk shaders
     system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
-        s_stop,
-        [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
+        s_stop, [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
     while (!s_stop) {
@@ -140,6 +138,14 @@ bool BootRom(const std::string& rom_arg) {
     // TODO: Actually support applets via switch keyboard and such
     Frontend::RegisterDefaultApplets(system);
 
+    // Transfer ownership of the window context from the main thread to the emulation thread.
+    auto* window = GetEmuWindow();
+    if (!window) {
+        LOG_CRITICAL(Frontend, "No EmuWindow available");
+        return false;
+    }
+    window->DoneCurrent();
+
     s_stop = false;
     s_emu_thread = std::thread(EmuThread, path);
     return true;
@@ -154,7 +160,11 @@ void StopRom() {
     if (s_emu_thread.joinable()) {
         s_emu_thread.join();
     }
-    // Tear the core down after the emulation thread has released its context.
+    // Tear the core down after the window context current.
+    auto* window = GetEmuWindow();
+    if (window) {
+        window->MakeCurrent();
+    }
     auto& system = Core::System::GetInstance();
     if (system.IsPoweredOn()) {
         system.Shutdown();
