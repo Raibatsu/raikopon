@@ -10,6 +10,7 @@
 
 #include "citra_switch/config.h"
 #include "citra_switch/input.h"
+#include "common/horizon_thread.h"
 
 namespace {
 
@@ -69,6 +70,9 @@ int main(int argc, char* argv[]) {
     const bool have_socket = R_SUCCEEDED(socketInitializeDefault());
     if (have_socket) {
         nxlinkStdio();
+    }
+    if (!Common::Horizon::PinCurrentThread(0)) {
+        std::printf("Warning: failed to pin frontend thread to core 0.\n");
     }
     std::printf("Dekopon: an Azahar port for the Nintendo Switch\n");
 

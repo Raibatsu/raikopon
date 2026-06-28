@@ -11,6 +11,7 @@
 #include <new>
 #include <thread>
 #include <switch.h>
+#include "common/horizon_thread.h"
 
 // Libnx-based audio output made specifically for the Switch
 namespace AudioCore::Horizon {
@@ -50,6 +51,8 @@ void FillBuffer(AudioOut& audio_out, AudioOutBuffer& buffer) {
 }
 
 void AudioThread(AudioOut* audio_out) {
+    Common::Horizon::PinCurrentThread(1);
+
     while (!audio_out->quit.load(std::memory_order_relaxed)) {
         AudioOutBuffer* released = nullptr;
         std::uint32_t released_count = 0;

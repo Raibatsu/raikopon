@@ -135,6 +135,14 @@ if (ANDROID AND NOT ENABLE_LIBRETRO)
   )
 endif()
 
+if (DEKOPON)
+  target_sources(citra_common PRIVATE
+    horizon_thread.cpp
+    horizon_thread.h
+  )
+  set_source_files_properties(horizon_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+endif()
+
 if (MSVC)
   target_compile_options(citra_common PRIVATE
     /W4

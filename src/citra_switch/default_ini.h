@@ -13,6 +13,8 @@ constexpr const char* sConfigFile = R"(
 use_cpu_jit =
 # CPU clock speed as a percentage of the real 3DS (5 - 400, default 100).
 cpu_clock_percentage =
+# Disabled by default to reduce CPU overhead.
+is_new_3ds = false
 
 [Renderer]
 # Renderer backend: 0: Software, 1: OpenGL.
