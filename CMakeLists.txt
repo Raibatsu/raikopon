@@ -148,6 +148,8 @@ CMAKE_DEPENDENT_OPTION(ENABLE_SOFTWARE_RENDERER "Enables the software renderer" 
 CMAKE_DEPENDENT_OPTION(ENABLE_OPENGL "Enables the OpenGL renderer" ${DEFAULT_ENABLE_OPENGL} "NOT APPLE" OFF)
 # NetBSD doesn't support Vulkan yet, remove this check when it does.
 CMAKE_DEPENDENT_OPTION(ENABLE_VULKAN "Enables the Vulkan renderer" ON "NOT (BSD MATCHES \"NetBSD\")" OFF)
+# Deko3D is only available on Switch
+option(ENABLE_DEKO3D "Enables the Deko3D renderer" OFF)
 
 option(ENABLE_DISCORD_RPC "Enables Discord Rich Presence" OFF)
 
@@ -219,11 +221,10 @@ if (DEKOPON)
     # TODO: Fix this
     set(ENABLE_LTO OFF CACHE BOOL "Disabled for Switch)" FORCE)
 
-    # Switch-mesa provides OpenGL
-    # TODO: Implemenet Deko3D renderer
-    set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for Switch" FORCE)
+    set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for accuracy checks on Switch" FORCE)
     set(ENABLE_OPENGL ON CACHE BOOL "Enabled for Switch (GLES)" FORCE)
     set(ENABLE_VULKAN OFF CACHE BOOL "No Vulkan driver on Switch" FORCE)
+    set(ENABLE_DEKO3D ON CACHE BOOL "Native backend for Switch" FORCE)
 
     # Source-level platform define for #ifdef __SWITCH__
     add_definitions(-D__SWITCH__)
