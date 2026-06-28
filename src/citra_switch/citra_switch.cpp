@@ -2,11 +2,68 @@
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstdio>
 #include <string>
+#include <utility>
 #include <switch.h>
 
 #include "citra_switch/config.h"
+#include "citra_switch/input.h"
+
+namespace {
+
+constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 14> button_map{{
+    {HidNpadButton_A, SwitchFrontend::InputButton::A},
+    {HidNpadButton_B, SwitchFrontend::InputButton::B},
+    {HidNpadButton_X, SwitchFrontend::InputButton::X},
+    {HidNpadButton_Y, SwitchFrontend::InputButton::Y},
+    {HidNpadButton_Up, SwitchFrontend::InputButton::Up},
+    {HidNpadButton_Down, SwitchFrontend::InputButton::Down},
+    {HidNpadButton_Left, SwitchFrontend::InputButton::Left},
+    {HidNpadButton_Right, SwitchFrontend::InputButton::Right},
+    {HidNpadButton_L, SwitchFrontend::InputButton::L},
+    {HidNpadButton_R, SwitchFrontend::InputButton::R},
+    {HidNpadButton_Plus, SwitchFrontend::InputButton::Start},
+    {HidNpadButton_Minus, SwitchFrontend::InputButton::Select},
+    {HidNpadButton_ZL, SwitchFrontend::InputButton::ZL},
+    {HidNpadButton_ZR, SwitchFrontend::InputButton::ZR},
+}};
+
+u64 PollInput(PadState& pad) {
+    padUpdate(&pad);
+    const u64 held = padGetButtons(&pad);
+    const HidAnalogStickState left = padGetStickPos(&pad, 0);
+    const HidAnalogStickState right = padGetStickPos(&pad, 1);
+
+    SwitchFrontend::InputState state{
+        .left_x = left.x,
+        .left_y = left.y,
+        .right_x = right.x,
+        .right_y = right.y,
+    };
+    for (const auto& [source, target] : button_map) {
+        if ((held & source) != 0) {
+            state.buttons |= SwitchFrontend::ButtonMask(target);
+        }
+    }
+
+    HidTouchScreenState touch{};
+    if (hidGetTouchScreenStates(&touch, 1) != 0 && touch.count > 0) {
+        state.touch_pressed = true;
+        state.touch_x = touch.touches[0].x;
+        state.touch_y = touch.touches[0].y;
+    }
+    SwitchFrontend::UpdateInput(state);
+    return held;
+}
+
+bool ExitRequested(u64 held) {
+    constexpr u64 exit_chord = HidNpadButton_Plus | HidNpadButton_Minus;
+    return (held & exit_chord) == exit_chord;
+}
+
+} // namespace
 
 int main(int argc, char* argv[]) {
     const bool have_socket = R_SUCCEEDED(socketInitializeDefault());
@@ -23,6 +80,7 @@ int main(int argc, char* argv[]) {
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     PadState pad;
     padInitializeDefault(&pad);
+    hidInitializeTouchScreen();
 
     // The EmuWindow owns the EGL/GLES context on the default nwindow.
     if (!SwitchFrontend::CreateWindow(nwindowGetDefault())) {
@@ -34,6 +92,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     std::printf("EmuWindow worky.\n");
+    SwitchFrontend::InitializeInput();
 
     // Either take argv[1] or search sdmc:/switch/dekopon/roms/ for roms.
     const std::string rom_arg = (argc > 1 && argv[1] != nullptr) ? argv[1] : std::string{};
@@ -41,8 +100,7 @@ int main(int argc, char* argv[]) {
     if (SwitchFrontend::BootRom(rom_arg)) {
         std::printf("Booting ROM...\n");
         while (appletMainLoop()) {
-            padUpdate(&pad);
-            if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
+            if (ExitRequested(PollInput(pad))) {
                 break;
             }
             if (!SwitchFrontend::IsRunning()) {
@@ -55,14 +113,14 @@ int main(int argc, char* argv[]) {
     } else {
         std::printf("No ROM to boot. Put one in sdmc:/switch/dekopon/roms/.\n");
         while (appletMainLoop()) {
-            padUpdate(&pad);
-            if (padGetButtonsDown(&pad) & HidNpadButton_Plus) {
+            if (ExitRequested(PollInput(pad))) {
                 break;
             }
             SwitchFrontend::ClearFrame();
         }
     }
 
+    SwitchFrontend::ShutdownInput();
     SwitchFrontend::DestroyWindow();
     SwitchFrontend::Shutdown();
     if (have_socket) {
