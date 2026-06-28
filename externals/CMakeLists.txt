@@ -79,9 +79,8 @@ else()
         # Use arc4random from libnx over the Unix /dev/urandom
         target_compile_definitions(cryptopp PUBLIC OS_RNG_AVAILABLE NONBLOCKING_RNG_AVAILABLE)
         target_compile_definitions(cryptopp PRIVATE USE_FREEBSD_ARC4RANDOM)
-        # Horizon has no SIGILL-based CPU probing
-        # TODO: Figure out some workaround to this
-        target_compile_definitions(cryptopp PUBLIC CRYPTOPP_DISABLE_ASM)
+        # Switch is hard defined to what it supports in cryptopp
+        target_compile_definitions(cryptopp PRIVATE CRYPTOPP_NO_CPU_FEATURE_PROBES)
     endif()
 endif()
 
