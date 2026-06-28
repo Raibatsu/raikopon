@@ -14,6 +14,9 @@
 #ifdef ENABLE_VULKAN
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #endif
+#ifdef ENABLE_DEKO3D
+#include "video_core/renderer_deko3d/renderer_deko3d.h"
+#endif
 #include "video_core/video_core.h"
 
 #ifdef ENABLE_SDL2
@@ -44,6 +47,10 @@ std::unique_ptr<RendererBase> CreateRenderer(Frontend::EmuWindow& emu_window,
 #ifdef ENABLE_OPENGL
     case Settings::GraphicsAPI::OpenGL:
         return std::make_unique<OpenGL::RendererOpenGL>(system, pica, emu_window, secondary_window);
+#endif
+#ifdef ENABLE_DEKO3D
+    case Settings::GraphicsAPI::Deko3D:
+        return std::make_unique<Deko3D::RendererDeko3D>(system, pica, emu_window, secondary_window);
 #endif
     default:
         LOG_CRITICAL(Render,

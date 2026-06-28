@@ -23,6 +23,7 @@ enum class GraphicsAPI {
     Software = 0,
     OpenGL = 1,
     Vulkan = 2,
+    Deko3D = 3,
 };
 
 enum class InitClock : u32 {

@@ -205,6 +205,18 @@ if (ENABLE_VULKAN)
     target_link_libraries(video_core PRIVATE vulkan-headers vma sirit SPIRV glslang)
 endif()
 
+if (ENABLE_DEKO3D)
+    target_sources(video_core PRIVATE
+        renderer_deko3d/dk_rasterizer.cpp
+        renderer_deko3d/dk_rasterizer.h
+        renderer_deko3d/dk_common.h
+        renderer_deko3d/renderer_deko3d.cpp
+        renderer_deko3d/renderer_deko3d.h
+    )
+    find_library(DEKO3D_LIBRARY NAMES deko3d PATHS "${DEVKITPRO}/libnx/lib" REQUIRED)
+    target_link_libraries(video_core PRIVATE ${DEKO3D_LIBRARY})
+endif()
+
 if(ENABLE_SDL2)
     target_link_libraries(video_core PRIVATE SDL2::SDL2)
 endif()
