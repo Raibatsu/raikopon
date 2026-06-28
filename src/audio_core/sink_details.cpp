@@ -20,12 +20,22 @@
 #ifdef HAVE_OPENAL
 #include "audio_core/openal_sink.h"
 #endif
+#ifdef __SWITCH__
+#include "audio_core/horizon_sink.h"
+#endif
 #include "common/logging/log.h"
 
 namespace AudioCore {
 namespace {
 // sink_details is ordered in terms of desirability, with the best choice at the top.
 constexpr std::array sink_details = {
+#ifdef __SWITCH__
+    SinkDetails{SinkType::Horizon, "Nintendo Switch",
+                [](std::string_view device_id) -> std::unique_ptr<Sink> {
+                    return std::make_unique<HorizonSink>(device_id);
+                },
+                &ListHorizonSinkDevices},
+#endif
 #ifdef HAVE_LIBRETRO
     SinkDetails{SinkType::LibRetro, "libretro",
                 [](std::string_view device_id) -> std::unique_ptr<Sink> {
