@@ -203,8 +203,7 @@ if (DEKOPON)
     set(ENABLE_GDBSTUB OFF CACHE BOOL "Disabled for Switch" FORCE)
     set(ENABLE_TESTS OFF CACHE BOOL "Disabled for Switch" FORCE)
 
-    # Desktop audio / input / IPC backends are unavailable on Horizon
-    # TODO: Replace with libnx
+    # Native libnx ports of all of these are provided.
     set(ENABLE_CUBEB OFF CACHE BOOL "Disabled for Switch" FORCE)
     set(ENABLE_OPENAL OFF CACHE BOOL "Disabled for Switch" FORCE)
     set(ENABLE_LIBUSB OFF CACHE BOOL "Disabled for Switch" FORCE)
