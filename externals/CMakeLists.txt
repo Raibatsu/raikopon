@@ -132,6 +132,8 @@ if ("arm64" IN_LIST ARCHITECTURE)
         target_include_directories(oaknut_horizon_jit PUBLIC switch_stubs)
         target_include_directories(oaknut INTERFACE
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/switch_stubs>)
+        # Since LTO is disabled, we need to propagate the libnx JIT shim to every oaknut consumer
+        target_link_libraries(oaknut INTERFACE $<BUILD_INTERFACE:oaknut_horizon_jit>)
     endif()
 endif()
 

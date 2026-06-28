@@ -19,7 +19,9 @@
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #endif
+#ifndef __SWITCH__
 #include "core/arm/dyncom/arm_dyncom.h"
+#endif
 #include "core/cheats/cheats.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -520,6 +522,15 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
 
     exclusive_monitor = MakeExclusiveMonitor(*memory, num_cores);
     cpu_cores.reserve(num_cores);
+#ifdef __SWITCH__
+    if (!Settings::values.use_cpu_jit) {
+        LOG_WARNING(Core, "CPU JIT cannot be disabled on Switch");
+    }
+    for (u32 i = 0; i < num_cores; ++i) {
+        cpu_cores.push_back(std::make_shared<ARM_Dynarmic>(
+            *this, *memory, i, timing->GetTimer(i), *exclusive_monitor));
+    }
+#else
     if (Settings::values.use_cpu_jit) {
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
         for (u32 i = 0; i < num_cores; ++i) {
@@ -539,6 +550,7 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
                 std::make_shared<ARM_DynCom>(*this, *memory, USER32MODE, i, timing->GetTimer(i)));
         }
     }
+#endif
     running_core = cpu_cores[0].get();
 
     kernel->SetCPUs(cpu_cores);

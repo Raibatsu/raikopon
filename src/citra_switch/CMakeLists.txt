@@ -6,6 +6,8 @@ add_executable(citra_switch
     default_ini.h
     emu_window.cpp
     emu_window.h
+    emulation.cpp
+    horizon_sys_stubs.cpp
 )
 
 # EGL provided by switch-mesa
@@ -19,8 +21,8 @@ target_include_directories(citra_switch PRIVATE ${SWITCH_GL_INCLUDE_DIR})
 # Prepend our externals/glad so the GLES2 loader is found
 target_include_directories(citra_switch BEFORE PRIVATE
     $<TARGET_PROPERTY:glad,INTERFACE_INCLUDE_DIRECTORIES>)
-# oaknut_horizon_jit is the libnx shim for oaknut's W^X code cache
-target_link_libraries(citra_switch PRIVATE citra_core citra_common inih glad oaknut_horizon_jit)
+# oaknut_horizon_jit is pulled in transitively via oaknut
+target_link_libraries(citra_switch PRIVATE citra_core citra_common inih glad)
 
 target_link_libraries(citra_switch PRIVATE
     ${SWITCH_EGL} ${SWITCH_GLESV2} ${SWITCH_GLAPI} ${SWITCH_DRM_NOUVEAU})
