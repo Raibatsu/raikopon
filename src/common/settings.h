@@ -523,7 +523,7 @@ struct Values {
 // TODO: Add a null renderer backend for this, perhaps.
 #error "At least one renderer must be enabled."
 #endif
-        GraphicsAPI::Software, GraphicsAPI::Vulkan, Keys::graphics_api};
+        GraphicsAPI::Software, GraphicsAPI::Deko3D, Keys::graphics_api};
     // clang-format on
     SwitchableSetting<u32> physical_device{0, Keys::physical_device};
     Setting<bool> use_gles{false, Keys::use_gles};

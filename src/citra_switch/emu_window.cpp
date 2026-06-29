@@ -88,11 +88,19 @@ private:
 
 } // namespace
 
-EmuWindow_Switch::EmuWindow_Switch(void* native_window, bool is_secondary)
-    : EmuWindow{is_secondary} {
-    if (!CreateEGLContext(native_window)) {
-        DestroyEGLContext();
-        return;
+EmuWindow_Switch::EmuWindow_Switch(void* native_window, bool use_egl, bool is_secondary)
+    : EmuWindow{is_secondary}, egl_enabled{use_egl} {
+    if (egl_enabled) {
+        if (!CreateEGLContext(native_window)) {
+            DestroyEGLContext();
+            return;
+        }
+    } else {
+        // Do not create EGL instance when using Deko3D
+        window_width = kSwitchScreenWidth;
+        window_height = kSwitchScreenHeight;
+        LOG_INFO(Frontend, "EmuWindow up in deko3d mode: {}x{}", window_width,
+                 window_height);
     }
 
     window_info.render_surface = native_window;
@@ -188,12 +196,18 @@ void EmuWindow_Switch::DestroyEGLContext() {
 }
 
 void EmuWindow_Switch::MakeCurrent() {
+    if (!egl_enabled) {
+        return; // deko3d has no host GL context to bind.
+    }
     if (eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context) != EGL_TRUE) {
         LOG_CRITICAL(Frontend, "Window-context eglMakeCurrent() failed: 0x{:x}", eglGetError());
     }
 }
 
 void EmuWindow_Switch::DoneCurrent() {
+    if (!egl_enabled) {
+        return;
+    }
     eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 }
 
@@ -202,16 +216,23 @@ void EmuWindow_Switch::PollEvents() {
 }
 
 void EmuWindow_Switch::SwapBuffers() {
+    if (!egl_enabled) {
+        return; // the deko3d renderer presents through its own swapchain.
+    }
     eglSwapInterval(egl_display, Settings::values.use_vsync.GetValue() ? 1 : 0);
     eglSwapBuffers(egl_display, egl_surface);
 }
 
 std::unique_ptr<Frontend::GraphicsContext> EmuWindow_Switch::CreateSharedContext() const {
+    if (!egl_enabled) {
+        // This is a fancy no-op
+        return std::make_unique<Frontend::GraphicsContext>();
+    }
     return std::make_unique<SharedContext_Switch>(egl_display, egl_config, egl_context);
 }
 
 void EmuWindow_Switch::PresentClear() {
-    if (!is_valid) {
+    if (!is_valid || !egl_enabled) {
         return;
     }
     eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
@@ -232,7 +253,10 @@ EmuWindow_Switch* GetEmuWindow() {
 namespace SwitchFrontend {
 
 bool CreateWindow(void* native_window) {
-    s_window = std::make_unique<EmuWindow_Switch>(native_window);
+    // deko3d owns the nwindow directly
+    const bool use_egl =
+        Settings::GetWorkingGraphicsAPI() != Settings::GraphicsAPI::Deko3D;
+    s_window = std::make_unique<EmuWindow_Switch>(native_window, use_egl);
     if (!s_window->IsValid()) {
         LOG_CRITICAL(Frontend, "Failed to bring up EmuWindow");
         s_window.reset();

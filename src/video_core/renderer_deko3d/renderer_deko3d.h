@@ -43,6 +43,8 @@ private:
     void ExitDeko3D();
     /// Records, per swapchain slot, the command list that binds and clears that framebuffer.
     void BuildClearCommandLists();
+    /// Acquires a swapchain image, submits the current frame's commands, and presents it.
+    void Present();
 
     static constexpr unsigned NumFramebuffers = 2;
 
