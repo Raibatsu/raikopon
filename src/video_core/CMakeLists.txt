@@ -207,9 +207,14 @@ endif()
 
 if (ENABLE_DEKO3D)
     target_sources(video_core PRIVATE
+        renderer_deko3d/dk_common.h
+        renderer_deko3d/dk_memory.cpp
+        renderer_deko3d/dk_memory.h
         renderer_deko3d/dk_rasterizer.cpp
         renderer_deko3d/dk_rasterizer.h
-        renderer_deko3d/dk_common.h
+        renderer_deko3d/dk_rasterizer_cache.cpp
+        renderer_deko3d/dk_texture_runtime.cpp
+        renderer_deko3d/dk_texture_runtime.h
         renderer_deko3d/renderer_deko3d.cpp
         renderer_deko3d/renderer_deko3d.h
     )
