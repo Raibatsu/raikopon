@@ -213,6 +213,8 @@ if (ENABLE_DEKO3D)
         renderer_deko3d/dk_rasterizer.cpp
         renderer_deko3d/dk_rasterizer.h
         renderer_deko3d/dk_rasterizer_cache.cpp
+        renderer_deko3d/dk_shader.cpp
+        renderer_deko3d/dk_shader.h
         renderer_deko3d/dk_texture_runtime.cpp
         renderer_deko3d/dk_texture_runtime.h
         renderer_deko3d/renderer_deko3d.cpp

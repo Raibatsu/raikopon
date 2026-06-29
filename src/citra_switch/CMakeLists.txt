@@ -62,6 +62,8 @@ if (ENABLE_DEKO3D)
 
     dk_add_shader(present_vsh vert)
     dk_add_shader(present_fsh frag)
+    dk_add_shader(ubershader_vsh vert)
+    dk_add_shader(ubershader_fsh frag)
 
     add_custom_target(dekopon_shaders DEPENDS ${DK_DKSH_FILES})
     dkp_add_asset_target(dekopon_romfs "${DK_ROMFS_DIR}")
