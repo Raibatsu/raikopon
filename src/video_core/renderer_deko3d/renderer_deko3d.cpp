@@ -21,10 +21,10 @@ RendererDeko3D::RendererDeko3D(Core::System& system, Pica::PicaCore& pica_,
                                Frontend::EmuWindow& window, Frontend::EmuWindow* secondary_window)
     : VideoCore::RendererBase{system, window, secondary_window}, pica{pica_},
       rasterizer{system.Memory(), pica} {
-    // This is null for now
+    // The deko3d-mode EmuWindow stores the opaque nwindow here.
     void* native_window = window.GetWindowInfo().render_surface;
     if (native_window == nullptr) {
-        LOG_ERROR(Render, "Deko3d: no native window provided..");
+        LOG_ERROR(Render, "Deko3d: no native window provided.");
         return;
     }
     InitDeko3D(native_window);
@@ -132,18 +132,26 @@ void RendererDeko3D::ExitDeko3D() {
     initialized = false;
 }
 
-void RendererDeko3D::SwapBuffers() {
-    // The guest signalled a frame. Obviously this does nothing yet
-    EndFrame();
-}
-
-void RendererDeko3D::TryPresent(int, bool is_secondary) {
-    if (!initialized || is_secondary) {
+void RendererDeko3D::Present() {
+    if (!initialized) {
         return;
     }
     const int slot = dkQueueAcquireImage(queue, swapchain);
     dkQueueSubmitCommands(queue, clear_cmdlists[slot]);
     dkQueuePresentImage(queue, swapchain, slot);
+}
+
+void RendererDeko3D::SwapBuffers() {
+    // The guest signalled a frame. Obviously this does nothing yet.
+    Present();
+    EndFrame();
+}
+
+void RendererDeko3D::TryPresent(int, bool is_secondary) {
+    if (is_secondary) {
+        return;
+    }
+    Present();
 }
 
 } // namespace Deko3D
