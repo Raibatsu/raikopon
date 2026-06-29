@@ -71,10 +71,14 @@ int main(int argc, char* argv[]) {
     if (have_socket) {
         nxlinkStdio();
     }
+    // Mount the embedded romfs for deko3D shaders
+    const bool have_romfs = R_SUCCEEDED(romfsInit());
+    if (!have_romfs) {
+        std::printf("Warning: romfsInit() failed.\n");
+    }
     if (!Common::Horizon::PinCurrentThread(0)) {
         std::printf("Warning: failed to pin frontend thread to core 0.\n");
     }
-    std::printf("Dekopon: an Azahar port for the Nintendo Switch\n");
 
     // Resolve SD-card dirs and create folders/files if not present
     const int launch_count = SwitchFrontend::Bootstrap();
@@ -127,6 +131,9 @@ int main(int argc, char* argv[]) {
     SwitchFrontend::ShutdownInput();
     SwitchFrontend::DestroyWindow();
     SwitchFrontend::Shutdown();
+    if (have_romfs) {
+        romfsExit();
+    }
     if (have_socket) {
         socketExit();
     }

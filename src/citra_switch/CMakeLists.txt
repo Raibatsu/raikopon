@@ -35,7 +35,47 @@ nx_generate_nacp(OUTPUT dekopon.nacp
     VERSION "0.0.1"
 )
 
-nx_create_nro(citra_switch
-    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
-    NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
-)
+# Compile deko3d shaders with uam and pack them into the romfs.
+if (ENABLE_DEKO3D)
+    find_program(UAM_EXE NAMES uam
+        PATHS "$ENV{DEVKITPRO}/tools/bin" "${DEVKITPRO}/tools/bin" "/opt/devkitpro/tools/bin"
+        REQUIRED)
+
+    set(DK_SHADER_SRC_DIR "${CMAKE_SOURCE_DIR}/src/video_core/renderer_deko3d/shaders")
+    set(DK_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
+    set(DK_ROMFS_SHADER_DIR "${DK_ROMFS_DIR}/shaders")
+    file(MAKE_DIRECTORY "${DK_ROMFS_SHADER_DIR}")
+
+    set(DK_DKSH_FILES "")
+    # Compile one glsl shader to dksh.
+    function(dk_add_shader NAME STAGE)
+        add_custom_command(
+            OUTPUT "${DK_ROMFS_SHADER_DIR}/${NAME}.dksh"
+            COMMAND "${UAM_EXE}" -s ${STAGE}
+                -o "${DK_ROMFS_SHADER_DIR}/${NAME}.dksh" "${DK_SHADER_SRC_DIR}/${NAME}.glsl"
+            DEPENDS "${DK_SHADER_SRC_DIR}/${NAME}.glsl"
+            COMMENT "uam ${STAGE}: ${NAME}.glsl -> ${NAME}.dksh"
+            VERBATIM
+        )
+        set(DK_DKSH_FILES ${DK_DKSH_FILES} "${DK_ROMFS_SHADER_DIR}/${NAME}.dksh" PARENT_SCOPE)
+    endfunction()
+
+    dk_add_shader(present_vsh vert)
+    dk_add_shader(present_fsh frag)
+
+    add_custom_target(dekopon_shaders DEPENDS ${DK_DKSH_FILES})
+    dkp_add_asset_target(dekopon_romfs "${DK_ROMFS_DIR}")
+    add_dependencies(dekopon_romfs dekopon_shaders)
+    set_property(TARGET dekopon_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK_DKSH_FILES})
+
+    nx_create_nro(citra_switch
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
+        NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        ROMFS dekopon_romfs
+    )
+else()
+    nx_create_nro(citra_switch
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
+        NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+    )
+endif()
