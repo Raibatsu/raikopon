@@ -17,7 +17,7 @@ cpu_clock_percentage =
 is_new_3ds = false
 
 [Renderer]
-# Renderer backend: 0: Software, 1: OpenGL (default), 3: Deko3D (WIP).
+# Renderer backend: 0: Software, 1: OpenGL, 2: Vulkan (default).
 graphics_api =
 # Use GLES instead of desktop GL (Forced 1 since we only have GLES).
 use_gles =

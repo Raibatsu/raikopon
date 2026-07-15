@@ -4,10 +4,12 @@
 
 #include <array>
 
+#ifdef ENABLE_OPENGL
 #include <glad/glad.h>
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
+#endif
 
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
@@ -20,6 +22,7 @@ namespace {
 constexpr int kSwitchScreenWidth = 1280;
 constexpr int kSwitchScreenHeight = 720;
 
+#ifdef ENABLE_OPENGL
 // Switch's mesa/nouveau EGL exposes configs as EGL_OPENGL_ES2_BIT despite supporting GLES3
 constexpr std::array<EGLint, 17> config_attribs{
     EGL_SURFACE_TYPE,    EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
@@ -85,22 +88,27 @@ private:
     EGLSurface egl_surface{EGL_NO_SURFACE};
     EGLContext egl_context{EGL_NO_CONTEXT};
 };
+#endif // ENABLE_OPENGL
 
 } // namespace
 
 EmuWindow_Switch::EmuWindow_Switch(void* native_window, bool use_egl, bool is_secondary)
     : EmuWindow{is_secondary}, egl_enabled{use_egl} {
+#ifdef ENABLE_OPENGL
     if (egl_enabled) {
         if (!CreateEGLContext(native_window)) {
             DestroyEGLContext();
             return;
         }
-    } else {
-        // Do not create EGL instance when using Deko3D
+    } else
+#endif
+    {
+        // The Vulkan (NXVK) renderer owns the nwindow through its own swapchain
+        // and presents via the VK_NN_vi_surface WSI.
         window_width = kSwitchScreenWidth;
         window_height = kSwitchScreenHeight;
-        LOG_INFO(Frontend, "EmuWindow up in deko3d mode: {}x{}", window_width,
-                 window_height);
+        window_info.type = Frontend::WindowSystemType::Switch;
+        LOG_INFO(Frontend, "EmuWindow provided via Vulkan: {}x{}", window_width, window_height);
     }
 
     window_info.render_surface = native_window;
@@ -110,9 +118,12 @@ EmuWindow_Switch::EmuWindow_Switch(void* native_window, bool use_egl, bool is_se
 }
 
 EmuWindow_Switch::~EmuWindow_Switch() {
+#ifdef ENABLE_OPENGL
     DestroyEGLContext();
+#endif
 }
 
+#ifdef ENABLE_OPENGL
 bool EmuWindow_Switch::CreateEGLContext(void* native_window) {
     egl_display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (egl_display == EGL_NO_DISPLAY) {
@@ -194,21 +205,26 @@ void EmuWindow_Switch::DestroyEGLContext() {
     eglTerminate(egl_display);
     egl_display = EGL_NO_DISPLAY;
 }
+#endif // ENABLE_OPENGL
 
 void EmuWindow_Switch::MakeCurrent() {
     if (!egl_enabled) {
-        return; // deko3d has no host GL context to bind.
+        return; // Vulkan/software have no host GL context to bind.
     }
+#ifdef ENABLE_OPENGL
     if (eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context) != EGL_TRUE) {
-        LOG_CRITICAL(Frontend, "Window-context eglMakeCurrent() failed: 0x{:x}", eglGetError());
+        LOG_CRITICAL(Frontend, "Window context eglMakeCurrent() failed: 0x{:x}", eglGetError());
     }
+#endif
 }
 
 void EmuWindow_Switch::DoneCurrent() {
     if (!egl_enabled) {
         return;
     }
+#ifdef ENABLE_OPENGL
     eglMakeCurrent(egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+#endif
 }
 
 void EmuWindow_Switch::PollEvents() {
@@ -217,10 +233,12 @@ void EmuWindow_Switch::PollEvents() {
 
 void EmuWindow_Switch::SwapBuffers() {
     if (!egl_enabled) {
-        return; // the deko3d renderer presents through its own swapchain.
+        return; // the Vulkan renderer presents through its own swapchain.
     }
+#ifdef ENABLE_OPENGL
     eglSwapInterval(egl_display, Settings::values.use_vsync.GetValue() ? 1 : 0);
     eglSwapBuffers(egl_display, egl_surface);
+#endif
 }
 
 std::unique_ptr<Frontend::GraphicsContext> EmuWindow_Switch::CreateSharedContext() const {
@@ -228,18 +246,24 @@ std::unique_ptr<Frontend::GraphicsContext> EmuWindow_Switch::CreateSharedContext
         // This is a fancy no-op
         return std::make_unique<Frontend::GraphicsContext>();
     }
+#ifdef ENABLE_OPENGL
     return std::make_unique<SharedContext_Switch>(egl_display, egl_config, egl_context);
+#else
+    return std::make_unique<Frontend::GraphicsContext>();
+#endif
 }
 
 void EmuWindow_Switch::PresentClear() {
     if (!is_valid || !egl_enabled) {
         return;
     }
+#ifdef ENABLE_OPENGL
     eglMakeCurrent(egl_display, egl_surface, egl_surface, egl_context);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glClearColor(0.96f, 0.55f, 0.13f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
     SwapBuffers();
+#endif
 }
 
 namespace {
@@ -253,9 +277,13 @@ EmuWindow_Switch* GetEmuWindow() {
 namespace SwitchFrontend {
 
 bool CreateWindow(void* native_window) {
-    // deko3d owns the nwindow directly
-    const bool use_egl =
-        Settings::GetWorkingGraphicsAPI() != Settings::GraphicsAPI::Deko3D;
+    // Only the GLES renderer needs a host EGL context; Vulkan (NXVK) and software
+    // own the nwindow directly.
+#ifdef ENABLE_OPENGL
+    const bool use_egl = Settings::GetWorkingGraphicsAPI() == Settings::GraphicsAPI::OpenGL;
+#else
+    const bool use_egl = false;
+#endif
     s_window = std::make_unique<EmuWindow_Switch>(native_window, use_egl);
     if (!s_window->IsValid()) {
         LOG_CRITICAL(Frontend, "Failed to bring up EmuWindow");

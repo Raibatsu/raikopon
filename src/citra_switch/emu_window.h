@@ -5,13 +5,15 @@
 #pragma once
 
 #include <memory>
+#ifdef ENABLE_OPENGL
 #include <EGL/egl.h>
+#endif
 #include "core/frontend/emu_window.h"
 
-// EmuWindow backed by a native libnx nwindow. This is required for Deko3D
+// EmuWindow backed by a native libnx nwindow.
 class EmuWindow_Switch : public Frontend::EmuWindow {
 public:
-    explicit EmuWindow_Switch(void* native_window, bool use_egl = true, bool is_secondary = false);
+    explicit EmuWindow_Switch(void* native_window, bool use_egl = false, bool is_secondary = false);
     ~EmuWindow_Switch() override;
 
     void MakeCurrent() override;
@@ -32,6 +34,7 @@ public:
     void PresentClear();
 
 private:
+#ifdef ENABLE_OPENGL
     bool CreateEGLContext(void* native_window);
     void DestroyEGLContext();
 
@@ -39,11 +42,12 @@ private:
     EGLSurface egl_surface{EGL_NO_SURFACE};
     EGLContext egl_context{EGL_NO_CONTEXT};
     EGLConfig egl_config{};
+#endif
 
     int window_width{};
     int window_height{};
     bool is_valid{};
-    bool egl_enabled{}; // false with deko3d
+    bool egl_enabled{}; // false without a host GL context (Vulkan/software)
 };
 
 /// Returns the live frontend window

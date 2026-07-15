@@ -221,10 +221,15 @@ if (DEKOPON)
     # TODO: Fix this
     set(ENABLE_LTO OFF CACHE BOOL "Disabled for Switch)" FORCE)
 
-    set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for accuracy checks on Switch" FORCE)
-    set(ENABLE_OPENGL ON CACHE BOOL "Enabled for Switch (GLES)" FORCE)
-    set(ENABLE_VULKAN OFF CACHE BOOL "No Vulkan driver on Switch" FORCE)
-    set(ENABLE_DEKO3D ON CACHE BOOL "Native backend for Switch" FORCE)
+    set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for accuracy checks" FORCE)
+    set(ENABLE_VULKAN ON CACHE BOOL "Vulkan via NXVK" FORCE)
+    set(ENABLE_DEKO3D OFF CACHE BOOL "Superseded by NXVK" FORCE)
+    # NXVK and the switch-mesa GLES driver are two separate Mesa builds and cannot coexist
+    if (ENABLE_VULKAN)
+        set(ENABLE_OPENGL OFF CACHE BOOL "switch-mesa GLES conflicts with NXVK" FORCE)
+    else()
+        set(ENABLE_OPENGL ON CACHE BOOL "GLES bring-up path (NXVK disabled)" FORCE)
+    endif()
 
     # Source-level platform define for #ifdef __SWITCH__
     add_definitions(-D__SWITCH__)
@@ -319,6 +324,9 @@ function(check_submodules_present)
     string(REGEX MATCHALL "path *= *[^ \t\r\n]*" gitmodules ${gitmodules})
     foreach(module ${gitmodules})
         string(REGEX REPLACE "path *= *" "" module ${module})
+        if (module STREQUAL "externals/nxvk")
+            continue()
+        endif()
         if (NOT EXISTS "${PROJECT_SOURCE_DIR}/${module}/.git")
             message(SEND_ERROR "Git submodule ${module} not found.\n"
                     "Please run: git submodule update --init --recursive")

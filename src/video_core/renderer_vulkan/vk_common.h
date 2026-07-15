@@ -10,6 +10,10 @@
 #define VULKAN_HPP_DISPATCH_LOADER_DYNAMIC 1
 #define VULKAN_HPP_NO_CONSTRUCTORS
 #define VULKAN_HPP_NO_STRUCT_SETTERS
+#ifdef __SWITCH__
+// Horizon has no dlopen nor does it need it whatsoever.
+#define VULKAN_HPP_ENABLE_DYNAMIC_LOADER_TOOL 0
+#endif
 #include <vulkan/vulkan.hpp>
 
 #define VMA_STATIC_VULKAN_FUNCTIONS 0
