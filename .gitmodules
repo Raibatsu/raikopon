@@ -109,3 +109,7 @@
 	path = externals/cryptopp
 	url = https://github.com/PalindromicBreadLoaf/cryptopp-modern-nx.git
 	branch = switch
+[submodule "nxvk"]
+	path = externals/nxvk
+	url = https://github.com/PalindromicBreadLoaf/nxvk.git
+	branch = switch

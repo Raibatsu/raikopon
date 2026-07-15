@@ -12,6 +12,11 @@
 #include "citra_switch/input.h"
 #include "common/horizon_thread.h"
 
+extern "C" {
+u32 __nx_applet_type = AppletType_Application;
+size_t __nx_heap_size = 0;
+}
+
 namespace {
 
 constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 14> button_map{{

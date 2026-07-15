@@ -9,6 +9,8 @@
 #define VK_USE_PLATFORM_WIN32_KHR
 #elif defined(__APPLE__)
 #define VK_USE_PLATFORM_METAL_EXT
+#elif defined(__SWITCH__)
+#define VK_USE_PLATFORM_VI_NN
 #else
 #define VK_USE_PLATFORM_WAYLAND_KHR
 #define VK_USE_PLATFORM_XLIB_KHR
@@ -24,6 +26,12 @@
 #include "common/settings.h"
 #include "core/frontend/emu_window.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
+
+#ifdef __SWITCH__
+#include <cstdlib>
+// NXVK is statically linked and exposes a single ICD entrypoint.
+extern "C" PFN_vkVoidFunction vk_icdGetInstanceProcAddr(VkInstance instance, const char* pName);
+#endif
 
 namespace Vulkan {
 
@@ -98,6 +106,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(vk::DebugReportFlagsEX
 
 std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
     [[maybe_unused]] Frontend::GraphicsContext* context) {
+#ifdef __SWITCH__
+    return std::make_shared<Common::DynamicLibrary>();
+#else
 #ifdef ANDROID
     // Android may override the Vulkan driver from the frontend.
     if (auto library = context->GetDriverLibrary(); library) {
@@ -123,6 +134,7 @@ std::shared_ptr<Common::DynamicLibrary> OpenLibrary(
     }
 #endif
     return library;
+#endif // __SWITCH__
 }
 
 vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::EmuWindow& emu_window) {
@@ -195,6 +207,18 @@ vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::EmuWindow& e
             UNREACHABLE();
         }
     }
+#elif defined(VK_USE_PLATFORM_VI_NN)
+    if (window_info.type == Frontend::WindowSystemType::Switch) {
+        const vk::ViSurfaceCreateInfoNN vi_ci = {
+            .window = window_info.render_surface, // libnx NWindow*
+        };
+
+        if ((res = instance.createViSurfaceNN(&vi_ci, nullptr, &surface)) !=
+            vk::Result::eSuccess) {
+            LOG_CRITICAL(Render_Vulkan, "Failed to initialize VI surface: {}", vk::to_string(res));
+            UNREACHABLE();
+        }
+    }
 #endif
 
     if (!surface) {
@@ -245,6 +269,10 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
     case Frontend::WindowSystemType::Android:
         extensions.push_back(VK_KHR_ANDROID_SURFACE_EXTENSION_NAME);
         break;
+#elif defined(VK_USE_PLATFORM_VI_NN)
+    case Frontend::WindowSystemType::Switch:
+        extensions.push_back(VK_NN_VI_SURFACE_EXTENSION_NAME);
+        break;
 #endif
     default:
         LOG_ERROR(Render_Vulkan, "Presentation not supported on this platform");
@@ -288,6 +316,15 @@ vk::InstanceCreateFlags GetInstanceFlags() {
 vk::UniqueInstance CreateInstance(const Common::DynamicLibrary& library,
                                   Frontend::WindowSystemType window_type, bool enable_validation,
                                   bool dump_command_buffers) {
+#ifdef __SWITCH__
+    // NVK gates device creation behind these vars.
+    setenv("NVK_I_WANT_A_BROKEN_VULKAN_DRIVER", "1", 1);
+    setenv("MESA_SHADER_CACHE_DISABLE", "1", 1);
+
+    const auto vkGetInstanceProcAddr =
+        reinterpret_cast<PFN_vkGetInstanceProcAddr>(&vk_icdGetInstanceProcAddr);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+#else
     if (!library.IsLoaded()) {
         throw std::runtime_error("Failed to load Vulkan driver library");
     }
@@ -298,6 +335,7 @@ vk::UniqueInstance CreateInstance(const Common::DynamicLibrary& library,
         throw std::runtime_error("Failed GetSymbol vkGetInstanceProcAddr");
     }
     VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
+#endif
 
     const u32 available_version = VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumerateInstanceVersion
                                       ? vk::enumerateInstanceVersion()
