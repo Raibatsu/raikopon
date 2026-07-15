@@ -1,8 +1,18 @@
-# Dekopon
+<h1 align="center">Dekopon</h1>
+
+<p align="center">
+  <img src="docs/dekopon_square.webp" alt="Dekopon logo" width="220">
+</p>
+
+<p align="center"><sub>Logo by <a href="https://stickymangorice.com/">StickyMangoRice</a></sub></p>
 
 <b>Dekopon</b> is an open-source 3DS emulator for the Nintendo Switch based on Azahar.
 
 Many many thanks to the Azahar team for creating such an amazing project in the first place.
+
+# Project status
+
+Currently, the project boots and runs games at mostly fullspeed  with full controller/touch input and audio.
 
 # Installation
 
@@ -16,12 +26,17 @@ Your legally acquired ROMs go in /switch/dekopon/roms/
 The current build requires DevkitPro. Please install from here [DevkitPro Install](https://devkitpro.org/wiki/Getting_Started)
 ### DevkitPro Packages
 - switch-dev
-- switch-mesa
 - switch-bzip2
 - switch-libpng
 - switch-zlib
+- switch-mesa *(only for the legacy GLES backend\*)*
 ### System Packages
 - cmake
+
+\*The default GPU backend is Vulkan via [NXVK](https://github.com/PalindromicBreadLoaf/nxvk)
+NXVK and switch-mesa cannot be included simultaneously, so renderer must be chosen at build time.
+Hopefully in the future NXVK will also include OpenGL drivers of some sort to resolve this issue.
+
 
 From there, clone this repository, move into it, then run 
 ```shell
