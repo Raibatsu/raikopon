@@ -4,11 +4,16 @@
 
 #include "common/horizon_thread.h"
 
+#ifdef __SWITCH__
 #include <switch.h>
+#endif
 
 namespace Common::Horizon {
 
-bool PinCurrentThread(std::uint32_t core_id) {
+#ifdef __SWITCH__
+
+namespace {
+bool TryPin(std::uint32_t core_id) {
     if (core_id >= 32) {
         return false;
     }
@@ -26,5 +31,31 @@ bool PinCurrentThread(std::uint32_t core_id) {
     return R_SUCCEEDED(
         svcSetThreadCoreMask(CUR_THREAD_HANDLE, static_cast<s32>(core_id), core_mask));
 }
+} // namespace
+
+bool PinCurrentThread(std::uint32_t core_id) {
+    return TryPin(core_id);
+}
+
+bool PinCurrentThreadPreferred(std::initializer_list<std::uint32_t> preferred) {
+    for (const std::uint32_t core_id : preferred) {
+        if (TryPin(core_id)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+#else
+
+bool PinCurrentThread(std::uint32_t) {
+    return false;
+}
+
+bool PinCurrentThreadPreferred(std::initializer_list<std::uint32_t>) {
+    return false;
+}
+
+#endif
 
 } // namespace Common::Horizon

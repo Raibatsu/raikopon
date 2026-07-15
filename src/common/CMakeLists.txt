@@ -135,11 +135,13 @@ if (ANDROID AND NOT ENABLE_LIBRETRO)
   )
 endif()
 
+# Compiled everywhere so shared code can pin threads unconditionally.
+target_sources(citra_common PRIVATE
+  horizon_thread.cpp
+  horizon_thread.h
+)
 if (DEKOPON)
-  target_sources(citra_common PRIVATE
-    horizon_thread.cpp
-    horizon_thread.h
-  )
+  # <switch.h> pulls in libnx headers that clash with the precompiled header set.
   set_source_files_properties(horizon_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
