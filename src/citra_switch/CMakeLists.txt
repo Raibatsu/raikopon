@@ -82,11 +82,13 @@ if (ENABLE_DEKO3D)
     nx_create_nro(citra_switch
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
         NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
         ROMFS dekopon_romfs
     )
 else()
     nx_create_nro(citra_switch
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
         NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
     )
 endif()
