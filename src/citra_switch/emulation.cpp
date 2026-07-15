@@ -25,6 +25,9 @@ namespace {
 
 std::thread s_emu_thread;
 std::atomic<bool> s_stop{true};
+// Set true once system.Load succeeds.
+// This lets the menu tell a crash/bad ROM apart from a clean exit.
+std::atomic<bool> s_load_ok{false};
 
 /// Returns true if `path` is a 3DS title.
 bool IsLoadableRom(const std::string& path) {
@@ -89,6 +92,8 @@ void EmuThread(std::string path) {
         return;
     }
 
+    s_load_ok = true;
+
     u64 program_id = 0;
     system.GetAppLoader().ReadProgramId(program_id);
     system.GPU().ApplyPerProgramSettings(program_id);
@@ -128,6 +133,7 @@ bool BootRom(const std::string& rom_arg) {
 
     LOG_INFO(Frontend, "Booting ROM {}", path);
 
+    s_load_ok = false;
     auto& system = Core::System::GetInstance();
     FileUtil::SetCurrentRomPath(path);
 
@@ -158,6 +164,10 @@ bool BootRom(const std::string& rom_arg) {
 
 bool IsRunning() {
     return !s_stop;
+}
+
+bool LoadFailed() {
+    return !s_load_ok;
 }
 
 void StopRom() {

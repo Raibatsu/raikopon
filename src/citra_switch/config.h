@@ -12,6 +12,9 @@ namespace SwitchFrontend {
 // Sets up default directory and logging on first boot.
 int Bootstrap();
 
+// Serialises the current Settings::values back to config.ini.
+void SaveConfig();
+
 // Flushes and stops the logger.
 void Shutdown();
 
@@ -30,6 +33,9 @@ bool BootRom(const std::string& rom_arg);
 
 // True while the emulation thread is running.
 bool IsRunning();
+
+// True if the most recent BootRom never reached a successful system.Load.
+bool LoadFailed();
 
 // Signals the emulation thread to stop.
 void StopRom();

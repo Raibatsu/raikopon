@@ -145,6 +145,9 @@ private:
     }
 };
 
+// Kept alive past Bootstrap() so the menu can re-save settings while preserving launch_count.
+std::unique_ptr<Config> s_config;
+
 } // namespace
 
 namespace SwitchFrontend {
@@ -156,24 +159,31 @@ int Bootstrap() {
     Common::Log::Initialize();
     Common::Log::Start();
 
-    Config config;
+    s_config = std::make_unique<Config>();
 
-    // Apply the log filter the config just loaded.e
+    // Apply the log filter the config just loaded.
     Common::Log::Filter log_filter;
     log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(log_filter);
 
     // Persist the bumped launch count and any defaulted settings for next time.
-    config.Save();
+    s_config->Save();
 
-    LOG_INFO(Frontend, "Dekopon launch #{}", config.LaunchCount());
+    LOG_INFO(Frontend, "Dekopon launch #{}", s_config->LaunchCount());
     LOG_INFO(Frontend, "User directory: {}", FileUtil::GetUserPath(FileUtil::UserPath::UserDir));
     LOG_INFO(Frontend, "Logging to: {}", FileUtil::GetUserPath(FileUtil::UserPath::LogDir));
 
-    return config.LaunchCount();
+    return s_config->LaunchCount();
+}
+
+void SaveConfig() {
+    if (s_config) {
+        s_config->Save();
+    }
 }
 
 void Shutdown() {
+    s_config.reset();
     Common::Log::Stop();
 }
 

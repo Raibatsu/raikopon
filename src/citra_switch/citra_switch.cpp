@@ -10,6 +10,7 @@
 
 #include "citra_switch/config.h"
 #include "citra_switch/input.h"
+#include "citra_switch/menu.h"
 #include "common/horizon_thread.h"
 
 extern "C" {
@@ -64,9 +65,37 @@ u64 PollInput(PadState& pad) {
     return held;
 }
 
-bool ExitRequested(u64 held) {
-    constexpr u64 exit_chord = HidNpadButton_Plus | HidNpadButton_Minus;
-    return (held & exit_chord) == exit_chord;
+bool ReturnToMenuRequested(u64 held) {
+    constexpr u64 chord = HidNpadButton_Plus | HidNpadButton_Minus;
+    return (held & chord) == chord;
+}
+
+void RunGame(PadState& pad, const std::string& rom) {
+    if (!SwitchFrontend::CreateWindow(nwindowGetDefault())) {
+        std::printf("EmuWindow no worky.\n");
+        SwitchFrontend::SetMenuNotice("Couldn't create the render window");
+        return;
+    }
+
+    if (SwitchFrontend::BootRom(rom)) {
+        while (appletMainLoop()) {
+            if (ReturnToMenuRequested(PollInput(pad))) {
+                break;
+            }
+            if (!SwitchFrontend::IsRunning()) {
+                break;
+            }
+            svcSleepThread(1'000'000);
+        }
+        SwitchFrontend::StopRom();
+        if (SwitchFrontend::LoadFailed()) {
+            SwitchFrontend::SetMenuNotice("Couldn't launch — check keys / ROM");
+        }
+    } else {
+        SwitchFrontend::SetMenuNotice("Couldn't launch — ROM not loadable");
+    }
+
+    SwitchFrontend::DestroyWindow();
 }
 
 } // namespace
@@ -95,46 +124,30 @@ int main(int argc, char* argv[]) {
     padInitializeDefault(&pad);
     hidInitializeTouchScreen();
 
-    // The EmuWindow owns the EGL/GLES context on the default nwindow.
-    if (!SwitchFrontend::CreateWindow(nwindowGetDefault())) {
-        std::printf("EmuWindow no worky.\n");
-        SwitchFrontend::Shutdown();
-        if (have_socket) {
-            socketExit();
-        }
-        return 1;
-    }
-    std::printf("EmuWindow worky.\n");
     SwitchFrontend::InitializeInput();
 
-    // Either take argv[1] or search sdmc:/switch/dekopon/roms/ for roms.
-    const std::string rom_arg = (argc > 1 && argv[1] != nullptr) ? argv[1] : std::string{};
+    std::string pending_rom = (argc > 1 && argv[1] != nullptr) ? argv[1] : std::string{};
 
-    if (SwitchFrontend::BootRom(rom_arg)) {
-        std::printf("Booting ROM...\n");
-        while (appletMainLoop()) {
-            if (ExitRequested(PollInput(pad))) {
+    while (appletMainLoop()) {
+        std::string rom;
+        if (!pending_rom.empty()) {
+            rom = std::move(pending_rom);
+            pending_rom.clear();
+        } else {
+            const SwitchFrontend::MenuResult choice = SwitchFrontend::RunMenu(pad);
+            if (choice.action == SwitchFrontend::MenuAction::Exit) {
                 break;
             }
-            if (!SwitchFrontend::IsRunning()) {
-                std::printf("Emulation stopped.\n");
-                break;
-            }
-            svcSleepThread(1'000'000);
+            rom = choice.path;
         }
-        SwitchFrontend::StopRom();
-    } else {
-        std::printf("No ROM to boot. Put one in sdmc:/switch/dekopon/roms/.\n");
-        while (appletMainLoop()) {
-            if (ExitRequested(PollInput(pad))) {
-                break;
-            }
-            SwitchFrontend::ClearFrame();
+
+        if (!rom.empty()) {
+            RunGame(pad, rom);
         }
     }
 
+    SwitchFrontend::ShutdownMenu();
     SwitchFrontend::ShutdownInput();
-    SwitchFrontend::DestroyWindow();
     SwitchFrontend::Shutdown();
     if (have_romfs) {
         romfsExit();
