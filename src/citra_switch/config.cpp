@@ -99,6 +99,11 @@ private:
         ReadSetting("Renderer", Settings::values.async_shader_compilation);
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
 
+        // Force the PICA vertex-shader JIT off on Switch. oaknut::CodeBlock does a libnx
+        // jitCreate per shader and exhausts Horizon JIT memory fairly quickly, which ends up
+        // killing many games during their startup.
+        Settings::values.use_shader_jit = false;
+
         // System
         ReadSetting("System", Settings::values.region_value);
 
