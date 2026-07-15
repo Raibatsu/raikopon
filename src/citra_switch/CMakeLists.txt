@@ -7,13 +7,29 @@ add_executable(citra_switch
     emu_window.cpp
     emu_window.h
     emulation.cpp
+    harfbuzz_stubs.cpp
     horizon_sys_stubs.cpp
     input.cpp
     input.h
+    menu.cpp
+    menu.h
+    menu_data.cpp
+    menu_data.h
 )
 
 # oaknut_horizon_jit is pulled in transitively via oaknut
 target_link_libraries(citra_switch PRIVATE citra_core citra_common inih)
+
+# The launcher draws with a libnx software framebuffer and renders text with FreeType
+find_path(SWITCH_FREETYPE_INCLUDE_DIR ft2build.h PATH_SUFFIXES freetype2 REQUIRED)
+find_library(SWITCH_FREETYPE freetype REQUIRED)
+find_library(SWITCH_PNG png REQUIRED)
+find_library(SWITCH_BZ2 bz2 REQUIRED)
+find_library(SWITCH_ZLIB z REQUIRED)
+target_include_directories(citra_switch PRIVATE ${SWITCH_FREETYPE_INCLUDE_DIR})
+# Order matters for the static newlib link: freetype -> png -> bz2 -> z.
+target_link_libraries(citra_switch PRIVATE
+    ${SWITCH_FREETYPE} ${SWITCH_PNG} ${SWITCH_BZ2} ${SWITCH_ZLIB})
 
 # The GLES bring-up path pulls the switch-mesa EGL/GLES driver. It is mutually exclusive with NXVK
 # until NXVK either supports nouveau or Zink (or both).
