@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include "common/horizon_thread.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -309,6 +310,8 @@ void PresentWindow::WaitPresent() {
 
 void PresentWindow::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanPresent");
+    // See VulkanWorker: park presentation alongside submission.
+    Common::Horizon::PinCurrentThreadPreferred({3, 0});
     while (!token.stop_requested()) {
         std::unique_lock lock{queue_mutex};
 

@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -14,6 +15,7 @@
 #include <vector>
 #include <queue>
 
+#include "common/horizon_thread.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
 #include "common/unique_function.h"
@@ -36,11 +38,19 @@ class StatefulThreadWorker {
         std::conditional_t<with_state, std::function<StateType(std::size_t)>, DummyCallable>;
 
 public:
+    // `preferred_cores` optionally pins each worker to the first available core in the list
     explicit StatefulThreadWorker(std::size_t num_workers, std::string_view name,
-                                  StateMaker func = {})
+                                  StateMaker func = {},
+                                  std::vector<std::uint32_t> preferred_cores = {})
         : workers_queued{num_workers}, thread_name{name} {
-        const auto lambda = [this, func](std::stop_token stop_token, std::size_t index) {
+        const auto lambda = [this, func, cores = std::move(preferred_cores)](
+                                std::stop_token stop_token, std::size_t index) {
             Common::SetCurrentThreadName(thread_name.data());
+            for (const std::uint32_t core_id : cores) {
+                if (Common::Horizon::PinCurrentThread(core_id)) {
+                    break;
+                }
+            }
             {
                 [[maybe_unused]] std::conditional_t<with_state, StateType, int> state{func(index)};
                 while (!stop_token.stop_requested()) {

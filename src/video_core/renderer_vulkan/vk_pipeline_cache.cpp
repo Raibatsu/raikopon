@@ -85,8 +85,9 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     : instance{instance_}, scheduler{scheduler_}, renderpass_cache{renderpass_cache_},
       update_queue{update_queue_},
       num_worker_threads{std::max(std::thread::hardware_concurrency(), 2U) / 2},
-      pipeline_workers{num_worker_threads, "Pipeline workers"},
-      shader_workers{num_worker_threads, "Shader workers"},
+      // Keep shader/pipeline compilation off the CPU JIT core (2) so compile bursts don't stall emulation
+      pipeline_workers{num_worker_threads, "Pipeline workers", {}, {3, 0}},
+      shader_workers{num_worker_threads, "Shader workers", {}, {3, 0}},
       descriptor_heaps{
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), BUFFER_BINDINGS, 32},
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), TEXTURE_BINDINGS<1>},
