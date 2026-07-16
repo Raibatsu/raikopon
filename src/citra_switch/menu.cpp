@@ -17,6 +17,7 @@
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
+#include "citra_switch/config.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
 
@@ -249,6 +250,22 @@ public:
         return out;
     }
 
+    std::string TruncateFront(std::string_view text, int size, int maxw) {
+        if (Measure(text, size) <= maxw) {
+            return std::string{text};
+        }
+        const int ell = Measure("…", size);
+        std::size_t i = 0;
+        while (i < text.size()) {
+            DecodeUtf8(text, i);
+            const std::string_view tail = text.substr(i);
+            if (ell + Measure(tail, size) <= maxw) {
+                return "…" + std::string{tail};
+            }
+        }
+        return "…";
+    }
+
 private:
     struct Glyph {
         int w{}, h{}, left{}, top{}, advance{};
@@ -362,10 +379,42 @@ struct Repeater {
 };
 enum { DirUp = 1, DirDown = 2, DirLeft = 4, DirRight = 8 };
 
-enum class Tab { Library, Settings };
+enum class Tab { Library, Settings, Paths };
 
 // Which pane the cursor lives in.
 enum class Focus { Rail, Content };
+
+// Indexed by Tab, so the order has to match the enum.
+constexpr std::array<std::pair<Tab, const char*>, 3> kRailItems{
+    {{Tab::Library, "Library"}, {Tab::Settings, "Settings"}, {Tab::Paths, "Paths"}}};
+
+constexpr bool RailItemsMatchTabs() {
+    for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
+        if (static_cast<int>(kRailItems[i].first) != i) {
+            return false;
+        }
+    }
+    return true;
+}
+static_assert(RailItemsMatchTabs(), "kRailItems must be indexable by Tab");
+
+constexpr int kRailFirstY = 96;
+constexpr int kRailItemH = 84;
+constexpr int kRailItemStep = 108;
+
+int RailItemTop(int index) {
+    return kRailFirstY + index * kRailItemStep;
+}
+
+std::optional<Tab> RailHitTest(int y) {
+    for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
+        const int top = RailItemTop(i);
+        if (y >= top && y < top + kRailItemH) {
+            return kRailItems[i].first;
+        }
+    }
+    return std::nullopt;
+}
 
 constexpr int kRailW = 148;
 constexpr int kHeaderH = 64;
@@ -493,6 +542,41 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
     }
 }
 
+// Rows on the Paths page.
+enum PathRow { PathRowUserDir, PathRowRomsDir, PathRowRecursive, PathRowCount };
+
+constexpr int kPathRowH = 76;
+constexpr int kPathToggleH = 52;
+constexpr int kPathRowGap = 8;
+
+int PathRowHeight(int row) {
+    return row == PathRowRecursive ? kPathToggleH : kPathRowH;
+}
+
+int PathRowTop(int row) {
+    int y = kContentTop + 16;
+    for (int i = 0; i < row; ++i) {
+        y += PathRowHeight(i) + kPathRowGap;
+    }
+    return y;
+}
+
+const char* PathRowLabel(int row) {
+    switch (row) {
+    case PathRowUserDir:
+        return "Dekopon Folder";
+    case PathRowRomsDir:
+        return "ROM Folder";
+    default:
+        return "Scan Subfolders";
+    }
+}
+
+// The folder browser covers the whole screen, rail included.
+constexpr int kBrowseTop = 108;
+constexpr int kBrowseRowH = 44;
+constexpr int kBrowseRows = (kContentBottom - kBrowseTop) / kBrowseRowH;
+
 // Draws a small button chip
 int DrawHint(Canvas& canvas, int x, int y, const char* button, const char* label) {
     constexpr int chip_h = 26;
@@ -519,37 +603,39 @@ void DrawRailIcon(Canvas& canvas, Tab tab, int cx, int cy, u32 color) {
                                      s, 3, color);
             }
         }
-    } else {
+    } else if (tab == Tab::Settings) {
         // Three sliders
         for (int r = 0; r < 3; ++r) {
             const int ly = cy - 10 + r * 10;
             canvas.FillRoundRect(cx - 14, ly, 28, 3, 1, color);
             canvas.FillRoundRect(cx - 14 + (r % 2 == 0 ? 16 : 4), ly - 3, 8, 9, 4, color);
         }
+    } else {
+        // A folder.
+        canvas.FillRoundRect(cx - 14, cy - 12, 13, 7, 2, color);
+        canvas.FillRoundRect(cx - 14, cy - 8, 28, 20, 3, color);
     }
 }
 
 void DrawRail(Canvas& canvas, Tab active, Tab cursor, bool rail_focused) {
     canvas.FillRect(0, 0, kRailW, kScreenH, kColRail);
-    const std::array<std::pair<Tab, const char*>, 2> items{
-        {{Tab::Library, "Library"}, {Tab::Settings, "Settings"}}};
     // The solid accent pill follows the cursor while the rail is focused.
     const Tab pill = rail_focused ? cursor : active;
-    int y = 96;
-    for (const auto& [tab, label] : items) {
+    for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
+        const auto& [tab, label] = kRailItems[i];
+        const int y = RailItemTop(i);
         const bool on = tab == pill;
         const bool ghost = rail_focused && tab == active && tab != cursor;
         if (on) {
-            canvas.FillRoundRect(12, y, kRailW - 24, 84, 16, kColAccent);
+            canvas.FillRoundRect(12, y, kRailW - 24, kRailItemH, 16, kColAccent);
         } else if (ghost) {
             // Keep a faint marker on the section you came from.
-            canvas.FillRoundRect(12, y, kRailW - 24, 84, 16, kColSurface);
+            canvas.FillRoundRect(12, y, kRailW - 24, kRailItemH, 16, kColSurface);
         }
         const u32 fg = on ? kColOnAccent : kColTextDim;
         DrawRailIcon(canvas, tab, kRailW / 2, y + 32, fg);
         const int tw = g_font.Measure(label, 18);
         g_font.Draw(canvas, (kRailW - tw) / 2, y + 68, label, 18, fg);
-        y += 108;
     }
 }
 
@@ -622,10 +708,11 @@ void DrawTile(Canvas& canvas, const GameEntry& game, int x, int y, bool selected
     }
 }
 
-void DrawEmptyLibrary(Canvas& canvas) {
+void DrawEmptyLibrary(Canvas& canvas, const std::string& roms_dir) {
     const char* line1 = "No games found";
     const char* line2 = "Copy .3ds / .cci / .cxi / .3dsx files to";
-    const char* line3 = "sdmc:/switch/dekopon/roms/";
+    const std::string line3 = g_font.TruncateFront(roms_dir, 18, kContentW - 48);
+    const char* line4 = "or point the ROM folder elsewhere under Paths";
     const int cx = kContentX + kContentW / 2;
     const int w1 = g_font.Measure(line1, 26);
     g_font.Draw(canvas, cx - w1 / 2, 300, line1, 26, kColText);
@@ -633,6 +720,8 @@ void DrawEmptyLibrary(Canvas& canvas) {
     g_font.Draw(canvas, cx - w2 / 2, 336, line2, 18, kColTextDim);
     const int w3 = g_font.Measure(line3, 18);
     g_font.Draw(canvas, cx - w3 / 2, 360, line3, 18, kColAccent);
+    const int w4 = g_font.Measure(line4, 18);
+    g_font.Draw(canvas, cx - w4 / 2, 390, line4, 18, kColTextDim);
 }
 
 // Layout of the library grid
@@ -674,6 +763,7 @@ std::string PromptSearch(const std::string& initial) {
 class Menu {
 public:
     MenuResult Run(PadState& pad) {
+        pad_state = &pad;
         // Put a frame up before the ROM scan
         EnsureFramebuffer();
         DrawLoading();
@@ -687,7 +777,7 @@ public:
             // +/- together exits the app.
             if ((held & (HidNpadButton_Plus | HidNpadButton_Minus)) ==
                 (HidNpadButton_Plus | HidNpadButton_Minus)) {
-                FlushSettings();
+                Flush();
                 return {MenuAction::Exit, {}};
             }
 
@@ -704,8 +794,10 @@ public:
                 HandleRail(down, nav);
             } else if (tab == Tab::Library) {
                 done = HandleLibrary(down, nav, result);
-            } else {
+            } else if (tab == Tab::Settings) {
                 done = HandleSettings(down, nav);
+            } else {
+                done = HandlePaths(down, nav);
             }
             if (done) {
                 return result;
@@ -724,7 +816,7 @@ public:
                 --g_notice_frames;
             }
         }
-        FlushSettings();
+        Flush();
         return {MenuAction::Exit, {}};
     }
 
@@ -744,32 +836,70 @@ private:
     int selected = 0;          // Index into `filtered`.
     int scroll_row = 0;
     int settings_sel = 0;
+    int paths_sel = 0;
     std::string search;
     MenuSettings settings{};
+    SwitchPaths paths{};
     Repeater repeater;
     Framebuffer fb{};
+    PadState* pad_state = nullptr;
     bool fb_ready = false;
     bool settings_dirty = false; // Edited settings not yet written to config.ini.
+    bool paths_dirty = false;
 
     void Rescan() {
         games = ScanGames();
         settings = GetMenuSettings();
+        paths = GetPaths();
         ApplyFilter();
     }
 
-    // Switch tabs persisting any pending edits when leaving the settings page so a
-    // disk write happens once per editing session rather than once per adjustment.
+    // Switch tabs persisting any pending edits when leaving an editing page so a disk write
+    // happens once per editing session rather than once per adjustment.
     void SetTab(Tab next) {
         if (tab == Tab::Settings && next != Tab::Settings) {
             FlushSettings();
         }
+        if (tab == Tab::Paths && next != Tab::Paths) {
+            // The library on screen came from the old directory so it must be re-read.
+            const bool stale = ScanInputsChanged();
+            FlushPaths();
+            if (stale) {
+                ShowBusy("Refreshing library…");
+                search.clear();
+                Rescan();
+            }
+        }
         tab = next;
+    }
+
+    // True while the edited scan inputs differ from what the last scan used.
+    bool ScanInputsChanged() const {
+        const SwitchPaths& live = GetPaths();
+        return paths.roms_dir != live.roms_dir || paths.scan_recursive != live.scan_recursive;
+    }
+
+    // The dekopon directory only moves on the next launch.
+    bool RestartPending() const {
+        return paths.user_dir != GetActiveUserDir();
+    }
+
+    void Flush() {
+        FlushSettings();
+        FlushPaths();
     }
 
     void FlushSettings() {
         if (settings_dirty) {
             SetMenuSettings(settings);
             settings_dirty = false;
+        }
+    }
+
+    void FlushPaths() {
+        if (paths_dirty) {
+            SetPaths(paths);
+            paths_dirty = false;
         }
     }
 
@@ -831,12 +961,14 @@ private:
     }
 
     void HandleRail(u64 down, u32 nav) {
+        int index = static_cast<int>(rail_sel);
         if (nav & DirUp) {
-            rail_sel = Tab::Library;
+            index = std::max(0, index - 1);
         }
         if (nav & DirDown) {
-            rail_sel = Tab::Settings;
+            index = std::min(static_cast<int>(kRailItems.size()) - 1, index + 1);
         }
+        rail_sel = kRailItems[index].first;
         if (down & HidNpadButton_A) {
             SetTab(rail_sel);
             focus = Focus::Content;
@@ -874,6 +1006,67 @@ private:
         return false;
     }
 
+    bool HandlePaths(u64 down, u32 nav) {
+        if (nav & DirUp) {
+            paths_sel = std::max(0, paths_sel - 1);
+        }
+        if (nav & DirDown) {
+            paths_sel = std::min(PathRowCount - 1, paths_sel + 1);
+        }
+        if (paths_sel == PathRowRecursive) {
+            if (nav & DirLeft) {
+                paths.scan_recursive = false;
+                paths_dirty = true;
+            }
+            if (nav & DirRight) {
+                paths.scan_recursive = true;
+                paths_dirty = true;
+            }
+            if (down & HidNpadButton_A) {
+                paths.scan_recursive = !paths.scan_recursive;
+                paths_dirty = true;
+            }
+        } else if (down & HidNpadButton_A) {
+            PickFolder(paths_sel);
+        }
+        if (down & HidNpadButton_Y) {
+            ResetToDefault(paths_sel);
+        }
+        if (down & HidNpadButton_B) {
+            EnterRail();
+        }
+        return false;
+    }
+
+    void PickFolder(int row) {
+        const std::string& current = row == PathRowUserDir ? paths.user_dir : paths.roms_dir;
+        const std::optional<std::string> picked = BrowseForFolder(current);
+        if (!picked) {
+            return;
+        }
+        if (row == PathRowUserDir) {
+            paths.user_dir = *picked;
+        } else {
+            paths.roms_dir = *picked;
+        }
+        paths_dirty = true;
+    }
+
+    void ResetToDefault(int row) {
+        switch (row) {
+        case PathRowUserDir:
+            paths.user_dir = GetDefaultUserDir();
+            break;
+        case PathRowRomsDir:
+            paths.roms_dir = GetDefaultRomsDir(paths.user_dir);
+            break;
+        default:
+            paths.scan_recursive = true;
+            break;
+        }
+        paths_dirty = true;
+    }
+
     void EnsureVisible(const Grid& grid) {
         if (filtered.empty()) {
             return;
@@ -900,9 +1093,11 @@ private:
         touch_was_down = true;
 
         if (tx < kRailW) {
-            SetTab(ty < kScreenH / 2 ? Tab::Library : Tab::Settings);
-            rail_sel = tab;
-            focus = Focus::Content;
+            if (const std::optional<Tab> hit = RailHitTest(ty)) {
+                SetTab(*hit);
+                rail_sel = tab;
+                focus = Focus::Content;
+            }
             return;
         }
         if (tab == Tab::Library) {
@@ -922,12 +1117,27 @@ private:
                     break;
                 }
             }
-        } else {
+        } else if (tab == Tab::Settings) {
             const int row = (ty - (kContentTop + 16)) / (kRowH + 8);
             if (row >= 0 && row < kNumSettings) {
                 settings_sel = row;
                 CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
                 settings_dirty = true;
+            }
+        } else {
+            for (int i = 0; i < PathRowCount; ++i) {
+                const int y = PathRowTop(i);
+                if (ty < y || ty >= y + PathRowHeight(i)) {
+                    continue;
+                }
+                paths_sel = i;
+                if (i == PathRowRecursive) {
+                    paths.scan_recursive = !paths.scan_recursive;
+                    paths_dirty = true;
+                } else {
+                    PickFolder(i);
+                }
+                break;
             }
         }
     }
@@ -945,14 +1155,184 @@ private:
         return true;
     }
 
+    // Modal folder picker. Blocks until a folder is chosen or the user backs out.
+    std::optional<std::string> BrowseForFolder(const std::string& start) {
+        std::string dir = EnsureDirectory(start) ? start : std::string{"sdmc:/"};
+        std::vector<DirEntry> entries = ListSubdirectories(dir);
+        int sel = 0;
+        int scroll = 0;
+        Repeater rep;
+
+        auto Enter = [&](const std::string& next, const std::string& highlight) {
+            dir = next;
+            entries = ListSubdirectories(dir);
+            const int base = ParentDirectory(dir).empty() ? 0 : 1;
+            sel = 0;
+            scroll = 0;
+            for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+                if (entries[i].path == highlight) {
+                    sel = i + base;
+                    break;
+                }
+            }
+        };
+
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            const HidAnalogStickState ls = padGetStickPos(pad_state, 0);
+            constexpr int dz = 12000;
+            const u32 nav = rep.Step((down & HidNpadButton_Up) || ls.y > dz,
+                                     (down & HidNpadButton_Down) || ls.y < -dz, false, false);
+
+            const std::string parent = ParentDirectory(dir);
+            // Row 0 is ".." everywhere but device root.
+            const int base = parent.empty() ? 0 : 1;
+            const int count = static_cast<int>(entries.size()) + base;
+            sel = std::clamp(sel, 0, std::max(0, count - 1));
+
+            if (nav & DirUp) {
+                sel = std::max(0, sel - 1);
+            }
+            if (nav & DirDown) {
+                sel = std::min(std::max(0, count - 1), sel + 1);
+            }
+            scroll = std::clamp(scroll, std::max(0, sel - kBrowseRows + 1),
+                                std::max(0, std::min(sel, count - kBrowseRows)));
+            if (down & HidNpadButton_A) {
+                if (base == 1 && sel == 0) {
+                    Enter(parent, dir);
+                } else if (sel >= base && sel - base < static_cast<int>(entries.size())) {
+                    Enter(entries[sel - base].path, "");
+                }
+            }
+            if (down & HidNpadButton_B) {
+                if (parent.empty()) {
+                    return std::nullopt;
+                }
+                Enter(parent, dir);
+            }
+            if (down & HidNpadButton_Y) {
+                return std::nullopt;
+            }
+            if (down & HidNpadButton_Plus) {
+                return dir;
+            }
+
+            DrawBrowser(dir, entries, sel, scroll);
+            Present();
+        }
+        return std::nullopt;
+    }
+
+    void DrawBrowser(const std::string& dir, const std::vector<DirEntry>& entries, int sel,
+                     int scroll) {
+        Canvas& c = canvas;
+        c.Clear(kColBg);
+
+        g_font.Draw(c, 40, 44, "Select folder", 28, kColText);
+        g_font.Draw(c, 40, 76, g_font.TruncateFront(dir, 20, kScreenW - 80), 20, kColAccent);
+        c.FillRect(40, 96, kScreenW - 80, 1, kColRail);
+
+        const bool has_parent = !ParentDirectory(dir).empty();
+        const int base = has_parent ? 1 : 0;
+        const int count = static_cast<int>(entries.size()) + base;
+
+        if (count == 0) {
+            g_font.Draw(c, 52, kBrowseTop + 30, "No subfolders here", 20, kColTextDim);
+        }
+        for (int i = scroll; i < std::min(count, scroll + kBrowseRows); ++i) {
+            const int y = kBrowseTop + (i - scroll) * kBrowseRowH;
+            if (i == sel) {
+                c.FillRoundRect(32, y, kScreenW - 64, kBrowseRowH - 4, 8, kColSurfaceHi);
+                c.FillRoundRect(32, y + 8, 4, kBrowseRowH - 20, 2, kColAccent);
+            }
+            const bool up = has_parent && i == 0;
+            const std::string name = up ? ".." : entries[i - base].name + "/";
+            g_font.Draw(c, 52, CenterBaseline(y, kBrowseRowH - 4, 20),
+                        g_font.Truncate(name, 20, kScreenW - 128), 20, up ? kColTextDim : kColText);
+        }
+        DrawBrowserScrollbar(c, count, scroll);
+
+        c.FillRect(0, kContentBottom, kScreenW, kHintH, kColHintBar);
+        c.FillRect(0, kContentBottom, kScreenW, 1, kColRail);
+        int hx = 40;
+        const int hy = kContentBottom + (kHintH - 26) / 2;
+        hx += DrawHint(c, hx, hy, "A", "Open") + 22;
+        hx += DrawHint(c, hx, hy, "B", has_parent ? "Up" : "Cancel") + 22;
+        hx += DrawHint(c, hx, hy, "+", "Select this folder") + 22;
+        DrawHint(c, hx, hy, "Y", "Cancel");
+    }
+
+    void DrawBrowserScrollbar(Canvas& c, int count, int scroll) {
+        if (count <= kBrowseRows) {
+            return;
+        }
+        const int track_h = kBrowseRows * kBrowseRowH;
+        const int track_x = kScreenW - 20;
+        c.FillRoundRect(track_x, kBrowseTop, 4, track_h, 2, kColRail);
+        const int thumb_h = std::max(24, track_h * kBrowseRows / count);
+        const int max_scroll = count - kBrowseRows;
+        const int thumb_y = kBrowseTop + (track_h - thumb_h) * scroll / std::max(1, max_scroll);
+        c.FillRoundRect(track_x, thumb_y, 4, thumb_h, 2, kColAccent);
+    }
+
+    void DrawPathsPage(Canvas& c) {
+        DrawHeader(c, "");
+        const bool content_focus = focus == Focus::Content;
+        const int x = kContentX + 24;
+        const int w = kContentW - 48;
+        for (int i = 0; i < PathRowCount; ++i) {
+            const int y = PathRowTop(i);
+            const int h = PathRowHeight(i);
+            const bool on = i == paths_sel;
+            if (on) {
+                c.FillRoundRect(x, y, w, h, 10, content_focus ? kColSurfaceHi : kColSurface);
+                c.FillRoundRect(x, y + 8, 4, h - 16, 2, content_focus ? kColAccent : kColBadge);
+            }
+            if (i == PathRowRecursive) {
+                g_font.Draw(c, x + 20, CenterBaseline(y, h, 22), PathRowLabel(i), 22, kColText);
+                const char* value = paths.scan_recursive ? "On" : "Off";
+                const int vw = g_font.Measure(value, 22);
+                g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, h, 22), value, 22,
+                            on && content_focus ? kColAccent : kColTextDim);
+                continue;
+            }
+            g_font.Draw(c, x + 20, y + 30, PathRowLabel(i), 22, kColText);
+            const std::string& dir = i == PathRowUserDir ? paths.user_dir : paths.roms_dir;
+            g_font.Draw(c, x + 20, y + 58, g_font.TruncateFront(dir, 18, w - 44), 18,
+                        on && content_focus ? kColAccent : kColTextDim);
+        }
+
+        int y = PathRowTop(PathRowCount - 1) + PathRowHeight(PathRowCount - 1) + 30;
+        if (RestartPending()) {
+            g_font.Draw(c, x + 20, y, "Restart Dekopon to move to the new folder.", 18, kColAccent);
+            y += 26;
+        }
+
+        if (focus == Focus::Rail) {
+            DrawRailHints(c);
+        } else {
+            int hx = kContentX + 24;
+            const int hy = kContentBottom + (kHintH - 26) / 2;
+            hx +=
+                DrawHint(c, hx, hy, "A", paths_sel == PathRowRecursive ? "Toggle" : "Browse") + 22;
+            hx += DrawHint(c, hx, hy, "Y", "Default") + 22;
+            hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
+            DrawHint(c, hx, hy, "+ -", "Exit");
+        }
+    }
+
     void Draw() {
         Canvas& c = canvas;
         c.Clear(kColBg);
         DrawRail(c, tab, rail_sel, focus == Focus::Rail);
         if (tab == Tab::Library) {
             DrawLibrary(c);
-        } else {
+        } else if (tab == Tab::Settings) {
             DrawSettingsPage(c);
+        } else {
+            DrawPathsPage(c);
         }
         DrawNotice(c);
         DrawHintBar(c);
@@ -969,7 +1349,7 @@ private:
 
         const bool content_focus = focus == Focus::Content;
         if (filtered.empty()) {
-            DrawEmptyLibrary(c);
+            DrawEmptyLibrary(c, paths.roms_dir);
         } else {
             const Grid grid = ComputeGrid();
             for (int i = 0; i < static_cast<int>(filtered.size()); ++i) {
