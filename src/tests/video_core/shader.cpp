@@ -18,6 +18,7 @@
 #include "video_core/pica/shader_setup.h"
 #include "video_core/pica/shader_unit.h"
 #include "video_core/shader/shader_interpreter.h"
+#include "video_core/shader/shader_jit.h"
 #if CITRA_ARCH(x86_64)
 #include "video_core/shader/shader_jit_x64_compiler.h"
 #elif CITRA_ARCH(arm64)
@@ -839,6 +840,37 @@ SHADER_TEST_CASE("Source Swizzle", "[video_core][shader]") {
             Common::Vec4f(iota_vec.w, iota_vec.z, iota_vec.x, iota_vec.y));
     REQUIRE(shader("yyyy")->Run({iota_vec}) ==
             Common::Vec4f(iota_vec.y, iota_vec.y, iota_vec.y, iota_vec.y));
+}
+
+TEST_CASE("JIT Engine Interpreter Fallback", "[video_core][shader]") {
+    const auto sh_input1 = SourceRegister::MakeInput(0);
+    const auto sh_input2 = SourceRegister::MakeInput(1);
+    const auto sh_output = DestRegister::MakeOutput(0);
+
+    auto shader_setup = CompileShaderSetup({
+        {OpCode::Id::ADD, sh_output, sh_input1, sh_input2},
+        {OpCode::Id::END},
+    });
+
+    Pica::Shader::JitEngine engine;
+    engine.SetupBatch(*shader_setup, 0);
+
+    const auto run = [&engine, &shader_setup]() {
+        Pica::ShaderUnit shader_unit;
+        shader_unit.input[0].x = Pica::f24::FromFloat32(2.0f);
+        shader_unit.input[1].x = Pica::f24::FromFloat32(3.0f);
+        shader_unit.temporary.fill(Common::Vec4<Pica::f24>::AssignToAll(Pica::f24::Zero()));
+        engine.Run(*shader_setup, shader_unit);
+        return shader_unit.output[0].x.ToFloat32();
+    };
+
+    // A successful SetupBatch leaves compiled code behind, which Run must use.
+    REQUIRE(shader_setup->cached_shader != nullptr);
+    REQUIRE(run() == 5.0f);
+
+    // A null cached_shader is the state SetupBatch leaves behind for a shader it could not compile
+    shader_setup->cached_shader = nullptr;
+    REQUIRE(run() == 5.0f);
 }
 
 #endif // CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)

@@ -5,10 +5,14 @@
 #include "common/arch.h"
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
 
+#include <exception>
+#include <new>
 #include "common/assert.h"
 #include "common/hash.h"
+#include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "video_core/shader/shader.h"
+#include "video_core/shader/shader_interpreter.h"
 #include "video_core/shader/shader_jit.h"
 #if CITRA_ARCH(arm64)
 #include "video_core/shader/shader_jit_a64_compiler.h"
@@ -19,7 +23,7 @@
 
 namespace Pica::Shader {
 
-JitEngine::JitEngine() = default;
+JitEngine::JitEngine() : interpreter{std::make_unique<InterpreterEngine>()} {}
 JitEngine::~JitEngine() = default;
 
 void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
@@ -34,18 +38,40 @@ void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
     auto iter = cache.find(cache_key);
     if (iter != cache.end()) {
         setup.cached_shader = iter->second.get();
-    } else {
-        auto shader = std::make_unique<JitShader>();
-        shader->Compile(&setup.GetProgramCode(), &setup.GetSwizzleData());
-        setup.cached_shader = shader.get();
-        cache.emplace_hint(iter, cache_key, std::move(shader));
+        return;
     }
+
+    std::unique_ptr<JitShader> shader;
+    if (!exec_memory_exhausted) {
+        try {
+            shader = std::make_unique<JitShader>();
+            shader->Compile(&setup.GetProgramCode(), &setup.GetSwizzleData());
+        } catch (const std::bad_alloc&) {
+            // The host has no executable memory left to back this shader.
+            // Nothing is ever freed from the cache, so no later shader will fare any better.
+            LOG_WARNING(HW_GPU, "Out of executable memory for the shader JIT, falling back to the "
+                                "interpreter for this and all subsequent shaders");
+            exec_memory_exhausted = true;
+            shader.reset();
+        } catch (const std::exception& e) {
+            LOG_ERROR(HW_GPU, "Failed to compile shader, falling back to the interpreter: {}",
+                      e.what());
+            shader.reset();
+        }
+    }
+
+    setup.cached_shader = shader.get();
+    cache.emplace_hint(iter, cache_key, std::move(shader));
 }
 
 MICROPROFILE_DECLARE(GPU_Shader);
 
 void JitEngine::Run(const ShaderSetup& setup, ShaderUnit& state) const {
-    ASSERT(setup.cached_shader != nullptr);
+    if (setup.cached_shader == nullptr) {
+        // This shader has no compiled code.
+        interpreter->Run(setup, state);
+        return;
+    }
 
     MICROPROFILE_SCOPE(GPU_Shader);
 

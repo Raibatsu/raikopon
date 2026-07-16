@@ -14,6 +14,7 @@
 
 namespace Pica::Shader {
 
+class InterpreterEngine;
 class JitShader;
 
 class JitEngine final : public ShaderEngine {
@@ -25,7 +26,11 @@ public:
     void Run(const ShaderSetup& setup, ShaderUnit& state) const override;
 
 private:
+    /// A null entry marks a shader that failed to compile and runs on the interpreter instead.
     std::unordered_map<u64, std::unique_ptr<JitShader>> cache;
+    std::unique_ptr<InterpreterEngine> interpreter;
+    /// Set once executable memory is exhausted.
+    bool exec_memory_exhausted = false;
 };
 
 } // namespace Pica::Shader
