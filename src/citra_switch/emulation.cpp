@@ -8,6 +8,7 @@
 #include <string>
 #include <thread>
 
+#include "citra_switch/applets/swkbd.h"
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
 #include "common/file_util.h"
@@ -173,8 +174,9 @@ bool BootRom(const std::string& rom_arg) {
     system.ApplySettings();
     Settings::LogSettings();
 
-    // TODO: Actually support applets via switch keyboard and such
+    // Hand text input to Horizon's swkbd.
     Frontend::RegisterDefaultApplets(system);
+    RegisterKeyboard(system);
 
     // Transfer ownership of the window context from the main thread to the emulation thread.
     auto* window = GetEmuWindow();
@@ -217,6 +219,7 @@ bool LoadFailed() {
 
 void StopRom() {
     s_stop = true;
+    CancelKeyboard();
     if (s_emu_thread.joinable()) {
         s_emu_thread.join();
     }

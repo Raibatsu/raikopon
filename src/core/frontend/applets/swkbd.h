@@ -32,6 +32,22 @@ enum class ButtonConfig {
     None,   /// No button (returned by swkbdInputText in special cases)
 };
 
+/// Mirrors HLE::Applets::SoftwareKeyboardType.
+enum class KeyboardType {
+    Normal,  /// Keyboard with several pages (QWERTY/accents/symbol/mobile)
+    QWERTY,  /// QWERTY keyboard only.
+    NumPad,  /// Number pad.
+    Western, /// On JPN systems, a text keyboard without Japanese input capabilities,
+             /// otherwise same as Normal.
+};
+
+/// Mirrors HLE::Applets::SoftwareKeyboardPasswordMode.
+enum class PasswordMode {
+    None,      /// Characters are not concealed.
+    Hide,      /// Characters are concealed immediately.
+    HideDelay, /// Characters are concealed a second after they've been typed.
+};
+
 /// Default English button text mappings. Frontends may need to copy this to internationalize it.
 constexpr char SWKBD_BUTTON_OKAY[] = "Ok";
 constexpr char SWKBD_BUTTON_CANCEL[] = "Cancel";
@@ -41,11 +57,13 @@ constexpr char SWKBD_BUTTON_FORGOT[] = "I Forgot";
 /// later learn is needed can be added here and filled in by the backend HLE applet
 struct KeyboardConfig {
     ButtonConfig button_config;
-    AcceptedInput accept_mode; /// What kinds of input are accepted (blank/empty/fixed width)
-    bool multiline_mode;       /// True if the keyboard accepts multiple lines of input
-    u16 max_text_length;       /// Maximum number of letters allowed if its a text input
-    u16 max_digits;            /// Maximum number of numbers allowed if its a number input
-    std::string hint_text;     /// Displayed in the field as a hint before
+    KeyboardType type;          /// The keyboard layout the application asked for
+    PasswordMode password_mode; /// Whether the frontend should conceal typed characters
+    AcceptedInput accept_mode;  /// What kinds of input are accepted (blank/empty/fixed width)
+    bool multiline_mode;        /// True if the keyboard accepts multiple lines of input
+    u16 max_text_length;        /// Maximum number of letters allowed if its a text input
+    u16 max_digits;             /// Maximum number of numbers allowed if its a number input
+    std::string hint_text;      /// Displayed in the field as a hint before
     std::vector<std::string> button_text; /// Contains the button text that the caller provides
     struct Filters {
         bool prevent_digit;     /// Limit maximum digit count to max_digits
