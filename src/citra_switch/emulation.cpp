@@ -2,7 +2,9 @@
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <string>
 #include <thread>
 
@@ -28,6 +30,31 @@ std::atomic<bool> s_stop{true};
 // Set true once system.Load succeeds.
 // This lets the menu tell a crash/bad ROM apart from a clean exit.
 std::atomic<bool> s_load_ok{false};
+
+// The screen arrangements R3 cycles through.
+struct ScreenLayoutPreset {
+    Settings::LayoutOption layout;
+    bool swap_screen;
+    bool upright_screen;
+    Settings::SmallScreenPosition small_screen_position;
+    const char* name;
+};
+
+constexpr std::array<ScreenLayoutPreset, 5> s_layout_presets{{
+    {Settings::LayoutOption::Default, false, false, Settings::SmallScreenPosition::BottomRight,
+     "Vertical stack"},
+    {Settings::LayoutOption::SideScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
+     "Side by side"},
+    {Settings::LayoutOption::LargeScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
+     "Large top, small bottom"},
+    {Settings::LayoutOption::LargeScreen, true, false, Settings::SmallScreenPosition::MiddleRight,
+     "Large bottom, small top"},
+    {Settings::LayoutOption::Default, false, true, Settings::SmallScreenPosition::BottomRight,
+     "Vertical stack (rotate console)"},
+}};
+
+// Kept consistent with Settings so the first press advances past the boot default.
+std::size_t s_layout_index = 0;
 
 /// Returns true if `path` is a 3DS title.
 bool IsLoadableRom(const std::string& path) {
@@ -164,6 +191,24 @@ bool BootRom(const std::string& rom_arg) {
 
 bool IsRunning() {
     return !s_stop;
+}
+
+void CycleScreenLayout() {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+
+    s_layout_index = (s_layout_index + 1) % s_layout_presets.size();
+    const ScreenLayoutPreset& preset = s_layout_presets[s_layout_index];
+
+    Settings::values.layout_option = preset.layout;
+    Settings::values.swap_screen = preset.swap_screen;
+    Settings::values.upright_screen = preset.upright_screen;
+    Settings::values.small_screen_position = preset.small_screen_position;
+
+    system.GPU().Renderer().UpdateCurrentFramebufferLayout();
+    LOG_INFO(Frontend, "Screen layout: {}", preset.name);
 }
 
 bool LoadFailed() {
