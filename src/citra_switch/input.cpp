@@ -23,9 +23,17 @@ namespace {
 constexpr float kStickRange = 32767.0f;
 constexpr float kStickDeadzone = 0.15f;
 
+// libnx reports angular velocity in rotations/sec vs the 3DS gyroscope in deg/sec.
+constexpr float kRotationsToDegrees = 360.0f;
+
+// What the 3DS accelerometer reads while lying face-up, which is the orientation a Switch held upright maps onto.
+constexpr Common::Vec3<float> kRestAccel{0.0f, -1.0f, 0.0f};
+
 std::atomic<std::uint64_t> s_buttons{};
 std::array<std::atomic<float>, Settings::NativeAnalog::NumAnalogs> s_stick_x{};
 std::array<std::atomic<float>, Settings::NativeAnalog::NumAnalogs> s_stick_y{};
+std::array<std::atomic<float>, 3> s_accel{};
+std::array<std::atomic<float>, 3> s_gyro{};
 bool s_touch_active{};
 
 class SwitchButton final : public Input::ButtonDevice {
@@ -53,6 +61,20 @@ private:
     std::size_t analog;
 };
 
+class SwitchMotion final : public Input::MotionDevice {
+public:
+    std::tuple<Common::Vec3<float>, Common::Vec3<float>> GetStatus() const override {
+        return {Load(s_accel), Load(s_gyro)};
+    }
+
+private:
+    static Common::Vec3<float> Load(const std::array<std::atomic<float>, 3>& source) {
+        return {source[0].load(std::memory_order_relaxed),
+                source[1].load(std::memory_order_relaxed),
+                source[2].load(std::memory_order_relaxed)};
+    }
+};
+
 class SwitchButtonFactory final : public Input::Factory<Input::ButtonDevice> {
 public:
     std::unique_ptr<Input::ButtonDevice> Create(const Common::ParamPackage& params) override {
@@ -71,6 +93,13 @@ public:
     }
 };
 
+class SwitchMotionFactory final : public Input::Factory<Input::MotionDevice> {
+public:
+    std::unique_ptr<Input::MotionDevice> Create(const Common::ParamPackage& params) override {
+        return std::make_unique<SwitchMotion>();
+    }
+};
+
 std::string ButtonParam(InputButton button) {
     return Common::ParamPackage{
         {"engine", "switch"},
@@ -85,6 +114,23 @@ std::string AnalogParam(Settings::NativeAnalog::Values analog) {
         {"analog", std::to_string(static_cast<int>(analog))},
     }
         .Serialize();
+}
+
+std::string MotionParam() {
+    return Common::ParamPackage{{"engine", "switch"}}.Serialize();
+}
+
+// The Switch and 3DS sensor frames are one rotation apart: the 3DS's x+ (left), y+ (out of the
+// touch screen) and z+ (up) read off the Switch's -x, z and y respectively.
+Common::Vec3<float> ToConsoleFrame(float x, float y, float z) {
+    return {-x, z, y};
+}
+
+void StoreMotion(const Common::Vec3<float>& accel, const Common::Vec3<float>& gyro) {
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+        s_accel[axis].store(accel[axis], std::memory_order_relaxed);
+        s_gyro[axis].store(gyro[axis], std::memory_order_relaxed);
+    }
 }
 
 std::tuple<float, float> NormalizeStick(std::int32_t raw_x, std::int32_t raw_y) {
@@ -123,7 +169,7 @@ void SetDefaultBindings() {
     profile.analogs[Settings::NativeAnalog::CirclePad] =
         AnalogParam(Settings::NativeAnalog::CirclePad);
     profile.analogs[Settings::NativeAnalog::CStick] = AnalogParam(Settings::NativeAnalog::CStick);
-    profile.motion_device = "engine:null";
+    profile.motion_device = MotionParam();
     profile.touch_device = "engine:emu_window";
     profile.controller_touch_device.clear();
     profile.use_touchpad = false;
@@ -135,6 +181,8 @@ void SetDefaultBindings() {
 void InitializeInput() {
     Input::RegisterFactory<Input::ButtonDevice>("switch", std::make_shared<SwitchButtonFactory>());
     Input::RegisterFactory<Input::AnalogDevice>("switch", std::make_shared<SwitchAnalogFactory>());
+    Input::RegisterFactory<Input::MotionDevice>("switch", std::make_shared<SwitchMotionFactory>());
+    StoreMotion(kRestAccel, {});
     SetDefaultBindings();
 }
 
@@ -147,6 +195,15 @@ void UpdateInput(const InputState& state) {
     s_stick_y[Settings::NativeAnalog::CirclePad].store(left_y, std::memory_order_relaxed);
     s_stick_x[Settings::NativeAnalog::CStick].store(right_x, std::memory_order_relaxed);
     s_stick_y[Settings::NativeAnalog::CStick].store(right_y, std::memory_order_relaxed);
+
+    if (state.motion.active) {
+        StoreMotion(
+            ToConsoleFrame(state.motion.accel_x, state.motion.accel_y, state.motion.accel_z),
+            ToConsoleFrame(state.motion.gyro_x, state.motion.gyro_y, state.motion.gyro_z) *
+                kRotationsToDegrees);
+    } else {
+        StoreMotion(kRestAccel, {});
+    }
 
     EmuWindow_Switch* window = GetEmuWindow();
     if (!window) {
@@ -169,6 +226,7 @@ void ShutdownInput() {
     UpdateInput({});
     Input::UnregisterFactory<Input::ButtonDevice>("switch");
     Input::UnregisterFactory<Input::AnalogDevice>("switch");
+    Input::UnregisterFactory<Input::MotionDevice>("switch");
     Input::UnregisterFactory<Input::TouchDevice>("emu_window");
 }
 
