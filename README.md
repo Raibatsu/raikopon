@@ -12,33 +12,64 @@ Many many thanks to the Azahar team for creating such an amazing project in the 
 
 # Project status
 
-Currently, the project boots and runs games at mostly fullspeed  with full controller/touch input and audio.
+Currently, the project boots and runs games at mostly full speed (see the compatibility list for details: https://cryptpad.fr/sheet/#/2/sheet/view/PJKtoq0haezswSwH8qgEJkp7NWO57qNNL7cq04JsJAM/)\
+\
+Other features include:
+- Full gyro support
+- CIA installation support
+- Switch software (and hardware) keyboard support
+- Multiple screen layouts via R3 (Press the right stick)
+- And other things I'm probably forgetting.
 
 # Installation
 
 Installation is as simple as downloading the release nro from the [releases](https://github.com/PalindromicBreadLoaf/dekopon/releases) page
 and copying it to your SD card in your standard homebrew location (probably /switch).
 
-Your legally acquired ROMs go in /switch/dekopon/roms/
+Your legally acquired ROMs go in `/switch/dekopon/roms/`
+(This can be changed in settings)
 
 # Build instructions
 ## Required packages
 The current build requires DevkitPro. Please install from here [DevkitPro Install](https://devkitpro.org/wiki/Getting_Started)
 ### DevkitPro Packages
 - switch-dev
+- switch-freetype
 - switch-bzip2
 - switch-libpng
 - switch-zlib
 - switch-mesa *(only for the legacy GLES backend\*)*
 ### System Packages
 - cmake
+- git
 
 \*The default GPU backend is Vulkan via [NXVK](https://github.com/PalindromicBreadLoaf/nxvk)
 NXVK and switch-mesa cannot be included simultaneously, so renderer must be chosen at build time.
+Vulkan is highly recommended and I have yet to encounter an issues regarding it.
 Hopefully in the future NXVK will also include OpenGL drivers of some sort to resolve this issue.
 
+## 1. Clone the repository
+```shell
+git clone --recursive https://github.com/PalindromicBreadLoaf/dekopon.git
+cd dekopon
+```
 
-From there, clone this repository, move into it, then run 
+## 2. Build NXVK
+NXVK has it's own build documentation that lives in the [NXVK repository](https://github.com/PalindromicBreadLoaf/nxvk).
+Please follow that and create a libnvk.a file. Once you've done that you can return here.
+
+Configuring looks for `switch/build/cross/src/nouveau/vulkan/libnvk.a` under `externals/nxvk`.
+If you built nxvk in-place, it should be found automatically.
+
+## 3. Configure
+```shell
+cmake -S . -B build/switch \
+    -DCMAKE_TOOLCHAIN_FILE=$DEVKITPRO/cmake/Switch.cmake \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+```
+
+## 4. Build
 ```shell
 cmake --build build/switch --target citra_switch_nro -j$(nproc)
 ```
