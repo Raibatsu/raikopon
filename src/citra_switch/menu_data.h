@@ -28,6 +28,7 @@ struct MenuSettings {
     bool use_vsync{};
     bool async_shader_compilation{};
     bool use_disk_shader_cache{};
+    bool show_fps{};              // On-screen framerate counter.
     int cpu_clock_percentage{};   // 5..400.
     bool is_new_3ds{};
     bool use_cpu_jit{};

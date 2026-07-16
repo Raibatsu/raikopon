@@ -450,13 +450,14 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"VSync", s.use_vsync ? "On" : "Off"},
         {"Async Shader Compilation", s.async_shader_compilation ? "On" : "Off"},
         {"Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off"},
+        {"Show FPS Counter", s.show_fps ? "On" : "Off"},
         {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
         {"Console Region", RegionName(s.region_value)},
     };
 }
-constexpr int kNumSettings = 8;
+constexpr int kNumSettings = 9;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -473,15 +474,18 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         s.use_disk_shader_cache = dir > 0;
         break;
     case 4:
-        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
+        s.show_fps = dir > 0;
         break;
     case 5:
-        s.is_new_3ds = dir > 0;
+        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
         break;
     case 6:
-        s.use_cpu_jit = dir > 0;
+        s.is_new_3ds = dir > 0;
         break;
     case 7:
+        s.use_cpu_jit = dir > 0;
+        break;
+    case 8:
         s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
     default:

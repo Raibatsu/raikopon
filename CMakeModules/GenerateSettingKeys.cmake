@@ -43,6 +43,7 @@ foreach(KEY IN ITEMS
     "use_vsync"
     "use_display_refresh_rate_detection"
     "use_shader_jit"
+    "show_fps"
     "resolution_factor"
     "frame_limit"
     "turbo_limit"

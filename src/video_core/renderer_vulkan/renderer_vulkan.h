@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <chrono>
+
 #include "common/common_types.h"
 #include "common/math_util.h"
 #include "video_core/renderer_base.h"
@@ -114,6 +116,8 @@ private:
 
     void DrawCursor(const Layout::FramebufferLayout& layout);
 
+    void DrawFpsOverlay(const Layout::FramebufferLayout& layout);
+
     void LoadFBToScreenInfo(const Pica::FramebufferConfig& framebuffer, ScreenInfo& screen_info,
                             bool right_eye);
     void FillScreen(Common::Vec3<u8> color, const TextureInfo& texture);
@@ -151,6 +155,13 @@ private:
     vk::ShaderModule cursor_fragment_shader{};
     vk::Pipeline cursor_pipeline{};
     vk::UniquePipelineLayout cursor_pipeline_layout{};
+
+    // Draw a FPS counter over the top-left side of the screen.
+    vk::ShaderModule overlay_fragment_shader{};
+    vk::Pipeline overlay_pipeline{};
+    vk::UniquePipelineLayout overlay_pipeline_layout{};
+    float overlay_game_fps = 0.0f;
+    std::chrono::steady_clock::time_point overlay_last_update{};
 };
 
 } // namespace Vulkan

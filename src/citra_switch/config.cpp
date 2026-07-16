@@ -98,6 +98,7 @@ private:
         ReadSetting("Renderer", Settings::values.use_vsync);
         ReadSetting("Renderer", Settings::values.async_shader_compilation);
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
+        ReadSetting("Renderer", Settings::values.show_fps);
 
         // Force the PICA vertex-shader JIT off on Switch. oaknut::CodeBlock does a libnx
         // jitCreate per shader and exhausts Horizon JIT memory fairly quickly, which ends up
@@ -135,7 +136,8 @@ private:
         ss << "async_shader_compilation = "
            << (v.async_shader_compilation.GetValue() ? "true" : "false") << '\n';
         ss << "use_disk_shader_cache = " << (v.use_disk_shader_cache.GetValue() ? "true" : "false")
-           << "\n\n";
+           << '\n';
+        ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[System]\n";
         ss << "region_value = " << v.region_value.GetValue() << "\n\n";
