@@ -3,20 +3,38 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <memory>
+#include <optional>
+
+#include <fmt/format.h>
 
 #include "citra_switch/config.h"
 #include "citra_switch/menu_data.h"
 #include "common/file_util.h"
 #include "common/string_util.h"
 #include "common/settings.h"
+#include "common/zstd_compression.h"
+#include "core/file_sys/cia_container.h"
+#include "core/file_sys/title_metadata.h"
+#include "core/hle/service/am/am.h"
+#include "core/hle/service/fs/archive.h"
 #include "core/loader/loader.h"
 #include "core/loader/smdh.h"
 
 namespace SwitchFrontend {
 
 namespace {
+
+constexpr std::uint64_t kTidHighMask = 0xFFFFFFFF00000000ULL;
+constexpr std::uint64_t kTidHighApplication = 0x0004000000000000ULL;
+constexpr std::uint64_t kTidHighDemo = 0x0004000200000000ULL;
+constexpr std::uint64_t kTidHighUpdate = 0x0004000E00000000ULL;
+constexpr std::uint64_t kTidHighDlc = 0x0004008C00000000ULL;
+
+// Don't scan updates/dlcs into the library window.
+constexpr std::array<std::uint64_t, 2> kLibraryTidHighs{kTidHighApplication, kTidHighDemo};
 
 // Decode game icons
 std::uint32_t Rgb565ToRgba8888(std::uint16_t c) {
@@ -78,7 +96,8 @@ void FillFromSmdh(GameEntry& entry, const Loader::SMDH& smdh) {
 }
 
 // Reads one candidate file into a GameEntry, or returns false if it isn't a title.
-bool TryLoad(const std::string& path, GameEntry& entry) {
+// `fallback_title` names the entry when there is no SMDH to read a long title out of.
+bool TryLoad(const std::string& path, const std::string& fallback_title, GameEntry& entry) {
     std::unique_ptr<Loader::AppLoader> loader = Loader::GetLoader(path);
     if (!loader) {
         return false;
@@ -89,8 +108,9 @@ bool TryLoad(const std::string& path, GameEntry& entry) {
     }
 
     entry.path = path;
-    entry.title = std::string{FileUtil::GetFilename(path)};
+    entry.title = fallback_title;
     entry.file_type = Loader::GetFileTypeString(loader->GetFileType(), loader->IsFileCompressed());
+    loader->ReadProgramId(entry.program_id);
 
     std::vector<u8> smdh_buffer;
     const Loader::ResultStatus icon_result = loader->ReadIcon(smdh_buffer);
@@ -121,14 +141,275 @@ void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, in
                 return true;
             }
             GameEntry entry;
-            if (TryLoad(path, entry)) {
+            if (TryLoad(path, std::string{FileUtil::GetFilename(path)}, entry)) {
                 out.push_back(std::move(entry));
             }
             return true;
         });
 }
 
+// Parses a title tree folder name ("00053f00") into the low word of a title ID.
+bool ParseTidLow(const std::string& name, std::uint32_t& out) {
+    if (name.size() != 8) {
+        return false;
+    }
+    std::uint32_t value = 0;
+    for (const char c : name) {
+        int digit;
+        if (c >= '0' && c <= '9') {
+            digit = c - '0';
+        } else if (c >= 'a' && c <= 'f') {
+            digit = c - 'a' + 10;
+        } else if (c >= 'A' && c <= 'F') {
+            digit = c - 'A' + 10;
+        } else {
+            return false;
+        }
+        value = (value << 4) | static_cast<std::uint32_t>(digit);
+    }
+    out = value;
+    return true;
+}
+
+// Adds the titles installed under the emulated SD card's title tree.
+void ScanInstalled(std::vector<GameEntry>& out) {
+    const std::string title_root =
+        Service::AM::GetMediaTitlePath(Service::FS::MediaType::SDMC);
+    for (const std::uint64_t high : kLibraryTidHighs) {
+        const std::string dir = fmt::format("{}{:08x}/", title_root, high >> 32);
+        FileUtil::ForeachDirectoryEntry(
+            nullptr, dir,
+            [&out, high](u64*, const std::string& parent, const std::string& virtual_name) {
+                if (!FileUtil::IsDirectory(parent + virtual_name)) {
+                    return true;
+                }
+                std::uint32_t low = 0;
+                if (!ParseTidLow(virtual_name, low)) {
+                    return true;
+                }
+                const std::uint64_t tid = high | low;
+                // Resolves the boot content through the title's TMD, so it picks the same .app
+                // the loader would boot.
+                const std::string content =
+                    Service::AM::GetTitleContentPath(Service::FS::MediaType::SDMC, tid);
+                if (content.empty() || !FileUtil::Exists(content)) {
+                    return true;
+                }
+                GameEntry entry;
+                if (!TryLoad(content, fmt::format("{:016X}", tid), entry)) {
+                    return true;
+                }
+                entry.installed = true;
+                if (entry.program_id == 0) {
+                    entry.program_id = tid;
+                }
+                out.push_back(std::move(entry));
+                return true;
+            });
+    }
+}
+
+// Reads a CIA's header and TMD, which both sit ahead of the content.
+bool ReadCiaEntry(const std::string& path, CiaEntry& entry) {
+    std::unique_ptr<FileUtil::IOFile> file = std::make_unique<FileUtil::IOFile>(path, "rb");
+    if (!file->IsOpen()) {
+        return false;
+    }
+    entry.compressed = FileUtil::Z3DSReadIOFile::GetUnderlyingFileMagic(file.get()) != std::nullopt;
+    if (entry.compressed) {
+        file = std::make_unique<FileUtil::Z3DSReadIOFile>(std::move(file));
+    }
+
+    std::vector<u8> header(FileSys::CIA_HEADER_SIZE);
+    if (file->ReadBytes(header.data(), header.size()) != header.size()) {
+        return false;
+    }
+    FileSys::CIAContainer container;
+    if (container.LoadHeader(header) != Loader::ResultStatus::Success) {
+        return false;
+    }
+
+    std::vector<u8> tmd(container.GetTitleMetadataSize());
+    if (file->ReadAtBytes(tmd.data(), tmd.size(), container.GetTitleMetadataOffset()) !=
+            tmd.size() ||
+        container.LoadTitleMetadata(tmd) != Loader::ResultStatus::Success) {
+        return false;
+    }
+
+    entry.program_id = container.GetTitleMetadata().GetTitleID();
+    entry.kind = ClassifyTitle(entry.program_id);
+    entry.version = container.GetTitleMetadata().GetTitleVersion();
+    return true;
+}
+
+struct InstalledTmd {
+    std::uint16_t version{};
+    int content_count{};
+};
+
+// Reads the TMD of `tid`, or nothing if that title isn't installed.
+std::optional<InstalledTmd> ReadInstalledTmd(std::uint64_t tid) {
+    FileSys::TitleMetadata tmd;
+    const std::string path =
+        Service::AM::GetTitleMetadataPath(Service::AM::GetTitleMediaType(tid), tid);
+    if (tmd.Load(path) != Loader::ResultStatus::Success) {
+        return std::nullopt;
+    }
+    return InstalledTmd{tmd.GetTitleVersion(), static_cast<int>(tmd.GetContentCount())};
+}
+
 } // namespace
+
+TitleKind ClassifyTitle(std::uint64_t program_id) {
+    switch (program_id & kTidHighMask) {
+    case kTidHighApplication:
+        return TitleKind::Application;
+    case kTidHighDemo:
+        return TitleKind::Demo;
+    case kTidHighUpdate:
+        return TitleKind::Update;
+    case kTidHighDlc:
+        return TitleKind::AddOnContent;
+    default:
+        break;
+    }
+    // Everything the emulated NAND holds.
+    return Service::AM::GetTitleMediaType(program_id) == Service::FS::MediaType::NAND
+               ? TitleKind::System
+               : TitleKind::Other;
+}
+
+const char* TitleKindName(TitleKind kind) {
+    switch (kind) {
+    case TitleKind::Application:
+        return "Game";
+    case TitleKind::Demo:
+        return "Demo";
+    case TitleKind::Update:
+        return "Update";
+    case TitleKind::AddOnContent:
+        return "DLC";
+    case TitleKind::System:
+        return "System";
+    default:
+        return "Other";
+    }
+}
+
+std::string FormatTitleVersion(std::uint16_t version) {
+    return fmt::format("v{}.{}.{} ({})", (version >> 10) & 0x3F, (version >> 4) & 0x3F,
+                       version & 0xF, version);
+}
+
+TitleDetails GetTitleDetails(const GameEntry& entry) {
+    TitleDetails details;
+    details.program_id = entry.program_id;
+    details.kind = ClassifyTitle(entry.program_id);
+    if (entry.program_id == 0) {
+        return details;
+    }
+
+    if (entry.installed) {
+        if (const std::optional<InstalledTmd> tmd = ReadInstalledTmd(entry.program_id)) {
+            details.has_base_version = true;
+            details.base_version = tmd->version;
+        }
+    }
+    if (details.kind != TitleKind::Application && details.kind != TitleKind::Demo) {
+        return details;
+    }
+
+    // The loader keys the update off the base title's low word.
+    const std::uint64_t low = entry.program_id & 0xFFFFFFFFULL;
+    if (const std::optional<InstalledTmd> tmd = ReadInstalledTmd(kTidHighUpdate | low)) {
+        details.has_update = true;
+        details.update_version = tmd->version;
+    }
+    if (const std::optional<InstalledTmd> tmd = ReadInstalledTmd(kTidHighDlc | low)) {
+        details.has_dlc = true;
+        details.dlc_contents = tmd->content_count;
+    }
+    return details;
+}
+
+bool GetInstalledVersion(std::uint64_t program_id, std::uint16_t& version) {
+    const std::optional<InstalledTmd> tmd = ReadInstalledTmd(program_id);
+    if (!tmd) {
+        return false;
+    }
+    version = tmd->version;
+    return true;
+}
+
+std::vector<CiaEntry> ListCiaFiles(const std::string& directory) {
+    std::vector<CiaEntry> out;
+    FileUtil::ForeachDirectoryEntry(
+        nullptr, directory,
+        [&out](u64*, const std::string& dir, const std::string& virtual_name) {
+            const std::string path = dir + virtual_name;
+            if (FileUtil::IsDirectory(path)) {
+                return true;
+            }
+            std::string extension;
+            Common::SplitPath(path, nullptr, nullptr, &extension);
+            extension = Common::ToLower(extension);
+            if (extension != ".cia" && extension != ".zcia") {
+                return true;
+            }
+            CiaEntry entry;
+            entry.name = virtual_name;
+            entry.path = path;
+            entry.size = FileUtil::GetSize(path);
+            entry.readable = ReadCiaEntry(path, entry);
+            out.push_back(std::move(entry));
+            return true;
+        });
+    std::sort(out.begin(), out.end(), [](const CiaEntry& a, const CiaEntry& b) {
+        return Common::ToLower(a.name) < Common::ToLower(b.name);
+    });
+    return out;
+}
+
+InstallResult InstallCia(const std::string& path,
+                         const std::function<void(std::size_t, std::size_t)>& progress) {
+    const Service::AM::InstallStatus status = Service::AM::InstallCIA(
+        path, [&progress](std::size_t written, std::size_t total) {
+            if (progress) {
+                progress(written, total);
+            }
+        });
+    switch (status) {
+    case Service::AM::InstallStatus::Success:
+        return InstallResult::Success;
+    case Service::AM::InstallStatus::ErrorFileNotFound:
+        return InstallResult::FileNotFound;
+    case Service::AM::InstallStatus::ErrorFailedToOpenFile:
+        return InstallResult::FailedToOpen;
+    case Service::AM::InstallStatus::ErrorAborted:
+        return InstallResult::Aborted;
+    case Service::AM::InstallStatus::ErrorEncrypted:
+        return InstallResult::Encrypted;
+    default:
+        return InstallResult::Invalid;
+    }
+}
+
+const char* InstallResultText(InstallResult result) {
+    switch (result) {
+    case InstallResult::Success:
+        return "Installed";
+    case InstallResult::FileNotFound:
+        return "File not found";
+    case InstallResult::FailedToOpen:
+        return "Couldn't open the file";
+    case InstallResult::Aborted:
+        return "Install aborted";
+    case InstallResult::Encrypted:
+        return "CIA is encrypted. Please decrypt it or add aes_keys.txt";
+    default:
+        return "Not a valid CIA";
+    }
+}
 
 std::vector<GameEntry> ScanGames() {
     const SwitchPaths& paths = GetPaths();
@@ -136,6 +417,7 @@ std::vector<GameEntry> ScanGames() {
 
     std::vector<GameEntry> games;
     ScanDirectory(paths.roms_dir, games, 0, paths.scan_recursive);
+    ScanInstalled(games);
 
     std::sort(games.begin(), games.end(), [](const GameEntry& a, const GameEntry& b) {
         return Common::ToLower(a.title) < Common::ToLower(b.title);

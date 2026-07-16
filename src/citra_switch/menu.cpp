@@ -4,12 +4,15 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -20,11 +23,13 @@
 #include "citra_switch/config.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
+#include "citra_switch/rail_icons.h"
 
 namespace SwitchFrontend {
 namespace {
 
 using u8 = std::uint8_t;
+using u16 = std::uint16_t;
 using u32 = std::uint32_t;
 using u64 = std::uint64_t;
 
@@ -379,14 +384,16 @@ struct Repeater {
 };
 enum { DirUp = 1, DirDown = 2, DirLeft = 4, DirRight = 8 };
 
-enum class Tab { Library, Settings, Paths };
+enum class Tab { Library, Install, Settings, Paths };
 
 // Which pane the cursor lives in.
 enum class Focus { Rail, Content };
 
 // Indexed by Tab, so the order has to match the enum.
-constexpr std::array<std::pair<Tab, const char*>, 3> kRailItems{
-    {{Tab::Library, "Library"}, {Tab::Settings, "Settings"}, {Tab::Paths, "Paths"}}};
+constexpr std::array<std::pair<Tab, const char*>, 4> kRailItems{{{Tab::Library, "Library"},
+                                                                 {Tab::Install, "Install"},
+                                                                 {Tab::Settings, "Settings"},
+                                                                 {Tab::Paths, "Paths"}}};
 
 constexpr bool RailItemsMatchTabs() {
     for (int i = 0; i < static_cast<int>(kRailItems.size()); ++i) {
@@ -431,6 +438,16 @@ constexpr int kIconSize = 96;
 
 std::string g_notice;
 int g_notice_frames = 0;
+bool g_notice_is_error = true;
+
+// ~4 seconds at 60fps.
+constexpr int kNoticeFrames = 240;
+
+void ShowNotice(const std::string& text, bool error) {
+    g_notice = text;
+    g_notice_frames = kNoticeFrames;
+    g_notice_is_error = error;
+}
 
 std::string ToLowerAscii(std::string_view s) {
     std::string out{s};
@@ -577,6 +594,19 @@ constexpr int kBrowseTop = 108;
 constexpr int kBrowseRowH = 44;
 constexpr int kBrowseRows = (kContentBottom - kBrowseTop) / kBrowseRowH;
 
+void DrawListScrollbar(Canvas& c, int track_x, int top, int visible_rows, int row_h, int count,
+                       int scroll) {
+    if (count <= visible_rows) {
+        return;
+    }
+    const int track_h = visible_rows * row_h;
+    c.FillRoundRect(track_x, top, 4, track_h, 2, kColRail);
+    const int thumb_h = std::max(24, track_h * visible_rows / count);
+    const int max_scroll = count - visible_rows;
+    const int thumb_y = top + (track_h - thumb_h) * scroll / std::max(1, max_scroll);
+    c.FillRoundRect(track_x, thumb_y, 4, thumb_h, 2, kColAccent);
+}
+
 // Draws a small button chip
 int DrawHint(Canvas& canvas, int x, int y, const char* button, const char* label) {
     constexpr int chip_h = 26;
@@ -591,29 +621,19 @@ int DrawHint(Canvas& canvas, int x, int y, const char* button, const char* label
     return chip_w + 8 + label_w;
 }
 
-// Draws the two nav-rail icons.
-// These look... fine? They aren't awful, but I'd love if someone actually made good icons.
+// Indexed by Tab, so the order has to match the enum.
+constexpr std::array<const std::uint8_t*, 4> kRailIconMasks{
+    RailIcons::kLibrary, RailIcons::kInstall, RailIcons::kSettings, RailIcons::kPaths};
+
+// Draws a nav-rail icon, tinted like text: the mask supplies coverage only.
 void DrawRailIcon(Canvas& canvas, Tab tab, int cx, int cy, u32 color) {
-    if (tab == Tab::Library) {
-        // Four rounded tiles
-        const int s = 12, g = 4;
-        for (int r = 0; r < 2; ++r) {
-            for (int c = 0; c < 2; ++c) {
-                canvas.FillRoundRect(cx - s - g / 2 + c * (s + g), cy - s - g / 2 + r * (s + g), s,
-                                     s, 3, color);
-            }
+    const std::uint8_t* mask = kRailIconMasks[static_cast<std::size_t>(tab)];
+    const int x0 = cx - RailIcons::kSize / 2;
+    const int y0 = cy - RailIcons::kSize / 2;
+    for (int row = 0; row < RailIcons::kSize; ++row) {
+        for (int col = 0; col < RailIcons::kSize; ++col) {
+            canvas.Blend(x0 + col, y0 + row, color, mask[row * RailIcons::kSize + col]);
         }
-    } else if (tab == Tab::Settings) {
-        // Three sliders
-        for (int r = 0; r < 3; ++r) {
-            const int ly = cy - 10 + r * 10;
-            canvas.FillRoundRect(cx - 14, ly, 28, 3, 1, color);
-            canvas.FillRoundRect(cx - 14 + (r % 2 == 0 ? 16 : 4), ly - 3, 8, 9, 4, color);
-        }
-    } else {
-        // A folder.
-        canvas.FillRoundRect(cx - 14, cy - 12, 13, 7, 2, color);
-        canvas.FillRoundRect(cx - 14, cy - 8, 28, 20, 3, color);
     }
 }
 
@@ -659,7 +679,7 @@ void DrawNotice(Canvas& canvas) {
     const int w = tw + pad * 2;
     const int x = kContentX + (kContentW - w) / 2;
     const int y = kContentBottom - 52;
-    canvas.FillRoundRect(x, y, w, 36, 10, kColError);
+    canvas.FillRoundRect(x, y, w, 36, 10, g_notice_is_error ? kColError : kColAccentDim);
     g_font.Draw(canvas, x + pad, CenterBaseline(y, 36, 18), g_notice, 18, kColText);
 }
 
@@ -692,19 +712,26 @@ void DrawTile(Canvas& canvas, const GameEntry& game, int x, int y, bool selected
     const int title_w = g_font.Measure(title, 18);
     g_font.Draw(canvas, x + (kTileW - title_w) / 2, icon_y + kIconSize + 24, title, 18, kColText);
 
-    // File type, plus a LOCKED marker for encrypted dumps.
+    // File type, then a LOCKED marker for encrypted dumps and an SD marker for installed titles.
     const int badge_y = y + kTileH - 30;
+    int badge_x = x + 12;
     if (!game.file_type.empty()) {
         const int bw = g_font.Measure(game.file_type, 14) + 14;
-        canvas.FillRoundRect(x + 12, badge_y, bw, 20, 7, kColBadge);
-        g_font.Draw(canvas, x + 12 + 7, CenterBaseline(badge_y, 20, 14), game.file_type, 14,
+        canvas.FillRoundRect(badge_x, badge_y, bw, 20, 7, kColBadge);
+        g_font.Draw(canvas, badge_x + 7, CenterBaseline(badge_y, 20, 14), game.file_type, 14,
                     kColTextDim);
-        if (game.encrypted) {
-            const int lw = g_font.Measure("LOCKED", 14) + 14;
-            canvas.FillRoundRect(x + 12 + bw + 6, badge_y, lw, 20, 7, kColAccentDim);
-            g_font.Draw(canvas, x + 12 + bw + 6 + 7, CenterBaseline(badge_y, 20, 14), "LOCKED", 14,
-                        kColText);
-        }
+        badge_x += bw + 6;
+    }
+    if (game.encrypted) {
+        const int lw = g_font.Measure("LOCKED", 14) + 14;
+        canvas.FillRoundRect(badge_x, badge_y, lw, 20, 7, kColAccentDim);
+        g_font.Draw(canvas, badge_x + 7, CenterBaseline(badge_y, 20, 14), "LOCKED", 14, kColText);
+        badge_x += lw + 6;
+    }
+    if (game.installed) {
+        const int lw = g_font.Measure("SD", 14) + 14;
+        canvas.FillRoundRect(badge_x, badge_y, lw, 20, 7, kColAccentDim);
+        g_font.Draw(canvas, badge_x + 7, CenterBaseline(badge_y, 20, 14), "SD", 14, kColText);
     }
 }
 
@@ -712,7 +739,7 @@ void DrawEmptyLibrary(Canvas& canvas, const std::string& roms_dir) {
     const char* line1 = "No games found";
     const char* line2 = "Copy .3ds / .cci / .cxi / .3dsx files to";
     const std::string line3 = g_font.TruncateFront(roms_dir, 18, kContentW - 48);
-    const char* line4 = "or point the ROM folder elsewhere under Paths";
+    const char* line4 = "or install a .cia from the Install tab";
     const int cx = kContentX + kContentW / 2;
     const int w1 = g_font.Measure(line1, 26);
     g_font.Draw(canvas, cx - w1 / 2, 300, line1, 26, kColText);
@@ -760,6 +787,94 @@ std::string PromptSearch(const std::string& initial) {
     return R_SUCCEEDED(rc) ? std::string{out} : initial;
 }
 
+std::string FormatSize(u64 bytes) {
+    constexpr std::array<const char*, 4> units{"B", "KB", "MB", "GB"};
+    double value = static_cast<double>(bytes);
+    std::size_t unit = 0;
+    while (value >= 1024.0 && unit + 1 < units.size()) {
+        value /= 1024.0;
+        ++unit;
+    }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), unit == 0 ? "%.0f %s" : "%.1f %s", value, units[unit]);
+    return buf;
+}
+
+std::string FormatTitleId(u64 program_id) {
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%016llX", static_cast<unsigned long long>(program_id));
+    return buf;
+}
+
+// Updates and DLC ride on a base title rather than standing alone, so they get the accent.
+u32 KindBadgeColor(TitleKind kind) {
+    switch (kind) {
+    case TitleKind::Update:
+    case TitleKind::AddOnContent:
+        return kColAccentDim;
+    default:
+        return kColBadge;
+    }
+}
+
+// The Install page lists the CIAs in one folder.
+constexpr int kInstallHeaderH = 40;
+constexpr int kInstallTop = kContentTop + kInstallHeaderH + 8;
+constexpr int kInstallRowH = 46;
+constexpr int kInstallRows = (kContentBottom - kInstallTop) / kInstallRowH;
+
+// Modal panel listing what is installed alongside one library entry.
+void DrawTitleDetails(Canvas& c, const GameEntry& game, const TitleDetails& details) {
+    constexpr int w = 660;
+    constexpr int h = 356;
+    const int x = kContentX + (kContentW - w) / 2;
+    const int y = kContentTop + (kContentBottom - kContentTop - h) / 2;
+    c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+    c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+    int ty = y + 22;
+    g_font.Draw(c, x + 24, ty + 20, g_font.Truncate(game.title, 24, w - 48), 24, kColText);
+    ty += 32;
+    if (!game.publisher.empty()) {
+        g_font.Draw(c, x + 24, ty + 18, g_font.Truncate(game.publisher, 18, w - 48), 18,
+                    kColTextDim);
+    }
+    ty += 30;
+    c.FillRect(x + 24, ty, w - 48, 1, kColRail);
+    ty += 12;
+
+    const auto row = [&](const char* label, const std::string& value, u32 color) {
+        g_font.Draw(c, x + 24, ty + 18, label, 18, kColTextDim);
+        g_font.Draw(c, x + 190, ty + 18, g_font.Truncate(value, 18, w - 214), 18, color);
+        ty += 30;
+    };
+
+    row("Title ID",
+        details.program_id == 0 ? std::string{"Unknown"} : FormatTitleId(details.program_id),
+        kColText);
+    row("Type", TitleKindName(details.kind), kColText);
+    row("Source",
+        game.installed ? "Installed on SD (" + game.file_type + ")"
+                       : "ROM file (" + game.file_type + ")",
+        kColText);
+    row("Version",
+        details.has_base_version ? FormatTitleVersion(details.base_version)
+                                 : std::string{"Unknown (no TMD)"},
+        details.has_base_version ? kColAccent : kColTextDim);
+    row("Update",
+        details.has_update ? FormatTitleVersion(details.update_version)
+                           : std::string{"Not installed"},
+        details.has_update ? kColAccent : kColTextDim);
+    row("DLC",
+        details.has_dlc ? std::to_string(details.dlc_contents) +
+                              (details.dlc_contents == 1 ? " content" : " contents")
+                        : std::string{"Not installed"},
+        details.has_dlc ? kColAccent : kColTextDim);
+
+    ty += 4;
+    g_font.Draw(c, x + 24, ty + 16, g_font.TruncateFront(game.path, 16, w - 48), 16, kColTextDim);
+}
+
 class Menu {
 public:
     MenuResult Run(PadState& pad) {
@@ -772,11 +887,11 @@ public:
         while (appletMainLoop()) {
             padUpdate(&pad);
             const u64 down = padGetButtonsDown(&pad);
-            const u64 held = padGetButtons(&pad);
+            held = padGetButtons(&pad);
 
-            // +/- together exits the app.
-            if ((held & (HidNpadButton_Plus | HidNpadButton_Minus)) ==
-                (HidNpadButton_Plus | HidNpadButton_Minus)) {
+            // +/- together exits the app, but will not allow during an install.
+            if (!install_active && (held & (HidNpadButton_Plus | HidNpadButton_Minus)) ==
+                                       (HidNpadButton_Plus | HidNpadButton_Minus)) {
                 Flush();
                 return {MenuAction::Exit, {}};
             }
@@ -790,10 +905,19 @@ public:
 
             MenuResult result;
             bool done = false;
-            if (focus == Focus::Rail) {
+            if (install_active) {
+                PumpInstall();
+            } else if (details_open) {
+                // Any of the buttons that could have opened the panel also closes it.
+                if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_Plus)) {
+                    details_open = false;
+                }
+            } else if (focus == Focus::Rail) {
                 HandleRail(down, nav);
             } else if (tab == Tab::Library) {
                 done = HandleLibrary(down, nav, result);
+            } else if (tab == Tab::Install) {
+                HandleInstall(down, nav);
             } else if (tab == Tab::Settings) {
                 done = HandleSettings(down, nav);
             } else {
@@ -803,7 +927,9 @@ public:
                 return result;
             }
 
-            HandleTouch();
+            if (!install_active && !details_open) {
+                HandleTouch();
+            }
             if (pending_launch) {
                 MenuResult launch{MenuAction::Launch, *pending_launch};
                 pending_launch.reset();
@@ -822,6 +948,10 @@ public:
 
     // Releasing the framebuffer hands the nwindow back so the emulator's renderer can claim it for the launched game.
     ~Menu() {
+        // Only reachable with a worker still running if appletMainLoop() bowed out mid-install.
+        if (install_thread.joinable()) {
+            install_thread.join();
+        }
         if (fb_ready) {
             framebufferClose(&fb);
         }
@@ -843,14 +973,39 @@ private:
     Repeater repeater;
     Framebuffer fb{};
     PadState* pad_state = nullptr;
+    u64 held = 0; // This frame's held buttons.
     bool fb_ready = false;
     bool settings_dirty = false; // Edited settings not yet written to config.ini.
     bool paths_dirty = false;
+
+    // Library detail panel.
+    bool details_open = false;
+    TitleDetails details{};
+
+    // Install page.
+    std::string install_dir;
+    std::vector<DirEntry> install_dirs;
+    std::vector<CiaEntry> install_cias;
+    int install_sel = 0;
+    int install_scroll = 0;
+    bool install_listed = false; // Whether install_dir has been read at least once.
+
+    // The installation worker.
+    std::thread install_thread;
+    std::atomic<bool> install_done{false};
+    std::atomic<std::size_t> install_written{0};
+    std::atomic<std::size_t> install_total{0};
+    InstallResult install_result{};
+    std::string install_name;
+    bool install_active = false;
 
     void Rescan() {
         games = ScanGames();
         settings = GetMenuSettings();
         paths = GetPaths();
+        if (install_dir.empty()) {
+            install_dir = paths.roms_dir;
+        }
         ApplyFilter();
     }
 
@@ -865,12 +1020,16 @@ private:
             const bool stale = ScanInputsChanged();
             FlushPaths();
             if (stale) {
-                ShowBusy("Refreshing library…");
+                ShowBusy("Refreshing library...");
                 search.clear();
                 Rescan();
             }
         }
         tab = next;
+        if (tab == Tab::Install && !install_listed) {
+            ShowBusy("Reading CIAs...");
+            RefreshInstallList();
+        }
     }
 
     // True while the edited scan inputs differ from what the last scan used.
@@ -936,6 +1095,11 @@ private:
                 result = {MenuAction::Launch, games[filtered[selected]].path};
                 return true;
             }
+            // Guarded so that reaching for the +/- exit combo doesn't flash the panel open.
+            if ((down & HidNpadButton_Plus) && !(held & HidNpadButton_Minus)) {
+                details = GetTitleDetails(games[filtered[selected]]);
+                details_open = true;
+            }
         }
         if (down & HidNpadButton_X) {
             search = PromptSearch(search);
@@ -951,6 +1115,131 @@ private:
             EnterRail();
         }
         EnsureVisible(grid);
+        return false;
+    }
+
+    // Row model for the Install page: ".." (unless at a device root), then subfolders, then CIAs.
+    int InstallParentRows() const {
+        return ParentDirectory(install_dir).empty() ? 0 : 1;
+    }
+
+    int InstallRowCount() const {
+        return InstallParentRows() + static_cast<int>(install_dirs.size()) +
+               static_cast<int>(install_cias.size());
+    }
+
+    // The CIA under the cursor, or nothing when it sits on ".." or a folder.
+    const CiaEntry* SelectedCia() const {
+        const int i = install_sel - InstallParentRows() - static_cast<int>(install_dirs.size());
+        if (i < 0 || i >= static_cast<int>(install_cias.size())) {
+            return nullptr;
+        }
+        return &install_cias[i];
+    }
+
+    void RefreshInstallList() {
+        install_dirs = ListSubdirectories(install_dir);
+        install_cias = ListCiaFiles(install_dir);
+        install_sel = std::clamp(install_sel, 0, std::max(0, InstallRowCount() - 1));
+        install_listed = true;
+    }
+
+    void EnterInstallDir(const std::string& next) {
+        install_dir = next;
+        install_sel = 0;
+        install_scroll = 0;
+        RefreshInstallList();
+    }
+
+    void HandleInstall(u64 down, u32 nav) {
+        const int count = InstallRowCount();
+        install_sel = std::clamp(install_sel, 0, std::max(0, count - 1));
+        if (nav & DirUp) {
+            install_sel = std::max(0, install_sel - 1);
+        }
+        if (nav & DirDown) {
+            install_sel = std::min(std::max(0, count - 1), install_sel + 1);
+        }
+        install_scroll = std::clamp(install_scroll, std::max(0, install_sel - kInstallRows + 1),
+                                    std::max(0, std::min(install_sel, count - kInstallRows)));
+        if (down & HidNpadButton_A) {
+            const int base = InstallParentRows();
+            const int di = install_sel - base;
+            if (base == 1 && install_sel == 0) {
+                EnterInstallDir(ParentDirectory(install_dir));
+            } else if (di < static_cast<int>(install_dirs.size())) {
+                EnterInstallDir(install_dirs[di].path);
+            } else if (const CiaEntry* cia = SelectedCia()) {
+                TryStartInstall(*cia);
+            }
+        }
+        if (down & HidNpadButton_Y) {
+            ShowBusy("Reading CIAs...");
+            RefreshInstallList();
+        }
+        if (down & HidNpadButton_B) {
+            EnterRail();
+        }
+    }
+
+    void TryStartInstall(const CiaEntry& cia) {
+        if (!cia.readable) {
+            ShowNotice(cia.name + ": not a valid CIA", true);
+            return;
+        }
+        if (ConfirmInstall(cia)) {
+            StartInstall(cia);
+        }
+    }
+
+    void StartInstall(const CiaEntry& cia) {
+        install_name = cia.name;
+        install_written = 0;
+        install_total = cia.size;
+        install_done = false;
+        install_active = true;
+        install_thread = std::thread([this, path = cia.path] {
+            install_result = InstallCia(path, [this](std::size_t written, std::size_t total) {
+                install_written = written;
+                install_total = total;
+            });
+            install_done = true;
+        });
+    }
+
+    void PumpInstall() {
+        if (!install_done) {
+            return;
+        }
+        install_thread.join();
+        install_active = false;
+        const bool ok = install_result == InstallResult::Success;
+        ShowNotice(install_name + ": " + InstallResultText(install_result), !ok);
+        RefreshInstallList();
+        if (ok) {
+            // A successful install may have put a new title in the library's reach.
+            games = ScanGames();
+            ApplyFilter();
+        }
+    }
+
+    // Blocks on a yes/no prompt.
+    bool ConfirmInstall(const CiaEntry& cia) {
+        u16 installed_version = 0;
+        const bool replacing = GetInstalledVersion(cia.program_id, installed_version);
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            if (down & HidNpadButton_A) {
+                return true;
+            }
+            if (down & HidNpadButton_B) {
+                return false;
+            }
+            Draw();
+            DrawConfirmInstall(canvas, cia, replacing, installed_version);
+            Present();
+        }
         return false;
     }
 
@@ -1117,6 +1406,11 @@ private:
                     break;
                 }
             }
+        } else if (tab == Tab::Install) {
+            const int row = install_scroll + (ty - kInstallTop) / kInstallRowH;
+            if (ty >= kInstallTop && ty < kContentBottom && row < InstallRowCount()) {
+                install_sel = row;
+            }
         } else if (tab == Tab::Settings) {
             const int row = (ty - (kContentTop + 16)) / (kRowH + 8);
             if (row >= 0 && row < kNumSettings) {
@@ -1252,7 +1546,7 @@ private:
             g_font.Draw(c, 52, CenterBaseline(y, kBrowseRowH - 4, 20),
                         g_font.Truncate(name, 20, kScreenW - 128), 20, up ? kColTextDim : kColText);
         }
-        DrawBrowserScrollbar(c, count, scroll);
+        DrawListScrollbar(c, kScreenW - 20, kBrowseTop, kBrowseRows, kBrowseRowH, count, scroll);
 
         c.FillRect(0, kContentBottom, kScreenW, kHintH, kColHintBar);
         c.FillRect(0, kContentBottom, kScreenW, 1, kColRail);
@@ -1262,19 +1556,6 @@ private:
         hx += DrawHint(c, hx, hy, "B", has_parent ? "Up" : "Cancel") + 22;
         hx += DrawHint(c, hx, hy, "+", "Select this folder") + 22;
         DrawHint(c, hx, hy, "Y", "Cancel");
-    }
-
-    void DrawBrowserScrollbar(Canvas& c, int count, int scroll) {
-        if (count <= kBrowseRows) {
-            return;
-        }
-        const int track_h = kBrowseRows * kBrowseRowH;
-        const int track_x = kScreenW - 20;
-        c.FillRoundRect(track_x, kBrowseTop, 4, track_h, 2, kColRail);
-        const int thumb_h = std::max(24, track_h * kBrowseRows / count);
-        const int max_scroll = count - kBrowseRows;
-        const int thumb_y = kBrowseTop + (track_h - thumb_h) * scroll / std::max(1, max_scroll);
-        c.FillRoundRect(track_x, thumb_y, 4, thumb_h, 2, kColAccent);
     }
 
     void DrawPathsPage(Canvas& c) {
@@ -1329,6 +1610,8 @@ private:
         DrawRail(c, tab, rail_sel, focus == Focus::Rail);
         if (tab == Tab::Library) {
             DrawLibrary(c);
+        } else if (tab == Tab::Install) {
+            DrawInstallPage(c);
         } else if (tab == Tab::Settings) {
             DrawSettingsPage(c);
         } else {
@@ -1336,6 +1619,155 @@ private:
         }
         DrawNotice(c);
         DrawHintBar(c);
+        if (details_open && !filtered.empty()) {
+            DrawTitleDetails(c, games[filtered[selected]], details);
+        }
+        if (install_active) {
+            DrawInstallProgress(c);
+        }
+    }
+
+    void DrawInstallPage(Canvas& c) {
+        const std::size_t count_cias = install_cias.size();
+        DrawHeader(c, std::to_string(count_cias) + (count_cias == 1 ? " CIA" : " CIAs"));
+        const bool content_focus = focus == Focus::Content;
+        const int x = kContentX + 24;
+        const int w = kContentW - 48;
+        g_font.Draw(c, x, kContentTop + 26, g_font.TruncateFront(install_dir, 18, w), 18,
+                    kColAccent);
+        c.FillRect(x, kContentTop + kInstallHeaderH, w, 1, kColRail);
+
+        const int count = InstallRowCount();
+        if (count == 0) {
+            g_font.Draw(c, x + 20, kInstallTop + 30, "No CIAs or subfolders here", 20, kColTextDim);
+        }
+        const int base = InstallParentRows();
+        for (int i = install_scroll; i < std::min(count, install_scroll + kInstallRows); ++i) {
+            const int y = kInstallTop + (i - install_scroll) * kInstallRowH;
+            if (i == install_sel) {
+                c.FillRoundRect(x, y, w, kInstallRowH - 4, 8,
+                                content_focus ? kColSurfaceHi : kColSurface);
+                c.FillRoundRect(x, y + 8, 4, kInstallRowH - 20, 2,
+                                content_focus ? kColAccent : kColBadge);
+            }
+            const int text_y = CenterBaseline(y, kInstallRowH - 4, 18);
+            if (base == 1 && i == 0) {
+                g_font.Draw(c, x + 20, text_y, "..", 18, kColTextDim);
+                continue;
+            }
+            const int di = i - base;
+            if (di < static_cast<int>(install_dirs.size())) {
+                g_font.Draw(c, x + 20, text_y,
+                            g_font.Truncate(install_dirs[di].name + "/", 18, w - 44), 18, kColText);
+                continue;
+            }
+            DrawCiaRow(c, install_cias[di - static_cast<int>(install_dirs.size())], x, y, w);
+        }
+        DrawListScrollbar(c, kScreenW - 10, kInstallTop, kInstallRows, kInstallRowH, count,
+                          install_scroll);
+
+        if (focus == Focus::Rail) {
+            DrawRailHints(c);
+            return;
+        }
+        int hx = kContentX + 24;
+        const int hy = kContentBottom + (kHintH - 26) / 2;
+        hx += DrawHint(c, hx, hy, "A", SelectedCia() ? "Install" : "Open") + 22;
+        hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
+        hx += DrawHint(c, hx, hy, "Y", "Refresh") + 22;
+        DrawHint(c, hx, hy, "+ -", "Exit");
+    }
+
+    // Name on the left, then size, version and a kind badge packed to the right.
+    void DrawCiaRow(Canvas& c, const CiaEntry& cia, int x, int y, int w) {
+        const int text_y = CenterBaseline(y, kInstallRowH - 4, 18);
+        const int badge_y = y + (kInstallRowH - 4 - 20) / 2;
+        const int badge_text_y = CenterBaseline(badge_y, 20, 14);
+        int right = x + w - 20;
+
+        const char* badge = cia.readable ? TitleKindName(cia.kind) : "UNREADABLE";
+        const u32 badge_col = cia.readable ? KindBadgeColor(cia.kind) : kColError;
+        const int bw = g_font.Measure(badge, 14) + 14;
+        right -= bw;
+        c.FillRoundRect(right, badge_y, bw, 20, 7, badge_col);
+        g_font.Draw(c, right + 7, badge_text_y, badge, 14, kColText);
+        right -= 12;
+
+        if (cia.readable) {
+            const std::string version = FormatTitleVersion(cia.version);
+            const int vw = g_font.Measure(version, 16);
+            right -= vw;
+            g_font.Draw(c, right, text_y, version, 16, kColTextDim);
+            right -= 12;
+        }
+
+        const std::string size = FormatSize(cia.size);
+        const int sw = g_font.Measure(size, 16);
+        right -= sw;
+        g_font.Draw(c, right, text_y, size, 16, kColTextDim);
+
+        g_font.Draw(c, x + 20, text_y, g_font.Truncate(cia.name, 18, std::max(60, right - x - 32)),
+                    18, kColText);
+    }
+
+    void DrawConfirmInstall(Canvas& c, const CiaEntry& cia, bool replacing, u16 installed_version) {
+        constexpr int w = 620;
+        constexpr int h = 268;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        int ty = y + 20;
+        g_font.Draw(c, x + 24, ty + 22, "Install this title?", 24, kColText);
+        ty += 36;
+        g_font.Draw(c, x + 24, ty + 18, g_font.Truncate(cia.name, 18, w - 48), 18, kColTextDim);
+        ty += 32;
+        c.FillRect(x + 24, ty, w - 48, 1, kColRail);
+        ty += 10;
+
+        const auto row = [&](const char* label, const std::string& value, u32 color) {
+            g_font.Draw(c, x + 24, ty + 18, label, 18, kColTextDim);
+            g_font.Draw(c, x + 190, ty + 18, g_font.Truncate(value, 18, w - 214), 18, color);
+            ty += 28;
+        };
+        row("Type", TitleKindName(cia.kind), kColText);
+        row("Title ID", FormatTitleId(cia.program_id), kColText);
+        row("Version", FormatTitleVersion(cia.version), kColText);
+        if (replacing) {
+            row("Replaces", FormatTitleVersion(installed_version), kColError);
+        }
+
+        int hx = x + 24;
+        const int hy = y + h - 38;
+        hx += DrawHint(c, hx, hy, "A", "Install") + 22;
+        DrawHint(c, hx, hy, "B", "Cancel");
+    }
+
+    void DrawInstallProgress(Canvas& c) {
+        const std::size_t written = install_written.load();
+        const std::size_t total = install_total.load();
+        constexpr int w = 560;
+        constexpr int h = 136;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+        g_font.Draw(c, x + 24, y + 42, g_font.Truncate("Installing " + install_name, 20, w - 48),
+                    20, kColText);
+
+        const int bar_x = x + 24;
+        const int bar_y = y + 64;
+        const int bar_w = w - 48;
+        c.FillRoundRect(bar_x, bar_y, bar_w, 10, 5, kColRail);
+        const int fill =
+            total == 0 ? 0 : static_cast<int>(static_cast<u64>(bar_w) * written / total);
+        c.FillRoundRect(bar_x, bar_y, std::clamp(fill, 0, bar_w), 10, 5, kColAccent);
+
+        g_font.Draw(c, bar_x, bar_y + 36, FormatSize(written) + " / " + FormatSize(total), 18,
+                    kColTextDim);
+        const char* warn = "Don't close Dekopon or turn off the console";
+        g_font.Draw(c, x + w - 24 - g_font.Measure(warn, 18), bar_y + 36, warn, 18, kColTextDim);
     }
 
     void DrawLibrary(Canvas& c) {
@@ -1369,6 +1801,7 @@ private:
             hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             hx += DrawHint(c, hx, hy, "X", "Search") + 22;
             hx += DrawHint(c, hx, hy, "Y", "Refresh") + 22;
+            hx += DrawHint(c, hx, hy, "+", "Details") + 22;
             DrawHint(c, hx, hy, "+ -", "Exit");
         }
     }
@@ -1500,8 +1933,7 @@ MenuResult RunMenu(PadState& pad) {
 }
 
 void SetMenuNotice(const std::string& text) {
-    g_notice = text;
-    g_notice_frames = 240; // ~4 seconds at 60 fps.
+    ShowNotice(text, true);
 }
 
 void ShutdownMenu() {
