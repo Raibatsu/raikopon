@@ -1,5 +1,9 @@
 # Dekopon frontend
 add_executable(citra_switch
+    applets/swkbd.cpp
+    applets/swkbd.h
+    applets/swkbd_horizon.cpp
+    applets/swkbd_horizon.h
     citra_switch.cpp
     config.cpp
     config.h

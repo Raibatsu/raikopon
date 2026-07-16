@@ -8,6 +8,7 @@
 #include <utility>
 #include <switch.h>
 
+#include "citra_switch/applets/swkbd.h"
 #include "citra_switch/config.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
@@ -80,6 +81,9 @@ void RunGame(PadState& pad, const std::string& rom) {
     if (SwitchFrontend::BootRom(rom)) {
         u64 prev_held = 0;
         while (appletMainLoop()) {
+            // Blocks while the system keyboard is up. The emulation thread is waiting on it, so
+            // nothing is being drawn meanwhile.
+            SwitchFrontend::PumpKeyboard();
             const u64 held = PollInput(pad);
             if (ReturnToMenuRequested(held)) {
                 break;

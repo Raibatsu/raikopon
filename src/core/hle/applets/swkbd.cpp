@@ -180,6 +180,9 @@ Frontend::KeyboardConfig SoftwareKeyboard::ToFrontendConfig(
     KeyboardConfig frontend_config;
     frontend_config.button_config =
         static_cast<ButtonConfig>(static_cast<u32>(config.num_buttons_m1));
+    frontend_config.type = static_cast<KeyboardType>(static_cast<u32>(config.type));
+    frontend_config.password_mode =
+        static_cast<PasswordMode>(static_cast<u32>(config.password_mode));
     frontend_config.accept_mode = static_cast<AcceptedInput>(static_cast<u32>(config.valid_input));
     frontend_config.multiline_mode = config.multiline;
     frontend_config.max_text_length = config.max_text_length;
