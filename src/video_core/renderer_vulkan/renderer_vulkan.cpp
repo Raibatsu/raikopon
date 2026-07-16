@@ -22,6 +22,14 @@
 
 #include "video_core/host_shaders/vulkan_cursor_frag.h"
 #include "video_core/host_shaders/vulkan_cursor_vert.h"
+#include "video_core/host_shaders/vulkan_overlay_frag.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <vector>
 
 #include <vk_mem_alloc.h>
 
@@ -160,6 +168,9 @@ RendererVulkan::~RendererVulkan() {
     device.destroyPipeline(cursor_pipeline);
     device.destroyShaderModule(cursor_vertex_shader);
     device.destroyShaderModule(cursor_fragment_shader);
+
+    device.destroyPipeline(overlay_pipeline);
+    device.destroyShaderModule(overlay_fragment_shader);
 }
 
 void RendererVulkan::PrepareRendertarget() {
@@ -306,6 +317,9 @@ void RendererVulkan::CompileShaders() {
     cursor_fragment_shader =
         Compile(HostShaders::VULKAN_CURSOR_FRAG, vk::ShaderStageFlagBits::eFragment, device);
 
+    overlay_fragment_shader =
+        Compile(HostShaders::VULKAN_OVERLAY_FRAG, vk::ShaderStageFlagBits::eFragment, device);
+
     auto properties = instance.GetPhysicalDevice().getProperties();
     for (std::size_t i = 0; i < present_samplers.size(); i++) {
         const vk::Filter filter_mode = i == 0 ? vk::Filter::eLinear : vk::Filter::eNearest;
@@ -345,6 +359,19 @@ void RendererVulkan::BuildLayouts() {
 
     const vk::PipelineLayoutCreateInfo cursor_layout_info = {};
     cursor_pipeline_layout = instance.GetDevice().createPipelineLayoutUnique(cursor_layout_info);
+
+    // The FPS overlay reuses the cursor's position-only vertex layout but passes a solid color to the fragment stage.
+    const vk::PushConstantRange overlay_push_range = {
+        .stageFlags = vk::ShaderStageFlagBits::eFragment,
+        .offset = 0,
+        .size = sizeof(float) * 4,
+    };
+    const vk::PipelineLayoutCreateInfo overlay_layout_info = {
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &overlay_push_range,
+    };
+    overlay_pipeline_layout =
+        instance.GetDevice().createPipelineLayoutUnique(overlay_layout_info);
 }
 
 void RendererVulkan::BuildPipelines() {
@@ -594,6 +621,126 @@ void RendererVulkan::BuildPipelines() {
             instance.GetDevice().createGraphicsPipeline({}, cursor_pipeline_info);
         ASSERT_MSG(result == vk::Result::eSuccess, "Unable to build cursor pipeline");
         cursor_pipeline = pipeline;
+    }
+
+    // Build the FPS overlay pipeline.
+    {
+        const vk::VertexInputBindingDescription overlay_binding = {
+            .binding = 0,
+            .stride = sizeof(float) * 2,
+            .inputRate = vk::VertexInputRate::eVertex,
+        };
+
+        const vk::VertexInputAttributeDescription overlay_attribute = {
+            .location = 0,
+            .binding = 0,
+            .format = vk::Format::eR32G32Sfloat,
+            .offset = 0,
+        };
+
+        const vk::PipelineVertexInputStateCreateInfo overlay_vertex_input = {
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &overlay_binding,
+            .vertexAttributeDescriptionCount = 1,
+            .pVertexAttributeDescriptions = &overlay_attribute,
+        };
+
+        const vk::PipelineInputAssemblyStateCreateInfo overlay_input_assembly = {
+            .topology = vk::PrimitiveTopology::eTriangleList,
+            .primitiveRestartEnable = false,
+        };
+
+        const vk::PipelineRasterizationStateCreateInfo overlay_raster = {
+            .depthClampEnable = false,
+            .rasterizerDiscardEnable = false,
+            .cullMode = vk::CullModeFlagBits::eNone,
+            .frontFace = vk::FrontFace::eClockwise,
+            .depthBiasEnable = false,
+            .lineWidth = 1.0f,
+        };
+
+        const vk::PipelineMultisampleStateCreateInfo overlay_multisample = {
+            .rasterizationSamples = vk::SampleCountFlagBits::e1,
+            .sampleShadingEnable = false,
+        };
+
+        const vk::PipelineColorBlendAttachmentState overlay_blend_attachment = {
+            .blendEnable = true,
+            .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+            .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+            .colorBlendOp = vk::BlendOp::eAdd,
+            .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+            .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
+            .alphaBlendOp = vk::BlendOp::eAdd,
+            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                              vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+        };
+
+        const vk::PipelineColorBlendStateCreateInfo overlay_color_blending = {
+            .logicOpEnable = false,
+            .attachmentCount = 1,
+            .pAttachments = &overlay_blend_attachment,
+        };
+
+        const vk::Viewport overlay_placeholder_vp = {0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
+        const vk::Rect2D overlay_placeholder_sc = {{0, 0}, {1, 1}};
+        const vk::PipelineViewportStateCreateInfo overlay_viewport = {
+            .viewportCount = 1,
+            .pViewports = &overlay_placeholder_vp,
+            .scissorCount = 1,
+            .pScissors = &overlay_placeholder_sc,
+        };
+
+        const std::array overlay_dynamic_states = {
+            vk::DynamicState::eViewport,
+            vk::DynamicState::eScissor,
+        };
+
+        const vk::PipelineDynamicStateCreateInfo overlay_dynamic = {
+            .dynamicStateCount = static_cast<u32>(overlay_dynamic_states.size()),
+            .pDynamicStates = overlay_dynamic_states.data(),
+        };
+
+        const vk::PipelineDepthStencilStateCreateInfo overlay_depth = {
+            .depthTestEnable = false,
+            .depthWriteEnable = false,
+            .depthCompareOp = vk::CompareOp::eAlways,
+            .depthBoundsTestEnable = false,
+            .stencilTestEnable = false,
+        };
+
+        const std::array overlay_shader_stages = {
+            vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eVertex,
+                .module = cursor_vertex_shader,
+                .pName = "main",
+            },
+            vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eFragment,
+                .module = overlay_fragment_shader,
+                .pName = "main",
+            },
+        };
+
+        const vk::GraphicsPipelineCreateInfo overlay_pipeline_info = {
+            .stageCount = static_cast<u32>(overlay_shader_stages.size()),
+            .pStages = overlay_shader_stages.data(),
+            .pVertexInputState = &overlay_vertex_input,
+            .pInputAssemblyState = &overlay_input_assembly,
+            .pViewportState = &overlay_viewport,
+            .pRasterizationState = &overlay_raster,
+            .pMultisampleState = &overlay_multisample,
+            .pDepthStencilState = &overlay_depth,
+            .pColorBlendState = &overlay_color_blending,
+            .pDynamicState = &overlay_dynamic,
+            .layout = *overlay_pipeline_layout,
+            .renderPass = main_present_window.Renderpass(),
+        };
+
+        const auto [result, pipeline] =
+            instance.GetDevice().createGraphicsPipeline({}, overlay_pipeline_info);
+        ASSERT_MSG(result == vk::Result::eSuccess, "Unable to build overlay pipeline");
+        overlay_pipeline = pipeline;
     }
 }
 
@@ -1046,6 +1193,8 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
 
     DrawCursor(layout);
 
+    DrawFpsOverlay(layout);
+
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
 }
 
@@ -1106,6 +1255,132 @@ void RendererVulkan::DrawCursor(const Layout::FramebufferLayout& layout) {
         cmdbuf.bindVertexBuffers(0, vertex_buffer.Handle(), {0});
         const u32 first_vertex = static_cast<u32>(offset) / (sizeof(float) * 2);
         cmdbuf.draw(12, 1, first_vertex, 0);
+    });
+}
+
+namespace {
+struct FpsFontGlyph {
+    char ch;
+    std::array<u8, 5> rows;
+};
+
+constexpr std::array<FpsFontGlyph, 14> FPS_FONT = {{
+    {'0', {0b111, 0b101, 0b101, 0b101, 0b111}},
+    {'1', {0b010, 0b110, 0b010, 0b010, 0b111}},
+    {'2', {0b111, 0b001, 0b111, 0b100, 0b111}},
+    {'3', {0b111, 0b001, 0b111, 0b001, 0b111}},
+    {'4', {0b101, 0b101, 0b111, 0b001, 0b001}},
+    {'5', {0b111, 0b100, 0b111, 0b001, 0b111}},
+    {'6', {0b111, 0b100, 0b111, 0b101, 0b111}},
+    {'7', {0b111, 0b001, 0b001, 0b001, 0b001}},
+    {'8', {0b111, 0b101, 0b111, 0b101, 0b111}},
+    {'9', {0b111, 0b101, 0b111, 0b001, 0b111}},
+    {'F', {0b111, 0b100, 0b111, 0b100, 0b100}},
+    {'P', {0b111, 0b101, 0b111, 0b100, 0b100}},
+    {'S', {0b111, 0b100, 0b111, 0b001, 0b111}},
+    {' ', {0b000, 0b000, 0b000, 0b000, 0b000}},
+}};
+
+const std::array<u8, 5>* FindFpsGlyph(char c) {
+    for (const auto& glyph : FPS_FONT) {
+        if (glyph.ch == c) {
+            return &glyph.rows;
+        }
+    }
+    return nullptr;
+}
+} // namespace
+
+void RendererVulkan::DrawFpsOverlay(const Layout::FramebufferLayout& layout) {
+    if (!Settings::values.show_fps.GetValue()) {
+        return;
+    }
+
+    // Refresh the frame rate a couple of times a second so the reading stays legible.
+    const auto now = std::chrono::steady_clock::now();
+    if (overlay_last_update.time_since_epoch().count() == 0 ||
+        now - overlay_last_update >= std::chrono::milliseconds(500)) {
+        overlay_game_fps = static_cast<float>(system.GetAndResetPerfStats().game_fps);
+        overlay_last_update = now;
+    }
+
+    char text[16];
+    const int fps = std::clamp(static_cast<int>(std::lround(overlay_game_fps)), 0, 999);
+    std::snprintf(text, sizeof(text), "FPS %d", fps);
+
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return;
+    }
+
+    // Scale the font "pixel" to the output so the counter is a consistent size everywhere.
+    const float px = std::max(2.0f, std::round(h / 180.0f));
+    const float glyph_h = 5.0f * px;
+    const float advance = 3.0f * px + px; // glyph width plus a one-column gap
+    const float margin = 3.0f * px;
+
+    std::vector<float> verts;
+    verts.reserve(512);
+
+    const auto add_rect = [&](float x0, float y0, float x1, float y1) {
+        const float l = x0 / w * 2.0f - 1.0f;
+        const float r = x1 / w * 2.0f - 1.0f;
+        const float t = y0 / h * 2.0f - 1.0f;
+        const float b = y1 / h * 2.0f - 1.0f;
+        verts.insert(verts.end(), {l, t, r, t, r, b, l, t, r, b, l, b});
+    };
+
+    const int glyph_count = static_cast<int>(std::strlen(text));
+    const float text_w = glyph_count > 0 ? glyph_count * advance - px : 0.0f;
+
+    // Background box first then the glyph pixels.
+    const float pad = px;
+    add_rect(margin - pad, margin - pad, margin + text_w + pad, margin + glyph_h + pad);
+
+    float pen_x = margin;
+    for (const char* p = text; *p != '\0'; ++p, pen_x += advance) {
+        const std::array<u8, 5>* rows = FindFpsGlyph(*p);
+        if (rows == nullptr) {
+            continue;
+        }
+        for (int ry = 0; ry < 5; ++ry) {
+            const u8 bits = (*rows)[ry];
+            for (int cx = 0; cx < 3; ++cx) {
+                if (bits & (1u << (2 - cx))) {
+                    const float x0 = pen_x + cx * px;
+                    const float y0 = margin + ry * px;
+                    add_rect(x0, y0, x0 + px, y0 + px);
+                }
+            }
+        }
+    }
+
+    constexpr u32 box_vertices = 6;
+    const u32 glyph_vertices = static_cast<u32>(verts.size() / 2) - box_vertices;
+
+    const u64 size = verts.size() * sizeof(float);
+    auto [data, offset, invalidate] = vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    vertex_buffer.Commit(size);
+
+    const u32 first_vertex = static_cast<u32>(offset) / (sizeof(float) * 2);
+
+    scheduler.Record([this, first_vertex, glyph_vertices](vk::CommandBuffer cmdbuf) {
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, overlay_pipeline);
+        cmdbuf.bindVertexBuffers(0, vertex_buffer.Handle(), {0});
+
+        const std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
+        cmdbuf.pushConstants(*overlay_pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
+                             sizeof(box_color), box_color.data());
+        cmdbuf.draw(box_vertices, 1, first_vertex, 0);
+
+        if (glyph_vertices > 0) {
+            const std::array<float, 4> text_color = {0.53f, 1.0f, 0.53f, 1.0f};
+            cmdbuf.pushConstants(*overlay_pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
+                                 sizeof(text_color), text_color.data());
+            cmdbuf.draw(glyph_vertices, 1, first_vertex + box_vertices, 0);
+        }
     });
 }
 

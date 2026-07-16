@@ -546,6 +546,8 @@ struct Values {
     SwitchableSetting<bool> use_display_refresh_rate_detection{
         true, Keys::use_display_refresh_rate_detection};
     Setting<bool> use_shader_jit{true, Keys::use_shader_jit};
+    // Draws an on-screen frame-rate counter in the top-left corner during gameplay.
+    Setting<bool> show_fps{false, Keys::show_fps};
     SwitchableSetting<u32, true> resolution_factor{1, 0, 10, Keys::resolution_factor};
     SwitchableSetting<bool> use_integer_scaling{false, Keys::use_integer_scaling};
     SwitchableSetting<double, true> frame_limit{100, 0, 1000, Keys::frame_limit};

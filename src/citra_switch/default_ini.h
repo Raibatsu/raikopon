@@ -27,8 +27,10 @@ resolution_factor =
 use_vsync =
 # Compile shaders on a background thread to reduce hitching (0, default).
 async_shader_compilation =
-# Persist compiled shaders to the SD card to cut first-run stutter (1, default).
+# Persist compiled shaders to the SD card to cut post first-run stutter (1, default).
 use_disk_shader_cache =
+# Show an on-screen frame-rate counter (0, default).
+show_fps = false
 
 [System]
 # Console region. -1: auto-select (default), 0: JPN, 1: USA, 2: EUR, 3: AUS, 4: CHN, 5: KOR, 6: TWN.
