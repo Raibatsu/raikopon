@@ -34,6 +34,9 @@ bool BootRom(const std::string& rom_arg);
 // True while the emulation thread is running.
 bool IsRunning();
 
+// Advances the screen layout to the next preset while a game runs.
+void CycleScreenLayout();
+
 // True if the most recent BootRom never reached a successful system.Load.
 bool LoadFailed();
 

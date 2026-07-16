@@ -78,10 +78,17 @@ void RunGame(PadState& pad, const std::string& rom) {
     }
 
     if (SwitchFrontend::BootRom(rom)) {
+        u64 prev_held = 0;
         while (appletMainLoop()) {
-            if (ReturnToMenuRequested(PollInput(pad))) {
+            const u64 held = PollInput(pad);
+            if (ReturnToMenuRequested(held)) {
                 break;
             }
+            // Clicking the right stick (R3) cycles through the screen layouts.
+            if ((held & HidNpadButton_StickR) != 0 && (prev_held & HidNpadButton_StickR) == 0) {
+                SwitchFrontend::CycleScreenLayout();
+            }
+            prev_held = held;
             if (!SwitchFrontend::IsRunning()) {
                 break;
             }
