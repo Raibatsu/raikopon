@@ -11,11 +11,47 @@
 #include "common/logging/filter.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
+#include "common/string_util.h"
 #include "citra_switch/config.h"
 #include "citra_switch/default_ini.h"
 #include "core/hle/service/service.h"
 
 namespace {
+
+constexpr const char* kDefaultUserDir = "sdmc:/switch/dekopon/";
+
+constexpr const char* kUserDirPointer = "sdmc:/switch/dekopon/user_dir.txt";
+
+std::string WithTrailingSlash(std::string path) {
+    if (!path.empty() && path.back() != '/') {
+        path.push_back('/');
+    }
+    return path;
+}
+
+// Reads the pointer file or returns "" to use default.
+std::string ReadUserDirPointer() {
+    std::string contents;
+    FileUtil::ReadFileToString(true, kUserDirPointer, contents);
+    std::string path = WithTrailingSlash(Common::StripSpaces(contents));
+    if (path == kDefaultUserDir) {
+        return "";
+    }
+    return path;
+}
+
+void WriteUserDirPointer(const std::string& user_dir) {
+    // Removing the stub rather than writing the default back keeps a default install clean.
+    if (user_dir.empty() || user_dir == kDefaultUserDir) {
+        FileUtil::Delete(kUserDirPointer);
+        return;
+    }
+    FileUtil::CreateFullPath(kUserDirPointer);
+    FileUtil::WriteStringToFile(true, kUserDirPointer, user_dir);
+}
+
+SwitchFrontend::SwitchPaths s_paths;
+std::string s_active_user_dir;
 
 // Reads/Writes the SD-card config file
 class Config {
@@ -116,6 +152,13 @@ private:
             Settings::values.lle_modules.emplace(service_module.name, false);
         }
 
+        s_paths.roms_dir =
+            WithTrailingSlash(Common::StripSpaces(config->Get("Switch", "roms_dir", "")));
+        if (s_paths.roms_dir.empty()) {
+            s_paths.roms_dir = SwitchFrontend::GetDefaultRomsDir(s_paths.user_dir);
+        }
+        s_paths.scan_recursive = config->GetBoolean("Switch", "scan_recursive", true);
+
         launch_count = config->GetInteger("Switch", "launch_count", 0) + 1;
     }
 
@@ -146,6 +189,8 @@ private:
         ss << "log_filter = " << v.log_filter.GetValue() << "\n\n";
 
         ss << "[Switch]\n";
+        ss << "roms_dir = " << s_paths.roms_dir << '\n';
+        ss << "scan_recursive = " << (s_paths.scan_recursive ? "true" : "false") << '\n';
         ss << "launch_count = " << launch_count << '\n';
 
         return ss.str();
@@ -160,8 +205,10 @@ std::unique_ptr<Config> s_config;
 namespace SwitchFrontend {
 
 int Bootstrap() {
-    // Resolve sdmc:/switch/dekopon/ and create its standard subdirectories.
-    FileUtil::SetUserPath();
+    // Resolve the dekopon directory and create its standard subdirectories.
+    FileUtil::SetUserPath(ReadUserDirPointer());
+    s_active_user_dir = FileUtil::GetUserPath(FileUtil::UserPath::UserDir);
+    s_paths.user_dir = s_active_user_dir;
 
     Common::Log::Initialize();
     Common::Log::Start();
@@ -177,10 +224,41 @@ int Bootstrap() {
     s_config->Save();
 
     LOG_INFO(Frontend, "Dekopon launch #{}", s_config->LaunchCount());
-    LOG_INFO(Frontend, "User directory: {}", FileUtil::GetUserPath(FileUtil::UserPath::UserDir));
+    LOG_INFO(Frontend, "User directory: {}", s_active_user_dir);
+    LOG_INFO(Frontend, "ROM directory: {} (recursive: {})", s_paths.roms_dir,
+             s_paths.scan_recursive);
     LOG_INFO(Frontend, "Logging to: {}", FileUtil::GetUserPath(FileUtil::UserPath::LogDir));
 
     return s_config->LaunchCount();
+}
+
+const SwitchPaths& GetPaths() {
+    return s_paths;
+}
+
+void SetPaths(const SwitchPaths& paths) {
+    s_paths.roms_dir = WithTrailingSlash(paths.roms_dir);
+    s_paths.scan_recursive = paths.scan_recursive;
+
+    const std::string user_dir = WithTrailingSlash(paths.user_dir);
+    if (user_dir != s_paths.user_dir) {
+        s_paths.user_dir = user_dir;
+        WriteUserDirPointer(user_dir);
+        LOG_INFO(Frontend, "Dekopon directory set to {}, applies on the next launch", user_dir);
+    }
+    SaveConfig();
+}
+
+const std::string& GetActiveUserDir() {
+    return s_active_user_dir;
+}
+
+std::string GetDefaultUserDir() {
+    return kDefaultUserDir;
+}
+
+std::string GetDefaultRomsDir(const std::string& user_dir) {
+    return WithTrailingSlash(user_dir.empty() ? kDefaultUserDir : user_dir) + "roms/";
 }
 
 void SaveConfig() {

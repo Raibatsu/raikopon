@@ -105,16 +105,19 @@ bool TryLoad(const std::string& path, GameEntry& entry) {
     return true;
 }
 
-void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, int depth) {
+void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, int depth,
+                   bool recursive) {
     if (depth > 4) {
         return;
     }
     FileUtil::ForeachDirectoryEntry(
         nullptr, directory,
-        [&out, depth](u64*, const std::string& dir, const std::string& virtual_name) {
+        [&out, depth, recursive](u64*, const std::string& dir, const std::string& virtual_name) {
             const std::string path = dir + virtual_name;
             if (FileUtil::IsDirectory(path)) {
-                ScanDirectory(path + '/', out, depth + 1);
+                if (recursive) {
+                    ScanDirectory(path + '/', out, depth + 1, recursive);
+                }
                 return true;
             }
             GameEntry entry;
@@ -128,16 +131,49 @@ void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, in
 } // namespace
 
 std::vector<GameEntry> ScanGames() {
-    const std::string roms_dir = FileUtil::GetUserPath(FileUtil::UserPath::UserDir) + "roms/";
-    FileUtil::CreateFullPath(roms_dir);
+    const SwitchPaths& paths = GetPaths();
+    FileUtil::CreateFullPath(paths.roms_dir);
 
     std::vector<GameEntry> games;
-    ScanDirectory(roms_dir, games, 0);
+    ScanDirectory(paths.roms_dir, games, 0, paths.scan_recursive);
 
     std::sort(games.begin(), games.end(), [](const GameEntry& a, const GameEntry& b) {
         return Common::ToLower(a.title) < Common::ToLower(b.title);
     });
     return games;
+}
+
+std::vector<DirEntry> ListSubdirectories(const std::string& directory) {
+    std::vector<DirEntry> out;
+    FileUtil::ForeachDirectoryEntry(
+        nullptr, directory,
+        [&out](u64*, const std::string& dir, const std::string& virtual_name) {
+            const std::string path = dir + virtual_name;
+            if (FileUtil::IsDirectory(path)) {
+                out.push_back(DirEntry{virtual_name, path + '/'});
+            }
+            return true;
+        });
+    std::sort(out.begin(), out.end(), [](const DirEntry& a, const DirEntry& b) {
+        return Common::ToLower(a.name) < Common::ToLower(b.name);
+    });
+    return out;
+}
+
+std::string ParentDirectory(const std::string& directory) {
+    if (directory.size() <= 1) {
+        return "";
+    }
+    // Skip the trailing '/' so the search lands on the separator above it.
+    const std::size_t sep = directory.find_last_of('/', directory.size() - 2);
+    if (sep == std::string::npos) {
+        return "";
+    }
+    return directory.substr(0, sep + 1);
+}
+
+bool EnsureDirectory(const std::string& directory) {
+    return FileUtil::CreateFullPath(directory) && FileUtil::IsDirectory(directory);
 }
 
 MenuSettings GetMenuSettings() {

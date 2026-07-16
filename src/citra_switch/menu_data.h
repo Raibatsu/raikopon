@@ -8,10 +8,12 @@
 #include <string>
 #include <vector>
 
+#include "citra_switch/config.h"
+
 // Data the menu draws produced by the Azahar core.
 namespace SwitchFrontend {
 
-// One scanned title in sdmc:/switch/dekopon/roms/.
+// One scanned title in the configured ROM directory.
 struct GameEntry {
     std::string path;      // Absolute SD path passed to BootRom.
     std::string title;     // SMDH long title, or the file name as a fallback.
@@ -36,8 +38,23 @@ struct MenuSettings {
     int graphics_api{};           // Active graphics API backend.
 };
 
-// Scans the ROM directory and returns the loadable titles, sorted by title.
+// One subfolder listed by the folder browser.
+struct DirEntry {
+    std::string name; // Leaf name, no trailing '/'.
+    std::string path; // Absolute SD path with a trailing '/'.
+};
+
+// Scans the configured ROM directory and returns the loadable titles, sorted by title.
 std::vector<GameEntry> ScanGames();
+
+// The subfolders of `directory`, sorted by name.
+std::vector<DirEntry> ListSubdirectories(const std::string& directory);
+
+// The parent of `directory`, or "" if it is already a device root such as "sdmc:/".
+std::string ParentDirectory(const std::string& directory);
+
+// True if `directory` exists or could be created.
+bool EnsureDirectory(const std::string& directory);
 
 // Snapshots the editable settings from Settings::values.
 MenuSettings GetMenuSettings();

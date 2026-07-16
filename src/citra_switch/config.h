@@ -9,8 +9,28 @@
 // Facade between the <switch.h> main() and the Azahar core.
 namespace SwitchFrontend {
 
+// Directories the frontend owns. Absolute SD paths including a trailing '/'.
+struct SwitchPaths {
+    std::string user_dir;  // Holds config/, nand/, sdmc/, log/, ...
+    std::string roms_dir;  // Scanned for titles.
+    bool scan_recursive{}; // Whether the scan descends into roms_dir's subfolders.
+};
+
 // Sets up default directory and logging on first boot.
 int Bootstrap();
+
+// The configured paths.
+const SwitchPaths& GetPaths();
+
+// Persists `paths`. roms_dir and scan_recursive apply to the next scan.
+void SetPaths(const SwitchPaths& paths);
+
+// The dekopon directory this session actually booted from.
+const std::string& GetActiveUserDir();
+
+// The built-in locations offered as a reset target in the UI.
+std::string GetDefaultUserDir();
+std::string GetDefaultRomsDir(const std::string& user_dir);
 
 // Serialises the current Settings::values back to config.ini.
 void SaveConfig();

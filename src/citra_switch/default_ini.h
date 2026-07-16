@@ -39,6 +39,13 @@ region_value =
 [Miscellaneous]
 # Log filter, e.g. "*:Info" (default) or "*:Debug Core.Cpu:Trace".
 log_filter =
+
+[Switch]
+# Directory scanned for titles. Defaults to "roms/" under the dekopon directory when unset.
+# The dekopon directory itself is set from sdmc:/switch/dekopon/user_dir.txt
+roms_dir =
+# Descend into the ROM directory's subfolders when scanning (1, default).
+scan_recursive =
 )";
 
 } // namespace DefaultINI
