@@ -38,6 +38,62 @@ constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 14> button_map
     {HidNpadButton_ZR, SwitchFrontend::InputButton::ZR},
 }};
 
+// Each controller style reports its six-axis sensor through a handle of its own.
+// Sideways Joy-Con is disabled because it's more work and I don't see a big need for it.
+// The emulator doesn't have support for button re-mapping yet anyways.
+std::array<HidSixAxisSensorHandle, 4> six_axis_handles{};
+
+void StartSixAxis() {
+    hidGetSixAxisSensorHandles(&six_axis_handles[0], 1, HidNpadIdType_Handheld,
+                               HidNpadStyleTag_NpadHandheld);
+    hidGetSixAxisSensorHandles(&six_axis_handles[1], 1, HidNpadIdType_No1,
+                               HidNpadStyleTag_NpadFullKey);
+    hidGetSixAxisSensorHandles(&six_axis_handles[2], 2, HidNpadIdType_No1,
+                               HidNpadStyleTag_NpadJoyDual);
+    for (const HidSixAxisSensorHandle& handle : six_axis_handles) {
+        hidStartSixAxisSensor(handle);
+    }
+}
+
+void StopSixAxis() {
+    for (const HidSixAxisSensorHandle& handle : six_axis_handles) {
+        hidStopSixAxisSensor(handle);
+    }
+}
+
+SwitchFrontend::MotionState PollMotion(PadState& pad) {
+    const u64 style_set = padGetStyleSet(&pad);
+    HidSixAxisSensorState sensor{};
+    bool read = false;
+
+    if ((style_set & HidNpadStyleTag_NpadHandheld) != 0) {
+        read = hidGetSixAxisSensorStates(six_axis_handles[0], &sensor, 1) > 0;
+    } else if ((style_set & HidNpadStyleTag_NpadFullKey) != 0) {
+        read = hidGetSixAxisSensorStates(six_axis_handles[1], &sensor, 1) > 0;
+    } else if ((style_set & HidNpadStyleTag_NpadJoyDual) != 0) {
+        // A dual pair reports through whichever Joy-Con is actually attached.
+        const u64 attributes = padGetAttributes(&pad);
+        if ((attributes & HidNpadAttribute_IsLeftConnected) != 0) {
+            read = hidGetSixAxisSensorStates(six_axis_handles[2], &sensor, 1) > 0;
+        } else if ((attributes & HidNpadAttribute_IsRightConnected) != 0) {
+            read = hidGetSixAxisSensorStates(six_axis_handles[3], &sensor, 1) > 0;
+        }
+    }
+
+    if (!read) {
+        return {};
+    }
+    return {
+        .active = true,
+        .accel_x = sensor.acceleration.x,
+        .accel_y = sensor.acceleration.y,
+        .accel_z = sensor.acceleration.z,
+        .gyro_x = sensor.angular_velocity.x,
+        .gyro_y = sensor.angular_velocity.y,
+        .gyro_z = sensor.angular_velocity.z,
+    };
+}
+
 u64 PollInput(PadState& pad) {
     padUpdate(&pad);
     const u64 held = padGetButtons(&pad);
@@ -49,6 +105,7 @@ u64 PollInput(PadState& pad) {
         .left_y = left.y,
         .right_x = right.x,
         .right_y = right.y,
+        .motion = PollMotion(pad),
     };
     for (const auto& [source, target] : button_map) {
         if ((held & source) != 0) {
@@ -134,6 +191,7 @@ int main(int argc, char* argv[]) {
     PadState pad;
     padInitializeDefault(&pad);
     hidInitializeTouchScreen();
+    StartSixAxis();
 
     SwitchFrontend::InitializeInput();
 
@@ -159,6 +217,7 @@ int main(int argc, char* argv[]) {
 
     SwitchFrontend::ShutdownMenu();
     SwitchFrontend::ShutdownInput();
+    StopSixAxis();
     SwitchFrontend::Shutdown();
     if (have_romfs) {
         romfsExit();

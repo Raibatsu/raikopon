@@ -29,6 +29,17 @@ constexpr std::uint64_t ButtonMask(InputButton button) {
     return std::uint64_t{1} << static_cast<std::uint8_t>(button);
 }
 
+// A six-axis sample nicely borrowed (read stolen) from libnx.
+struct MotionState {
+    bool active{}; /// False when the current controller has no readable sensor
+    float accel_x{};
+    float accel_y{};
+    float accel_z{};
+    float gyro_x{};
+    float gyro_y{};
+    float gyro_z{};
+};
+
 struct InputState {
     std::uint64_t buttons{};
     std::int32_t left_x{};
@@ -38,6 +49,7 @@ struct InputState {
     bool touch_pressed{};
     std::uint32_t touch_x{};
     std::uint32_t touch_y{};
+    MotionState motion{};
 };
 
 // Registers the Switch controller and sets up the default 3DS bindings.
