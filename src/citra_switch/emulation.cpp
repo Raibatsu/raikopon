@@ -41,7 +41,7 @@ struct ScreenLayoutPreset {
     const char* name;
 };
 
-constexpr std::array<ScreenLayoutPreset, 5> s_layout_presets{{
+constexpr std::array<ScreenLayoutPreset, 7> s_layout_presets{{
     {Settings::LayoutOption::Default, false, false, Settings::SmallScreenPosition::BottomRight,
      "Vertical stack"},
     {Settings::LayoutOption::SideScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
@@ -50,6 +50,10 @@ constexpr std::array<ScreenLayoutPreset, 5> s_layout_presets{{
      "Large top, small bottom"},
     {Settings::LayoutOption::LargeScreen, true, false, Settings::SmallScreenPosition::MiddleRight,
      "Large bottom, small top"},
+    {Settings::LayoutOption::TopScreenOnly, false, false,
+     Settings::SmallScreenPosition::BottomRight, "Top screen only"},
+    {Settings::LayoutOption::BottomScreenOnly, false, false,
+     Settings::SmallScreenPosition::BottomRight, "Bottom screen only"},
     {Settings::LayoutOption::Default, false, true, Settings::SmallScreenPosition::BottomRight,
      "Vertical stack (rotate console)"},
 }};

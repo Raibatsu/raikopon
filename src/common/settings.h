@@ -48,6 +48,8 @@ enum class LayoutOption : u32 { // Shouldn't these have set numbers to prevent l
 #endif
     HybridScreen,
     CustomLayout,
+    TopScreenOnly,
+    BottomScreenOnly,
 };
 
 /** Defines the layout option for mobile portrait */

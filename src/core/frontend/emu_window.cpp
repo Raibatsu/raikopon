@@ -257,6 +257,14 @@ void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_po
                 Layout::SingleFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
                                           Settings::values.upright_screen.GetValue());
             break;
+        case Settings::LayoutOption::TopScreenOnly:
+            layout = Layout::SingleFrameLayout(width, height, false,
+                                               Settings::values.upright_screen.GetValue());
+            break;
+        case Settings::LayoutOption::BottomScreenOnly:
+            layout = Layout::SingleFrameLayout(width, height, true,
+                                               Settings::values.upright_screen.GetValue());
+            break;
         case Settings::LayoutOption::LargeScreen:
             layout =
                 Layout::LargeFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
