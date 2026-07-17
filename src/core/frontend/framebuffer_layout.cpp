@@ -457,6 +457,27 @@ FramebufferLayout FrameLayoutFromResolutionScale(u32 res_scale, bool is_secondar
             break;
         }
 
+        case Settings::LayoutOption::TopScreenOnly:
+        case Settings::LayoutOption::BottomScreenOnly: {
+            // Dedicated single-screen layouts that always show the same screen, regardless of
+            // the swap_screen setting.
+            const bool swap_screens =
+                layout_option == Settings::LayoutOption::BottomScreenOnly;
+            if (swap_screens) {
+                width = Core::kScreenBottomWidth * res_scale;
+                height = Core::kScreenBottomHeight * res_scale;
+            } else {
+                width = Core::kScreenTopWidth * res_scale;
+                height = Core::kScreenTopHeight * res_scale;
+            }
+            if (Settings::values.upright_screen.GetValue()) {
+                std::swap(width, height);
+            }
+            layout = SingleFrameLayout(width, height, swap_screens,
+                                       Settings::values.upright_screen.GetValue());
+            break;
+        }
+
         case Settings::LayoutOption::LargeScreen: {
             const bool swapped = Settings::values.swap_screen.GetValue();
             const int largeWidth = swapped ? Core::kScreenBottomWidth : Core::kScreenTopWidth;
@@ -672,6 +693,14 @@ std::pair<unsigned, unsigned> GetMinimumSizeFromLayout(Settings::LayoutOption la
     case Settings::LayoutOption::SeparateWindows:
 #endif
         min_width = Settings::values.swap_screen ? Core::kScreenBottomWidth : Core::kScreenTopWidth;
+        min_height = Core::kScreenBottomHeight;
+        break;
+    case Settings::LayoutOption::TopScreenOnly:
+        min_width = Core::kScreenTopWidth;
+        min_height = Core::kScreenTopHeight;
+        break;
+    case Settings::LayoutOption::BottomScreenOnly:
+        min_width = Core::kScreenBottomWidth;
         min_height = Core::kScreenBottomHeight;
         break;
     case Settings::LayoutOption::LargeScreen: {
