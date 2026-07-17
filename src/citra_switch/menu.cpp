@@ -521,9 +521,10 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
         {"Console Region", RegionName(s.region_value)},
+        {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
     };
 }
-constexpr int kNumSettings = 9;
+constexpr int kNumSettings = 10;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -553,6 +554,9 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         break;
     case 8:
         s.region_value = std::clamp(s.region_value + dir, -1, 6);
+        break;
+    case 9:
+        s.pointer_source = dir > 0 ? 1 : 0;
         break;
     default:
         break;

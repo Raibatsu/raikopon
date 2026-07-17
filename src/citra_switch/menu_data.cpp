@@ -11,6 +11,7 @@
 #include <fmt/format.h>
 
 #include "citra_switch/config.h"
+#include "citra_switch/input.h"
 #include "citra_switch/menu_data.h"
 #include "common/file_util.h"
 #include "common/string_util.h"
@@ -471,6 +472,7 @@ MenuSettings GetMenuSettings() {
         .use_cpu_jit = v.use_cpu_jit.GetValue(),
         .region_value = static_cast<int>(v.region_value.GetValue()),
         .graphics_api = static_cast<int>(Settings::GetWorkingGraphicsAPI()),
+        .pointer_source = static_cast<int>(GetPointerSource()),
     };
 }
 
@@ -485,6 +487,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.is_new_3ds = s.is_new_3ds;
     v.use_cpu_jit = s.use_cpu_jit;
     v.region_value = std::clamp(s.region_value, -1, 6);
+    SetPointerSource(s.pointer_source == 1 ? PointerSource::Gyro : PointerSource::Stick);
     SaveConfig();
 }
 

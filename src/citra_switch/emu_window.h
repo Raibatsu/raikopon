@@ -33,6 +33,9 @@ public:
     /// Clear the default framebuffer to a solid colour and present.
     void PresentClear();
 
+    /// Reports the touch-pointer crosshair so the renderer can draw it on the bottom screen.
+    CursorInfo GetCursorInfo() const override;
+
 private:
 #ifdef ENABLE_OPENGL
     bool CreateEGLContext(void* native_window);

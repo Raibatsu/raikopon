@@ -14,6 +14,7 @@
 #include "common/string_util.h"
 #include "citra_switch/config.h"
 #include "citra_switch/default_ini.h"
+#include "citra_switch/input.h"
 #include "core/hle/service/service.h"
 
 namespace {
@@ -155,6 +156,10 @@ private:
         }
         s_paths.scan_recursive = config->GetBoolean("Switch", "scan_recursive", true);
 
+        SwitchFrontend::SetPointerSource(config->GetInteger("Switch", "pointer_source", 0) == 1
+                                             ? SwitchFrontend::PointerSource::Gyro
+                                             : SwitchFrontend::PointerSource::Stick);
+
         launch_count = config->GetInteger("Switch", "launch_count", 0) + 1;
     }
 
@@ -187,6 +192,7 @@ private:
         ss << "[Switch]\n";
         ss << "roms_dir = " << s_paths.roms_dir << '\n';
         ss << "scan_recursive = " << (s_paths.scan_recursive ? "true" : "false") << '\n';
+        ss << "pointer_source = " << static_cast<int>(SwitchFrontend::GetPointerSource()) << '\n';
         ss << "launch_count = " << launch_count << '\n';
 
         return ss.str();

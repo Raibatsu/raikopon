@@ -50,6 +50,8 @@ log_filter =
 roms_dir =
 # Descend into the ROM directory's subfolders when scanning (1, default).
 scan_recursive =
+# What drives the touch pointer. 0: left stick (default), 1: gyro.
+pointer_source =
 )";
 
 } // namespace DefaultINI

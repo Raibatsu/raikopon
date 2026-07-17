@@ -90,6 +90,7 @@ struct MenuSettings {
     bool use_cpu_jit{};
     int region_value{};           // -1 = auto, 0..6 per SMDH region order.
     int graphics_api{};           // Active graphics API backend.
+    int pointer_source{};         // Touch pointer driver. 0 = left stick, 1 = gyro.
 };
 
 // Scans the configured ROM directory and the installed SD titles, sorted by title.
