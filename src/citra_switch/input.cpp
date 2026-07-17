@@ -31,8 +31,13 @@ constexpr float kRotationsToDegrees = 360.0f;
 // Pointer travel at full stick deflection, in bottom-screens per second.
 constexpr float kStickPointerSpeed = 1.5f;
 
-// Pointer travel per full console rotation, in bottom-screens. Higher is faster.
+// Pointer travel per full console rotation, in bottom-screens, at 100% sensitivity. The
+// per-axis sensitivity percentages scale this base speed.
 constexpr float kGyroPointerSpeed = 6.0f;
+
+// Bounds for the user-tunable gyro pointer sensitivity, as a percentage of kGyroPointerSpeed.
+constexpr int kGyroSensitivityMin = 10;
+constexpr int kGyroSensitivityMax = 500;
 
 // Sign of the gyro->pointer mapping.
 constexpr float kGyroSignX = -1.0f;
@@ -54,6 +59,8 @@ bool s_touch_active{};
 // The position is stored as a fraction of the bottom screen so it stays valid across layout
 // changes and can never leave the screen (it is clamped to [0, 1]).
 std::atomic<PointerSource> s_pointer_source{PointerSource::Stick};
+std::atomic<int> s_gyro_sensitivity_x{100};
+std::atomic<int> s_gyro_sensitivity_y{100};
 std::atomic<bool> s_pointer_mode{false};
 std::atomic<float> s_pointer_fx{0.5f};
 std::atomic<float> s_pointer_fy{0.5f};
@@ -189,8 +196,12 @@ void AdvancePointer(const InputState& state, float dt, float left_x, float left_
     } else if (state.motion.active) {
         const float yaw = state.motion.gyro_y;   // vertical rotation
         const float pitch = state.motion.gyro_x; // horizontal rotation
-        dfx = kGyroSignX * yaw * kGyroPointerSpeed * dt;
-        dfy = kGyroSignY * pitch * kGyroPointerSpeed * dt;
+        const float speed_x =
+            kGyroPointerSpeed * s_gyro_sensitivity_x.load(std::memory_order_relaxed) / 100.0f;
+        const float speed_y =
+            kGyroPointerSpeed * s_gyro_sensitivity_y.load(std::memory_order_relaxed) / 100.0f;
+        dfx = kGyroSignX * yaw * speed_x * dt;
+        dfy = kGyroSignY * pitch * speed_y * dt;
     }
     s_pointer_fx.store(std::clamp(s_pointer_fx.load(std::memory_order_relaxed) + dfx, 0.0f, 1.0f),
                        std::memory_order_relaxed);
@@ -314,6 +325,21 @@ PointerSource GetPointerSource() {
 
 void SetPointerSource(PointerSource source) {
     s_pointer_source.store(source, std::memory_order_relaxed);
+}
+
+int GetGyroSensitivityX() {
+    return s_gyro_sensitivity_x.load(std::memory_order_relaxed);
+}
+
+int GetGyroSensitivityY() {
+    return s_gyro_sensitivity_y.load(std::memory_order_relaxed);
+}
+
+void SetGyroSensitivity(int x_percent, int y_percent) {
+    s_gyro_sensitivity_x.store(std::clamp(x_percent, kGyroSensitivityMin, kGyroSensitivityMax),
+                               std::memory_order_relaxed);
+    s_gyro_sensitivity_y.store(std::clamp(y_percent, kGyroSensitivityMin, kGyroSensitivityMax),
+                               std::memory_order_relaxed);
 }
 
 bool IsPointerModeActive() {

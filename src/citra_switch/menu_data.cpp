@@ -473,6 +473,8 @@ MenuSettings GetMenuSettings() {
         .region_value = static_cast<int>(v.region_value.GetValue()),
         .graphics_api = static_cast<int>(Settings::GetWorkingGraphicsAPI()),
         .pointer_source = static_cast<int>(GetPointerSource()),
+        .gyro_sensitivity_x = GetGyroSensitivityX(),
+        .gyro_sensitivity_y = GetGyroSensitivityY(),
     };
 }
 
@@ -488,6 +490,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_cpu_jit = s.use_cpu_jit;
     v.region_value = std::clamp(s.region_value, -1, 6);
     SetPointerSource(s.pointer_source == 1 ? PointerSource::Gyro : PointerSource::Stick);
+    SetGyroSensitivity(s.gyro_sensitivity_x, s.gyro_sensitivity_y);
     SaveConfig();
 }
 

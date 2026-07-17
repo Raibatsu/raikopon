@@ -78,6 +78,11 @@ void ShutdownInput();
 PointerSource GetPointerSource();
 void SetPointerSource(PointerSource source);
 
+// Per-axis gyro pointer sensitivity as a percentage of the default speed (100 = default).
+int GetGyroSensitivityX();
+int GetGyroSensitivityY();
+void SetGyroSensitivity(int x_percent, int y_percent);
+
 // Pointer mode lets the stick/gyro drive the 3DS touchscreen with ZL/ZR as the tap.
 bool IsPointerModeActive();
 void TogglePointerMode();

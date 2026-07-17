@@ -522,9 +522,11 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
         {"Console Region", RegionName(s.region_value)},
         {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
+        {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
+        {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
     };
 }
-constexpr int kNumSettings = 10;
+constexpr int kNumSettings = 12;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -557,6 +559,12 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         break;
     case 9:
         s.pointer_source = dir > 0 ? 1 : 0;
+        break;
+    case 10:
+        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        break;
+    case 11:
+        s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
     default:
         break;
@@ -1824,7 +1832,7 @@ private:
         c.FillRoundRect(track_x, thumb_y, 4, thumb_h, 2, kColAccent);
     }
 
-    static constexpr int kRowH = 52;
+    static constexpr int kRowH = 41;
 
     void DrawSettingsPage(Canvas& c) {
         DrawHeader(c, "");
