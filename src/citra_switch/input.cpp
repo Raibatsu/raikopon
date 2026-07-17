@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <string>
@@ -14,6 +15,7 @@
 #include "citra_switch/input.h"
 #include "common/param_package.h"
 #include "common/settings.h"
+#include "core/frontend/emu_window.h"
 #include "core/frontend/input.h"
 
 // Button mappings and inputs for the Switch
@@ -26,6 +28,19 @@ constexpr float kStickDeadzone = 0.15f;
 // libnx reports angular velocity in rotations/sec vs the 3DS gyroscope in deg/sec.
 constexpr float kRotationsToDegrees = 360.0f;
 
+// Pointer travel at full stick deflection, in bottom-screens per second.
+constexpr float kStickPointerSpeed = 1.5f;
+
+// Pointer travel per full console rotation, in bottom-screens. Higher is faster.
+constexpr float kGyroPointerSpeed = 6.0f;
+
+// Sign of the gyro->pointer mapping.
+constexpr float kGyroSignX = -1.0f;
+constexpr float kGyroSignY = -1.0f;
+
+// Ignore stalls so a resumed frame can't fling the pointer (Although it was funny to watch).
+constexpr float kMaxPointerDelta = 0.1f;
+
 // What the 3DS accelerometer reads while lying face-up, which is the orientation a Switch held upright maps onto.
 constexpr Common::Vec3<float> kRestAccel{0.0f, -1.0f, 0.0f};
 
@@ -35,6 +50,23 @@ std::array<std::atomic<float>, Settings::NativeAnalog::NumAnalogs> s_stick_y{};
 std::array<std::atomic<float>, 3> s_accel{};
 std::array<std::atomic<float>, 3> s_gyro{};
 bool s_touch_active{};
+
+// The position is stored as a fraction of the bottom screen so it stays valid across layout
+// changes and can never leave the screen (it is clamped to [0, 1]).
+std::atomic<PointerSource> s_pointer_source{PointerSource::Stick};
+std::atomic<bool> s_pointer_mode{false};
+std::atomic<float> s_pointer_fx{0.5f};
+std::atomic<float> s_pointer_fy{0.5f};
+
+// Elapsed time since the previous UpdateInput.
+float PointerDeltaSeconds() {
+    using Clock = std::chrono::steady_clock;
+    static Clock::time_point last = Clock::now();
+    const Clock::time_point now = Clock::now();
+    const float dt = std::chrono::duration<float>(now - last).count();
+    last = now;
+    return std::clamp(dt, 0.0f, kMaxPointerDelta);
+}
 
 class SwitchButton final : public Input::ButtonDevice {
 public:
@@ -146,6 +178,26 @@ std::tuple<float, float> NormalizeStick(std::int32_t raw_x, std::int32_t raw_y) 
     return {x / magnitude * scaled_magnitude, y / magnitude * scaled_magnitude};
 }
 
+// Moves the pointer this frame from either the (already-normalized) left stick or the gyro,
+// then clamps it to the bottom screen.
+void AdvancePointer(const InputState& state, float dt, float left_x, float left_y) {
+    float dfx = 0.0f;
+    float dfy = 0.0f;
+    if (s_pointer_source.load(std::memory_order_relaxed) == PointerSource::Stick) {
+        dfx = left_x * kStickPointerSpeed * dt;
+        dfy = -left_y * kStickPointerSpeed * dt; // stick up is +y, but the screen's top is frac 0.
+    } else if (state.motion.active) {
+        const float yaw = state.motion.gyro_y;   // vertical rotation
+        const float pitch = state.motion.gyro_x; // horizontal rotation
+        dfx = kGyroSignX * yaw * kGyroPointerSpeed * dt;
+        dfy = kGyroSignY * pitch * kGyroPointerSpeed * dt;
+    }
+    s_pointer_fx.store(std::clamp(s_pointer_fx.load(std::memory_order_relaxed) + dfx, 0.0f, 1.0f),
+                       std::memory_order_relaxed);
+    s_pointer_fy.store(std::clamp(s_pointer_fy.load(std::memory_order_relaxed) + dfy, 0.0f, 1.0f),
+                       std::memory_order_relaxed);
+}
+
 void SetDefaultBindings() {
     auto& profile = Settings::values.current_input_profile;
     profile.name = "Nintendo Switch";
@@ -189,10 +241,21 @@ void InitializeInput() {
 void UpdateInput(const InputState& state) {
     const auto [left_x, left_y] = NormalizeStick(state.left_x, state.left_y);
     const auto [right_x, right_y] = NormalizeStick(state.right_x, state.right_y);
+    const bool pointer_mode = s_pointer_mode.load(std::memory_order_relaxed);
+    const bool stick_pointer =
+        pointer_mode && s_pointer_source.load(std::memory_order_relaxed) == PointerSource::Stick;
 
-    s_buttons.store(state.buttons, std::memory_order_relaxed);
-    s_stick_x[Settings::NativeAnalog::CirclePad].store(left_x, std::memory_order_relaxed);
-    s_stick_y[Settings::NativeAnalog::CirclePad].store(left_y, std::memory_order_relaxed);
+    // In pointer mode ZL/ZR tap the touchscreen instead of acting as 3DS shoulder buttons.
+    constexpr std::uint64_t tap_mask = ButtonMask(InputButton::ZL) | ButtonMask(InputButton::ZR);
+    const bool tap = pointer_mode && (state.buttons & tap_mask) != 0;
+    const std::uint64_t buttons = pointer_mode ? state.buttons & ~tap_mask : state.buttons;
+    s_buttons.store(buttons, std::memory_order_relaxed);
+
+    // The left stick drives the pointer while stick-pointer mode is on, so free it from the pad.
+    s_stick_x[Settings::NativeAnalog::CirclePad].store(stick_pointer ? 0.0f : left_x,
+                                                       std::memory_order_relaxed);
+    s_stick_y[Settings::NativeAnalog::CirclePad].store(stick_pointer ? 0.0f : left_y,
+                                                       std::memory_order_relaxed);
     s_stick_x[Settings::NativeAnalog::CStick].store(right_x, std::memory_order_relaxed);
     s_stick_y[Settings::NativeAnalog::CStick].store(right_y, std::memory_order_relaxed);
 
@@ -205,21 +268,72 @@ void UpdateInput(const InputState& state) {
         StoreMotion(kRestAccel, {});
     }
 
+    const float dt = PointerDeltaSeconds();
+    if (pointer_mode) {
+        AdvancePointer(state, dt, left_x, left_y);
+    }
+
     EmuWindow_Switch* window = GetEmuWindow();
     if (!window) {
         s_touch_active = false;
         return;
     }
-    if (state.touch_pressed) {
+
+    // A physical touch always wins in a conflict.
+    bool touch_pressed = state.touch_pressed;
+    unsigned touch_x = state.touch_x;
+    unsigned touch_y = state.touch_y;
+    if (!touch_pressed && tap) {
+        const auto& bottom = window->GetFramebufferLayout().bottom_screen;
+        touch_pressed = true;
+        touch_x = std::min(static_cast<unsigned>(bottom.left +
+                                                 s_pointer_fx.load(std::memory_order_relaxed) *
+                                                     bottom.GetWidth()),
+                           bottom.right - 1);
+        touch_y = std::min(static_cast<unsigned>(bottom.top +
+                                                 s_pointer_fy.load(std::memory_order_relaxed) *
+                                                     bottom.GetHeight()),
+                           bottom.bottom - 1);
+    }
+
+    if (touch_pressed) {
         if (s_touch_active) {
-            window->TouchMoved(state.touch_x, state.touch_y);
+            window->TouchMoved(touch_x, touch_y);
         } else {
-            s_touch_active = window->TouchPressed(state.touch_x, state.touch_y);
+            s_touch_active = window->TouchPressed(touch_x, touch_y);
         }
     } else if (s_touch_active) {
         window->TouchReleased();
         s_touch_active = false;
     }
+}
+
+PointerSource GetPointerSource() {
+    return s_pointer_source.load(std::memory_order_relaxed);
+}
+
+void SetPointerSource(PointerSource source) {
+    s_pointer_source.store(source, std::memory_order_relaxed);
+}
+
+bool IsPointerModeActive() {
+    return s_pointer_mode.load(std::memory_order_relaxed);
+}
+
+void TogglePointerMode() {
+    s_pointer_mode.store(!s_pointer_mode.load(std::memory_order_relaxed), std::memory_order_relaxed);
+}
+
+void ResetPointer() {
+    s_pointer_mode.store(false, std::memory_order_relaxed);
+    s_pointer_fx.store(0.5f, std::memory_order_relaxed);
+    s_pointer_fy.store(0.5f, std::memory_order_relaxed);
+}
+
+PointerCursor GetPointerCursor() {
+    return {s_pointer_mode.load(std::memory_order_relaxed),
+            s_pointer_fx.load(std::memory_order_relaxed),
+            s_pointer_fy.load(std::memory_order_relaxed)};
 }
 
 void ShutdownInput() {

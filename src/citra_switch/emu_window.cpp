@@ -13,6 +13,7 @@
 
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
+#include "citra_switch/input.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
@@ -251,6 +252,16 @@ std::unique_ptr<Frontend::GraphicsContext> EmuWindow_Switch::CreateSharedContext
 #else
     return std::make_unique<Frontend::GraphicsContext>();
 #endif
+}
+
+Frontend::EmuWindow::CursorInfo EmuWindow_Switch::GetCursorInfo() const {
+    const SwitchFrontend::PointerCursor pointer = SwitchFrontend::GetPointerCursor();
+    if (!pointer.active) {
+        return {};
+    }
+    // Prevent the virtual pointer from leaving the bottom screen area by clamping to [0, 1].
+    const auto& bottom = GetFramebufferLayout().bottom_screen;
+    return {true, pointer.frac_x * bottom.GetWidth(), pointer.frac_y * bottom.GetHeight()};
 }
 
 void EmuWindow_Switch::PresentClear() {

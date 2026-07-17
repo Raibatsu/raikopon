@@ -135,6 +135,9 @@ void RunGame(PadState& pad, const std::string& rom) {
         return;
     }
 
+    // Each game always starts with the touch pointer off.
+    SwitchFrontend::ResetPointer();
+
     if (SwitchFrontend::BootRom(rom)) {
         u64 prev_held = 0;
         while (appletMainLoop()) {
@@ -148,6 +151,10 @@ void RunGame(PadState& pad, const std::string& rom) {
             // Clicking the right stick (R3) cycles through the screen layouts.
             if ((held & HidNpadButton_StickR) != 0 && (prev_held & HidNpadButton_StickR) == 0) {
                 SwitchFrontend::CycleScreenLayout();
+            }
+            // Clicking the left stick (L3) toggles the touch pointer.
+            if ((held & HidNpadButton_StickL) != 0 && (prev_held & HidNpadButton_StickL) == 0) {
+                SwitchFrontend::TogglePointerMode();
             }
             prev_held = held;
             if (!SwitchFrontend::IsRunning()) {

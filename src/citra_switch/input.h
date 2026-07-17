@@ -52,6 +52,19 @@ struct InputState {
     MotionState motion{};
 };
 
+// What drives the on-screen touch pointer while pointer mode is on.
+enum class PointerSource : std::uint8_t {
+    Stick,
+    Gyro,
+};
+
+// The bottom-screen pointer position as a fraction of the bottom screen, for the crosshair.
+struct PointerCursor {
+    bool active{};
+    float frac_x{}; // 0 at the left edge, 1 at the right edge.
+    float frac_y{}; // 0 at the top edge, 1 at the bottom edge.
+};
+
 // Registers the Switch controller and sets up the default 3DS bindings.
 void InitializeInput();
 
@@ -60,5 +73,19 @@ void UpdateInput(const InputState& state);
 
 // Releases all input and unregisters the Switch controller.
 void ShutdownInput();
+
+// The configured pointer driver.
+PointerSource GetPointerSource();
+void SetPointerSource(PointerSource source);
+
+// Pointer mode lets the stick/gyro drive the 3DS touchscreen with ZL/ZR as the tap.
+bool IsPointerModeActive();
+void TogglePointerMode();
+
+// Disables pointer mode and recenters the pointer.
+void ResetPointer();
+
+// The current crosshair position, queried by the emu window for the renderer.
+PointerCursor GetPointerCursor();
 
 } // namespace SwitchFrontend
