@@ -31,6 +31,10 @@ async_shader_compilation =
 use_disk_shader_cache =
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
+# Compile PICA vertex shaders to native code instead of interpreting them (1, default).
+# Only affects draws that fall back to the CPU shader engine.
+# Has chance of crashing on some games, although should be safe.
+use_shader_jit =
 
 [System]
 # Console region. -1: auto-select (default), 0: JPN, 1: USA, 2: EUR, 3: AUS, 4: CHN, 5: KOR, 6: TWN.
