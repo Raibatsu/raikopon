@@ -52,6 +52,9 @@ roms_dir =
 scan_recursive =
 # What drives the touch pointer. 0: left stick (default), 1: gyro.
 pointer_source =
+# Gyro pointer sensitivity per axis, as a percentage of the default speed (100, default). 10-500.
+gyro_sensitivity_x =
+gyro_sensitivity_y =
 )";
 
 } // namespace DefaultINI

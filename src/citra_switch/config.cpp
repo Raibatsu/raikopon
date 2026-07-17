@@ -159,6 +159,9 @@ private:
         SwitchFrontend::SetPointerSource(config->GetInteger("Switch", "pointer_source", 0) == 1
                                              ? SwitchFrontend::PointerSource::Gyro
                                              : SwitchFrontend::PointerSource::Stick);
+        SwitchFrontend::SetGyroSensitivity(
+            config->GetInteger("Switch", "gyro_sensitivity_x", 100),
+            config->GetInteger("Switch", "gyro_sensitivity_y", 100));
 
         launch_count = config->GetInteger("Switch", "launch_count", 0) + 1;
     }
@@ -193,6 +196,8 @@ private:
         ss << "roms_dir = " << s_paths.roms_dir << '\n';
         ss << "scan_recursive = " << (s_paths.scan_recursive ? "true" : "false") << '\n';
         ss << "pointer_source = " << static_cast<int>(SwitchFrontend::GetPointerSource()) << '\n';
+        ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
+        ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
         ss << "launch_count = " << launch_count << '\n';
 
         return ss.str();
