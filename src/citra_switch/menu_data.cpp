@@ -475,6 +475,7 @@ MenuSettings GetMenuSettings() {
         .pointer_source = static_cast<int>(GetPointerSource()),
         .gyro_sensitivity_x = GetGyroSensitivityX(),
         .gyro_sensitivity_y = GetGyroSensitivityY(),
+        .layout_cycle_mask = GetLayoutCycleMask(),
     };
 }
 
@@ -491,6 +492,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.region_value = std::clamp(s.region_value, -1, 6);
     SetPointerSource(s.pointer_source == 1 ? PointerSource::Gyro : PointerSource::Stick);
     SetGyroSensitivity(s.gyro_sensitivity_x, s.gyro_sensitivity_y);
+    SetLayoutCycleMask(s.layout_cycle_mask);
     SaveConfig();
 }
 

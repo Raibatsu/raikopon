@@ -93,6 +93,7 @@ struct MenuSettings {
     int pointer_source{};         // Touch pointer driver. 0 = left stick, 1 = gyro.
     int gyro_sensitivity_x{};     // Gyro pointer horizontal sensitivity, percent of the default.
     int gyro_sensitivity_y{};     // Gyro pointer vertical sensitivity, percent of the default.
+    std::uint32_t layout_cycle_mask{}; // Presets R3 cycles through (bit i = preset i).
 };
 
 // Scans the configured ROM directory and the installed SD titles, sorted by title.

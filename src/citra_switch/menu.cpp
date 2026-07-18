@@ -510,6 +510,18 @@ struct SettingRow {
     std::string value;
 };
 
+// "N of M" summary of how many layouts R3 is set to cycle through.
+std::string LayoutCycleSummary(std::uint32_t mask) {
+    const int total = GetScreenLayoutCount();
+    int enabled = 0;
+    for (int i = 0; i < total; ++i) {
+        if ((mask & (1u << i)) != 0) {
+            ++enabled;
+        }
+    }
+    return std::to_string(enabled) + " of " + std::to_string(total);
+}
+
 std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
     return {
         {"Internal Resolution", ResolutionText(s.resolution_factor)},
@@ -524,9 +536,12 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
+        {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
     };
 }
-constexpr int kNumSettings = 12;
+constexpr int kNumSettings = 13;
+// The R3 layout row opens a picker.
+constexpr int kLayoutCycleRow = 12;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -919,6 +934,8 @@ public:
             bool done = false;
             if (install_active) {
                 PumpInstall();
+            } else if (layout_picker_open) {
+                HandleLayoutPicker(down, nav);
             } else if (details_open) {
                 // Any of the buttons that could have opened the panel also closes it.
                 if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_Plus)) {
@@ -939,7 +956,7 @@ public:
                 return result;
             }
 
-            if (!install_active && !details_open) {
+            if (!install_active && !details_open && !layout_picker_open) {
                 HandleTouch();
             }
             if (pending_launch) {
@@ -978,6 +995,7 @@ private:
     int selected = 0;          // Index into `filtered`.
     int scroll_row = 0;
     int settings_sel = 0;
+    int settings_scroll = 0; // First visible settings row.
     int paths_sel = 0;
     std::string search;
     MenuSettings settings{};
@@ -993,6 +1011,10 @@ private:
     // Library detail panel.
     bool details_open = false;
     TitleDetails details{};
+
+    // R3 screen-layout picker.
+    bool layout_picker_open = false;
+    int layout_picker_sel = 0;
 
     // Install page.
     std::string install_dir;
@@ -1281,6 +1303,17 @@ private:
         }
     }
 
+    // Keeps the selected settings row inside the visible window.
+    void ScrollSettingsIntoView() {
+        settings_scroll = std::clamp(settings_scroll, std::max(0, settings_sel - kSettingsVisibleRows + 1),
+                                     settings_sel);
+    }
+
+    void OpenLayoutPicker() {
+        layout_picker_sel = 0;
+        layout_picker_open = true;
+    }
+
     bool HandleSettings(u64 down, u32 nav) {
         if (nav & DirUp) {
             settings_sel = std::max(0, settings_sel - 1);
@@ -1288,6 +1321,19 @@ private:
         if (nav & DirDown) {
             settings_sel = std::min(kNumSettings - 1, settings_sel + 1);
         }
+        ScrollSettingsIntoView();
+
+        // The R3 layout row opens a modal picker.
+        if (settings_sel == kLayoutCycleRow) {
+            if ((down & HidNpadButton_A) || (nav & DirRight)) {
+                OpenLayoutPicker();
+            }
+            if (down & HidNpadButton_B) {
+                EnterRail();
+            }
+            return false;
+        }
+
         bool changed = false;
         if (nav & DirLeft) {
             CycleSetting(settings, settings_sel, -1);
@@ -1305,6 +1351,23 @@ private:
             EnterRail();
         }
         return false;
+    }
+
+    void HandleLayoutPicker(u64 down, u32 nav) {
+        const int count = GetScreenLayoutCount();
+        if (nav & DirUp) {
+            layout_picker_sel = (layout_picker_sel - 1 + count) % count;
+        }
+        if (nav & DirDown) {
+            layout_picker_sel = (layout_picker_sel + 1) % count;
+        }
+        if (down & HidNpadButton_A) {
+            settings.layout_cycle_mask ^= (1u << layout_picker_sel);
+            settings_dirty = true;
+        }
+        if (down & HidNpadButton_B) {
+            layout_picker_open = false;
+        }
     }
 
     bool HandlePaths(u64 down, u32 nav) {
@@ -1424,11 +1487,17 @@ private:
                 install_sel = row;
             }
         } else if (tab == Tab::Settings) {
-            const int row = (ty - (kContentTop + 16)) / (kRowH + 8);
-            if (row >= 0 && row < kNumSettings) {
+            const int visible = (ty - kSettingsTop) / kSettingsRowStride;
+            const int row = settings_scroll + visible;
+            if (ty >= kSettingsTop && visible < kSettingsVisibleRows && row >= 0 &&
+                row < kNumSettings) {
                 settings_sel = row;
-                CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
-                settings_dirty = true;
+                if (row == kLayoutCycleRow) {
+                    OpenLayoutPicker();
+                } else {
+                    CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
+                    settings_dirty = true;
+                }
             }
         } else {
             for (int i = 0; i < PathRowCount; ++i) {
@@ -1634,6 +1703,9 @@ private:
         if (details_open && !filtered.empty()) {
             DrawTitleDetails(c, games[filtered[selected]], details);
         }
+        if (layout_picker_open) {
+            DrawLayoutPicker(c);
+        }
         if (install_active) {
             DrawInstallProgress(c);
         }
@@ -1834,14 +1906,22 @@ private:
 
     static constexpr int kRowH = 41;
 
+    // Scroll the settings window now that it has overflowed the size of the screen.
+    static constexpr int kSettingsTop = kContentTop + 16;
+    static constexpr int kSettingsRowStride = kRowH + 8;
+    static constexpr int kSettingsFooterH = 52;
+    static constexpr int kSettingsVisibleRows =
+        (kContentBottom - kSettingsTop - kSettingsFooterH) / kSettingsRowStride;
+
     void DrawSettingsPage(Canvas& c) {
         DrawHeader(c, "");
         const bool content_focus = focus == Focus::Content;
         const auto rows = BuildSettingRows(settings);
         const int x = kContentX + 24;
         const int w = kContentW - 48;
-        int y = kContentTop + 16;
-        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        const int last = std::min(static_cast<int>(rows.size()), settings_scroll + kSettingsVisibleRows);
+        for (int i = settings_scroll; i < last; ++i) {
+            const int y = kSettingsTop + (i - settings_scroll) * kSettingsRowStride;
             const bool on = i == settings_sel;
             if (on) {
                 c.FillRoundRect(x, y, w, kRowH, 10, content_focus ? kColSurfaceHi : kColSurface);
@@ -1852,12 +1932,14 @@ private:
             const int vw = g_font.Measure(rows[i].value, 22);
             g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), rows[i].value, 22,
                         on && content_focus ? kColAccent : kColTextDim);
-            y += kRowH + 8;
         }
-        y += 8;
+        DrawListScrollbar(c, kScreenW - 20, kSettingsTop, kSettingsVisibleRows, kSettingsRowStride,
+                          static_cast<int>(rows.size()), settings_scroll);
+
+        const int footer_y = kContentBottom - kSettingsFooterH;
         const std::string backend = std::string{"Graphics backend: "} + BackendName(settings.graphics_api);
-        g_font.Draw(c, x + 20, y + 16, backend, 18, kColTextDim);
-        g_font.Draw(c, x + 20, y + 42, "Changes apply the next time you launch a game.", 18,
+        g_font.Draw(c, x + 20, footer_y + 16, backend, 18, kColTextDim);
+        g_font.Draw(c, x + 20, footer_y + 42, "Changes apply the next time you launch a game.", 18,
                     kColTextDim);
 
         if (focus == Focus::Rail) {
@@ -1865,11 +1947,55 @@ private:
         } else {
             int hx = kContentX + 24;
             const int hy = kContentBottom + (kHintH - 26) / 2;
-            hx += DrawHint(c, hx, hy, "<>", "Change") + 22;
-            hx += DrawHint(c, hx, hy, "A", "Next") + 22;
+            if (settings_sel == kLayoutCycleRow) {
+                hx += DrawHint(c, hx, hy, "A", "Configure") + 22;
+            } else {
+                hx += DrawHint(c, hx, hy, "<>", "Change") + 22;
+                hx += DrawHint(c, hx, hy, "A", "Next") + 22;
+            }
             hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             DrawHint(c, hx, hy, "+ -", "Exit");
         }
+    }
+
+    // A centred modal to choose which layouts R3 cycles through in-game.
+    void DrawLayoutPicker(Canvas& c) {
+        const int count = GetScreenLayoutCount();
+        constexpr int w = 620;
+        constexpr int row_h = 44;
+        constexpr int top_pad = 78;    // Room for the title and subtitle.
+        constexpr int bottom_pad = 56; // Room for the button hints.
+        const int h = top_pad + count * row_h + bottom_pad;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        g_font.Draw(c, x + 24, y + 40, "R3 Screen Layouts", 24, kColText);
+        g_font.Draw(c, x + 24, y + 64, "Choose which layouts R3 cycles through in-game", 16,
+                    kColTextDim);
+
+        for (int i = 0; i < count; ++i) {
+            const int ry = y + top_pad + i * row_h;
+            const int rx = x + 16;
+            const int rw = w - 32;
+            if (i == layout_picker_sel) {
+                c.FillRoundRect(rx, ry, rw, row_h - 4, 8, kColSurfaceHi);
+                c.FillRoundRect(rx, ry + 8, 4, row_h - 20, 2, kColAccent);
+            }
+            const bool enabled = (settings.layout_cycle_mask & (1u << i)) != 0;
+            g_font.Draw(c, rx + 20, CenterBaseline(ry, row_h - 4, 20), GetScreenLayoutName(i), 20,
+                        kColText);
+            const char* state = enabled ? "On" : "Off";
+            const int sw = g_font.Measure(state, 20);
+            g_font.Draw(c, rx + rw - 24 - sw, CenterBaseline(ry, row_h - 4, 20), state, 20,
+                        enabled ? kColAccent : kColTextDim);
+        }
+
+        int hx = x + 24;
+        const int hy = y + h - 38;
+        hx += DrawHint(c, hx, hy, "A", "Toggle") + 22;
+        DrawHint(c, hx, hy, "B", "Done");
     }
 
     void DrawHintBar(Canvas& c) {
