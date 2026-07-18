@@ -222,7 +222,7 @@ if (DEKOPON)
     set(ENABLE_LTO OFF CACHE BOOL "Disabled for Switch)" FORCE)
 
     set(ENABLE_SOFTWARE_RENDERER ON CACHE BOOL "Kept for accuracy checks" FORCE)
-    set(ENABLE_VULKAN ON CACHE BOOL "Vulkan via NXVK" FORCE)
+    set(ENABLE_VULKAN ON CACHE BOOL "Vulkan via NXVK")
     set(ENABLE_DEKO3D OFF CACHE BOOL "Superseded by NXVK" FORCE)
     # NXVK and the switch-mesa GLES driver are two separate Mesa builds and cannot coexist
     if (ENABLE_VULKAN)
