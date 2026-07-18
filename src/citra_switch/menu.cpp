@@ -600,7 +600,7 @@ int PathRowTop(int row) {
 const char* PathRowLabel(int row) {
     switch (row) {
     case PathRowUserDir:
-        return "Dekopon Folder";
+        return "Raikopon Folder";
     case PathRowRomsDir:
         return "ROM Folder";
     default:
@@ -703,7 +703,7 @@ void DrawRail(Canvas& canvas, Tab active, Tab cursor, bool rail_focused) {
 
 void DrawHeader(Canvas& canvas, std::string_view subtitle) {
     canvas.FillRect(kContentX, 0, kContentW, kHeaderH, kColBg);
-    g_font.Draw(canvas, kContentX + 24, CenterBaseline(0, kHeaderH, 28), "Dekopon", 28, kColText);
+    g_font.Draw(canvas, kContentX + 24, CenterBaseline(0, kHeaderH, 28), "Raikopon", 28, kColText);
     if (!subtitle.empty()) {
         const int sw = g_font.Measure(subtitle, 20);
         g_font.Draw(canvas, kScreenW - 24 - sw, CenterBaseline(0, kHeaderH, 20), subtitle, 20,
@@ -1739,7 +1739,7 @@ private:
 
         int y = PathRowTop(PathRowCount - 1) + PathRowHeight(PathRowCount - 1) + 30;
         if (RestartPending()) {
-            g_font.Draw(c, x + 20, y, "Restart Dekopon to move to the new folder.", 18, kColAccent);
+            g_font.Draw(c, x + 20, y, "Restart Raikopon to move to the new folder.", 18, kColAccent);
             y += 26;
         }
 
@@ -1918,7 +1918,7 @@ private:
 
         g_font.Draw(c, bar_x, bar_y + 36, FormatSize(written) + " / " + FormatSize(total), 18,
                     kColTextDim);
-        const char* warn = "Don't close Dekopon or turn off the console";
+        const char* warn = "Don't close Raikopon or turn off the console";
         g_font.Draw(c, x + w - 24 - g_font.Measure(warn, 18), bar_y + 36, warn, 18, kColTextDim);
     }
 

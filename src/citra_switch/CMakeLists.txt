@@ -61,8 +61,10 @@ if (ENABLE_VULKAN)
     target_link_libraries(citra_switch PRIVATE nxvk)
 endif()
 
-nx_generate_nacp(OUTPUT dekopon.nacp
-    NAME "Dekopon"
+set(RAIKOPON_NRO_NAME "raikopon")
+
+nx_generate_nacp(OUTPUT ${RAIKOPON_NRO_NAME}.nacp
+    NAME "Raikopon"
     AUTHOR "Azahar Team \& PalindromicBreadLoaf"
     VERSION "1.0.0"
 )
@@ -103,15 +105,15 @@ if (ENABLE_DEKO3D)
     set_property(TARGET dekopon_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK_DKSH_FILES})
 
     nx_create_nro(citra_switch
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
-        NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nro"
+        NACP "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nacp"
         ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
         ROMFS dekopon_romfs
     )
 else()
     nx_create_nro(citra_switch
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nro"
-        NACP "${CMAKE_CURRENT_BINARY_DIR}/dekopon.nacp"
+        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nro"
+        NACP "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nacp"
         ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
     )
 endif()
