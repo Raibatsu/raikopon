@@ -13,6 +13,8 @@ add_library(video_core STATIC EXCLUDE_FROM_ALL
     gpu.h
     gpu_debugger.h
     gpu_impl.h
+    overlay.cpp
+    overlay.h
     pica_types.h
     precompiled_headers.h
     rasterizer_accelerated.cpp
@@ -158,6 +160,8 @@ endif()
 if (ENABLE_VULKAN)
     target_sources(video_core PRIVATE
         renderer_vulkan/pica_to_vk.h
+        renderer_vulkan/overlay_font.cpp
+        renderer_vulkan/overlay_font.h
         renderer_vulkan/renderer_vulkan.cpp
         renderer_vulkan/renderer_vulkan.h
         renderer_vulkan/vk_blit_helper.cpp

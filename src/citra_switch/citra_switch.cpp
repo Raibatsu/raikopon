@@ -12,6 +12,7 @@
 #include "citra_switch/config.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
+#include "citra_switch/overlay_menu.h"
 #include "common/horizon_thread.h"
 
 extern "C" {
@@ -94,13 +95,15 @@ SwitchFrontend::MotionState PollMotion(PadState& pad) {
     };
 }
 
-u64 PollInput(PadState& pad) {
+// Reads the pad into `state` and returns the raw buttons held mask.
+// Forwarding the state to the guest is left to the caller so it can withhold input while the quick menu is up.
+u64 PollInput(PadState& pad, SwitchFrontend::InputState& state) {
     padUpdate(&pad);
     const u64 held = padGetButtons(&pad);
     const HidAnalogStickState left = padGetStickPos(&pad, 0);
     const HidAnalogStickState right = padGetStickPos(&pad, 1);
 
-    SwitchFrontend::InputState state{
+    state = SwitchFrontend::InputState{
         .left_x = left.x,
         .left_y = left.y,
         .right_x = right.x,
@@ -119,13 +122,7 @@ u64 PollInput(PadState& pad) {
         state.touch_x = touch.touches[0].x;
         state.touch_y = touch.touches[0].y;
     }
-    SwitchFrontend::UpdateInput(state);
     return held;
-}
-
-bool ReturnToMenuRequested(u64 held) {
-    constexpr u64 chord = HidNpadButton_Plus | HidNpadButton_Minus;
-    return (held & chord) == chord;
 }
 
 void RunGame(PadState& pad, const std::string& rom) {
@@ -135,7 +132,7 @@ void RunGame(PadState& pad, const std::string& rom) {
         return;
     }
 
-    // Each game always starts with the touch pointer off.
+    // Each game always starts with the touch pointer off and the quick menu closed.
     SwitchFrontend::ResetPointer();
 
     if (SwitchFrontend::BootRom(rom)) {
@@ -144,18 +141,48 @@ void RunGame(PadState& pad, const std::string& rom) {
             // Blocks while the system keyboard is up. The emulation thread is waiting on it, so
             // nothing is being drawn meanwhile.
             SwitchFrontend::PumpKeyboard();
-            const u64 held = PollInput(pad);
-            if (ReturnToMenuRequested(held)) {
-                break;
+
+            SwitchFrontend::InputState state;
+            const u64 held = PollInput(pad, state);
+            const u64 pressed = held & ~prev_held;
+
+            // The +/- chord toggles the in-game quick menu.
+            constexpr u64 chord = HidNpadButton_Plus | HidNpadButton_Minus;
+            const bool chord_edge = (held & chord) == chord && (prev_held & chord) != chord;
+            if (chord_edge) {
+                SwitchFrontend::ToggleQuickMenu();
             }
-            // Clicking the right stick (R3) cycles through the screen layouts.
-            if ((held & HidNpadButton_StickR) != 0 && (prev_held & HidNpadButton_StickR) == 0) {
-                SwitchFrontend::CycleScreenLayout();
+
+            const bool menu_open = SwitchFrontend::IsQuickMenuOpen();
+
+            // While the menu is up the guest sees neutral input.
+            SwitchFrontend::UpdateInput(menu_open || chord_edge ? SwitchFrontend::InputState{}
+                                                                : state);
+
+            if (menu_open && !chord_edge) {
+                const SwitchFrontend::QuickMenuNav nav{
+                    .up = (pressed & (HidNpadButton_Up | HidNpadButton_StickLUp)) != 0,
+                    .down = (pressed & (HidNpadButton_Down | HidNpadButton_StickLDown)) != 0,
+                    .left = (pressed & (HidNpadButton_Left | HidNpadButton_StickLLeft)) != 0,
+                    .right = (pressed & (HidNpadButton_Right | HidNpadButton_StickLRight)) != 0,
+                    .confirm = (pressed & HidNpadButton_A) != 0,
+                    .cancel = (pressed & HidNpadButton_B) != 0,
+                };
+                if (SwitchFrontend::UpdateQuickMenu(nav) ==
+                    SwitchFrontend::QuickMenuAction::ExitGame) {
+                    break;
+                }
+            } else if (!menu_open) {
+                // Clicking the right stick (R3) cycles through the screen layouts.
+                if ((pressed & HidNpadButton_StickR) != 0) {
+                    SwitchFrontend::CycleScreenLayout();
+                }
+                // Clicking the left stick (L3) toggles the touch pointer.
+                if ((pressed & HidNpadButton_StickL) != 0) {
+                    SwitchFrontend::TogglePointerMode();
+                }
             }
-            // Clicking the left stick (L3) toggles the touch pointer.
-            if ((held & HidNpadButton_StickL) != 0 && (prev_held & HidNpadButton_StickL) == 0) {
-                SwitchFrontend::TogglePointerMode();
-            }
+
             prev_held = held;
             if (!SwitchFrontend::IsRunning()) {
                 break;
@@ -170,6 +197,8 @@ void RunGame(PadState& pad, const std::string& rom) {
         SwitchFrontend::SetMenuNotice("Couldn't launch — ROM not loadable");
     }
 
+    // Make sure a lingering overlay never survives into the next game or the library menu.
+    SwitchFrontend::CloseQuickMenu();
     SwitchFrontend::DestroyWindow();
 }
 

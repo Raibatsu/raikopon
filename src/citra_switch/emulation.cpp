@@ -199,13 +199,16 @@ bool IsRunning() {
     return !s_stop;
 }
 
-void CycleScreenLayout() {
+void StepScreenLayout(int delta) {
     auto& system = Core::System::GetInstance();
     if (!system.IsPoweredOn()) {
         return;
     }
 
-    s_layout_index = (s_layout_index + 1) % s_layout_presets.size();
+    const int count = static_cast<int>(s_layout_presets.size());
+    s_layout_index = static_cast<std::size_t>(((static_cast<int>(s_layout_index) + delta) % count +
+                                               count) %
+                                              count);
     const ScreenLayoutPreset& preset = s_layout_presets[s_layout_index];
 
     Settings::values.layout_option = preset.layout;
@@ -215,6 +218,14 @@ void CycleScreenLayout() {
 
     system.GPU().Renderer().UpdateCurrentFramebufferLayout();
     LOG_INFO(Frontend, "Screen layout: {}", preset.name);
+}
+
+void CycleScreenLayout() {
+    StepScreenLayout(1);
+}
+
+const char* CurrentScreenLayoutName() {
+    return s_layout_presets[s_layout_index].name;
 }
 
 bool LoadFailed() {

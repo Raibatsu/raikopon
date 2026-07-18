@@ -27,6 +27,7 @@ set(SHADER_FILES
     vulkan_cursor.frag
     vulkan_cursor.vert
     vulkan_overlay.frag
+    vulkan_overlay.vert
 )
 
 set(SHADER_INCLUDE ${CMAKE_CURRENT_BINARY_DIR}/include)

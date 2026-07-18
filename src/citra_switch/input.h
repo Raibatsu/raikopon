@@ -86,6 +86,7 @@ void SetGyroSensitivity(int x_percent, int y_percent);
 // Pointer mode lets the stick/gyro drive the 3DS touchscreen with ZL/ZR as the tap.
 bool IsPointerModeActive();
 void TogglePointerMode();
+void SetPointerMode(bool enabled);
 
 // Disables pointer mode and recenters the pointer.
 void ResetPointer();
