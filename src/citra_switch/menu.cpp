@@ -482,6 +482,39 @@ const char* RegionName(int region) {
     }
 }
 
+// Ordered to match Service::CFG::SystemLanguage.
+// The overlay font is Latin-only, so names are spelled out in English only.
+const char* LanguageName(int language) {
+    switch (language) {
+    case 0:
+        return "Japanese";
+    case 1:
+        return "English";
+    case 2:
+        return "French";
+    case 3:
+        return "German";
+    case 4:
+        return "Italian";
+    case 5:
+        return "Spanish";
+    case 6:
+        return "Simplified Chinese";
+    case 7:
+        return "Korean";
+    case 8:
+        return "Dutch";
+    case 9:
+        return "Portuguese";
+    case 10:
+        return "Russian";
+    case 11:
+        return "Traditional Chinese";
+    default:
+        return "English";
+    }
+}
+
 const char* BackendName(int api) {
     switch (api) {
     case 0:
@@ -533,15 +566,16 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
         {"Console Region", RegionName(s.region_value)},
+        {"System Language", LanguageName(s.language)},
         {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
         {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
     };
 }
-constexpr int kNumSettings = 13;
+constexpr int kNumSettings = 14;
 // The R3 layout row opens a picker.
-constexpr int kLayoutCycleRow = 12;
+constexpr int kLayoutCycleRow = 13;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -573,12 +607,15 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
     case 9:
-        s.pointer_source = dir > 0 ? 1 : 0;
+        s.language = std::clamp(s.language + dir, 0, 11);
         break;
     case 10:
-        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        s.pointer_source = dir > 0 ? 1 : 0;
         break;
     case 11:
+        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        break;
+    case 12:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
     default:

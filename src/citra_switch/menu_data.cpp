@@ -17,9 +17,11 @@
 #include "common/string_util.h"
 #include "common/settings.h"
 #include "common/zstd_compression.h"
+#include "core/core.h"
 #include "core/file_sys/cia_container.h"
 #include "core/file_sys/title_metadata.h"
 #include "core/hle/service/am/am.h"
+#include "core/hle/service/cfg/cfg.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/loader/loader.h"
 #include "core/loader/smdh.h"
@@ -471,6 +473,8 @@ MenuSettings GetMenuSettings() {
         .is_new_3ds = v.is_new_3ds.GetValue(),
         .use_cpu_jit = v.use_cpu_jit.GetValue(),
         .region_value = static_cast<int>(v.region_value.GetValue()),
+        .language = static_cast<int>(
+            Service::CFG::GetModule(Core::System::GetInstance())->GetSystemLanguage()),
         .graphics_api = static_cast<int>(Settings::GetWorkingGraphicsAPI()),
         .pointer_source = static_cast<int>(GetPointerSource()),
         .gyro_sensitivity_x = GetGyroSensitivityX(),
@@ -494,6 +498,16 @@ void SetMenuSettings(const MenuSettings& s) {
     SetGyroSensitivity(s.gyro_sensitivity_x, s.gyro_sensitivity_y);
     SetLayoutCycleMask(s.layout_cycle_mask);
     SaveConfig();
+
+    // The 3DS system language lives in the CFG NAND savegame rather than config.ini,
+    // so it's written straight through the CFG module.
+    auto cfg = Service::CFG::GetModule(Core::System::GetInstance());
+    const auto language =
+        static_cast<Service::CFG::SystemLanguage>(std::clamp(s.language, 0, 11));
+    if (cfg->GetSystemLanguage() != language) {
+        cfg->SetSystemLanguage(language);
+        cfg->UpdateConfigNANDSavegame();
+    }
 }
 
 } // namespace SwitchFrontend
