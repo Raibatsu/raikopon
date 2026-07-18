@@ -524,6 +524,8 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
+        {"Disable Pipeline Fast Path", s.disable_pipeline_fast_path ? "On" : "Off"},
+        {"Remap Controls", ">"},
     };
 }
 constexpr int kNumSettings = 12;
@@ -565,6 +567,9 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         break;
     case 11:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
+        break;
+    case 12:
+        s.disable_pipeline_fast_path = dir > 0;
         break;
     default:
         break;

@@ -29,6 +29,7 @@ use_vsync =
 async_shader_compilation =
 # Persist compiled shaders to the SD card to cut post first-run stutter (1, default).
 use_disk_shader_cache =
+disable_pipeline_fast_path =
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
 # Compile PICA vertex shaders to native code instead of interpreting them (1, default).
