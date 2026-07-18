@@ -153,11 +153,19 @@ void RunGame(PadState& pad, const std::string& rom) {
                 SwitchFrontend::ToggleQuickMenu();
             }
 
+            constexpr u64 mirror_chord = HidNpadButton_StickL | HidNpadButton_Minus;
+            const bool mirror_chord_edge =
+                (held & mirror_chord) == mirror_chord && (prev_held & mirror_chord) != mirror_chord;
+            if (mirror_chord_edge) {
+                SwitchFrontend::MirrorScreenSides();
+            }
+
             const bool menu_open = SwitchFrontend::IsQuickMenuOpen();
 
             // While the menu is up the guest sees neutral input.
-            SwitchFrontend::UpdateInput(menu_open || chord_edge ? SwitchFrontend::InputState{}
-                                                                : state);
+            SwitchFrontend::UpdateInput(menu_open || chord_edge || mirror_chord_edge
+                                            ? SwitchFrontend::InputState{}
+                                            : state);
 
             if (menu_open && !chord_edge) {
                 const SwitchFrontend::QuickMenuNav nav{
@@ -178,7 +186,8 @@ void RunGame(PadState& pad, const std::string& rom) {
                     SwitchFrontend::CycleScreenLayout();
                 }
                 // Clicking the left stick (L3) toggles the touch pointer.
-                if ((pressed & HidNpadButton_StickL) != 0) {
+                if ((pressed & HidNpadButton_StickL) != 0 &&
+                    (held & HidNpadButton_Minus) == 0) {
                     SwitchFrontend::TogglePointerMode();
                 }
             }

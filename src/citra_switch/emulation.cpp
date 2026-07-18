@@ -224,6 +224,55 @@ void CycleScreenLayout() {
     StepScreenLayout(1);
 }
 
+void MirrorScreenSides() {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+
+    using Settings::SmallScreenPosition;
+    const auto layout = Settings::values.layout_option.GetValue();
+    const bool uses_small_screen_position = layout == Settings::LayoutOption::LargeScreen ||
+                                            layout == Settings::LayoutOption::SideScreen;
+
+    if (uses_small_screen_position) {
+        SmallScreenPosition pos = Settings::values.small_screen_position.GetValue();
+        switch (pos) {
+        case SmallScreenPosition::TopRight:
+            pos = SmallScreenPosition::TopLeft;
+            break;
+        case SmallScreenPosition::MiddleRight:
+            pos = SmallScreenPosition::MiddleLeft;
+            break;
+        case SmallScreenPosition::BottomRight:
+            pos = SmallScreenPosition::BottomLeft;
+            break;
+        case SmallScreenPosition::TopLeft:
+            pos = SmallScreenPosition::TopRight;
+            break;
+        case SmallScreenPosition::MiddleLeft:
+            pos = SmallScreenPosition::MiddleRight;
+            break;
+        case SmallScreenPosition::BottomLeft:
+            pos = SmallScreenPosition::BottomRight;
+            break;
+        case SmallScreenPosition::AboveLarge:
+            pos = SmallScreenPosition::BelowLarge;
+            break;
+        case SmallScreenPosition::BelowLarge:
+            pos = SmallScreenPosition::AboveLarge;
+            break;
+        }
+        Settings::values.small_screen_position = pos;
+        LOG_INFO(Frontend, "Mirrored small screen position");
+    } else {
+        Settings::values.swap_screen = !Settings::values.swap_screen.GetValue();
+        LOG_INFO(Frontend, "Swapped screen sides");
+    }
+
+    system.GPU().Renderer().UpdateCurrentFramebufferLayout();
+}
+
 const char* CurrentScreenLayoutName() {
     return s_layout_presets[s_layout_index].name;
 }
