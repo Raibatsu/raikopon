@@ -209,25 +209,37 @@ void AdvancePointer(const InputState& state, float dt, float left_x, float left_
                        std::memory_order_relaxed);
 }
 
-void SetDefaultBindings() {
+constexpr std::array<Settings::NativeButton::Values, kNumRemappableButtons>
+    kRemappableNativeButtons{
+        Settings::NativeButton::A,     Settings::NativeButton::B,
+        Settings::NativeButton::X,     Settings::NativeButton::Y,
+        Settings::NativeButton::Up,    Settings::NativeButton::Down,
+        Settings::NativeButton::Left,  Settings::NativeButton::Right,
+        Settings::NativeButton::L,     Settings::NativeButton::R,
+        Settings::NativeButton::Start, Settings::NativeButton::Select,
+        Settings::NativeButton::ZL,    Settings::NativeButton::ZR,
+    };
+
+constexpr std::array<const char*, kNumRemappableButtons> kRemappableLabels{
+    "A", "B", "X", "Y", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right",
+    "L", "R", "Start", "Select", "ZL", "ZR",
+};
+
+std::array<InputButton, kNumRemappableButtons> s_bindings{
+    InputButton::A,     InputButton::B,      InputButton::X,      InputButton::Y,
+    InputButton::Up,    InputButton::Down,   InputButton::Left,   InputButton::Right,
+    InputButton::L,     InputButton::R,      InputButton::Start,  InputButton::Select,
+    InputButton::ZL,    InputButton::ZR,
+};
+
+void ApplyBindings() {
     auto& profile = Settings::values.current_input_profile;
     profile.name = "Nintendo Switch";
 
     profile.buttons.fill("engine:null");
-    profile.buttons[Settings::NativeButton::A] = ButtonParam(InputButton::A);
-    profile.buttons[Settings::NativeButton::B] = ButtonParam(InputButton::B);
-    profile.buttons[Settings::NativeButton::X] = ButtonParam(InputButton::X);
-    profile.buttons[Settings::NativeButton::Y] = ButtonParam(InputButton::Y);
-    profile.buttons[Settings::NativeButton::Up] = ButtonParam(InputButton::Up);
-    profile.buttons[Settings::NativeButton::Down] = ButtonParam(InputButton::Down);
-    profile.buttons[Settings::NativeButton::Left] = ButtonParam(InputButton::Left);
-    profile.buttons[Settings::NativeButton::Right] = ButtonParam(InputButton::Right);
-    profile.buttons[Settings::NativeButton::L] = ButtonParam(InputButton::L);
-    profile.buttons[Settings::NativeButton::R] = ButtonParam(InputButton::R);
-    profile.buttons[Settings::NativeButton::Start] = ButtonParam(InputButton::Start);
-    profile.buttons[Settings::NativeButton::Select] = ButtonParam(InputButton::Select);
-    profile.buttons[Settings::NativeButton::ZL] = ButtonParam(InputButton::ZL);
-    profile.buttons[Settings::NativeButton::ZR] = ButtonParam(InputButton::ZR);
+    for (std::size_t i = 0; i < kNumRemappableButtons; ++i) {
+        profile.buttons[kRemappableNativeButtons[i]] = ButtonParam(s_bindings[i]);
+    }
 
     profile.analogs[Settings::NativeAnalog::CirclePad] =
         AnalogParam(Settings::NativeAnalog::CirclePad);
@@ -246,7 +258,55 @@ void InitializeInput() {
     Input::RegisterFactory<Input::AnalogDevice>("switch", std::make_shared<SwitchAnalogFactory>());
     Input::RegisterFactory<Input::MotionDevice>("switch", std::make_shared<SwitchMotionFactory>());
     StoreMotion(kRestAccel, {});
-    SetDefaultBindings();
+    ApplyBindings();
+}
+
+const char* InputButtonName(InputButton button) {
+    switch (button) {
+    case InputButton::A:
+        return "A";
+    case InputButton::B:
+        return "B";
+    case InputButton::X:
+        return "X";
+    case InputButton::Y:
+        return "Y";
+    case InputButton::Up:
+        return "D-Pad Up";
+    case InputButton::Down:
+        return "D-Pad Down";
+    case InputButton::Left:
+        return "D-Pad Left";
+    case InputButton::Right:
+        return "D-Pad Right";
+    case InputButton::L:
+        return "L";
+    case InputButton::R:
+        return "R";
+    case InputButton::Start:
+        return "+";
+    case InputButton::Select:
+        return "-";
+    case InputButton::ZL:
+        return "ZL";
+    case InputButton::ZR:
+        return "ZR";
+    default:
+        return "?";
+    }
+}
+
+const char* RemappableButtonLabel(std::size_t slot) {
+    return slot < kRemappableLabels.size() ? kRemappableLabels[slot] : "?";
+}
+
+std::array<InputButton, kNumRemappableButtons> GetButtonBindings() {
+    return s_bindings;
+}
+
+void SetButtonBindings(const std::array<InputButton, kNumRemappableButtons>& bindings) {
+    s_bindings = bindings;
+    ApplyBindings();
 }
 
 void UpdateInput(const InputState& state) {
