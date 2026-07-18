@@ -7,6 +7,7 @@
 #include "common/alignment.h"
 #include "common/hash.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -96,7 +97,8 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
     }
 
     // Ask the driver if it can give us the pipeline quickly.
-    if (!shaders_pending && instance.IsPipelineCreationCacheControlSupported() && Build(true)) {
+    if (!shaders_pending && !Settings::values.disable_pipeline_fast_path.GetValue() &&
+        instance.IsPipelineCreationCacheControlSupported() && Build(true)) {
         return true;
     }
 
