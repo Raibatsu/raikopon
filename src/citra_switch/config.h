@@ -57,6 +57,8 @@ bool IsRunning();
 // Advances the screen layout to the next preset while a game runs.
 void CycleScreenLayout();
 
+void MirrorScreenSides();
+
 // Steps the screen layout by `delta` presets and applies it live.
 void StepScreenLayout(int delta);
 
