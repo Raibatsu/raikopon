@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace SwitchFrontend {
@@ -23,11 +24,19 @@ enum class InputButton : std::uint8_t {
     Select,
     ZL,
     ZR,
+
+    NumButtons,
 };
 
 constexpr std::uint64_t ButtonMask(InputButton button) {
     return std::uint64_t{1} << static_cast<std::uint8_t>(button);
 }
+
+constexpr std::size_t kNumRemappableButtons = static_cast<std::size_t>(InputButton::NumButtons);
+
+const char* InputButtonName(InputButton button);
+
+const char* RemappableButtonLabel(std::size_t slot);
 
 // A six-axis sample nicely borrowed (read stolen) from libnx.
 struct MotionState {
@@ -82,6 +91,10 @@ void SetPointerSource(PointerSource source);
 int GetGyroSensitivityX();
 int GetGyroSensitivityY();
 void SetGyroSensitivity(int x_percent, int y_percent);
+
+std::array<InputButton, kNumRemappableButtons> GetButtonBindings();
+
+void SetButtonBindings(const std::array<InputButton, kNumRemappableButtons>& bindings);
 
 // Pointer mode lets the stick/gyro drive the 3DS touchscreen with ZL/ZR as the tap.
 bool IsPointerModeActive();

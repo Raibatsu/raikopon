@@ -21,6 +21,7 @@
 #include FT_FREETYPE_H
 
 #include "citra_switch/config.h"
+#include "citra_switch/input.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
 #include "citra_switch/rail_icons.h"
@@ -528,7 +529,8 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Remap Controls", ">"},
     };
 }
-constexpr int kNumSettings = 12;
+constexpr int kNumSettings = 14;
+constexpr int kRemapControlsRow = kNumSettings - 1;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -610,6 +612,29 @@ const char* PathRowLabel(int row) {
 constexpr int kBrowseTop = 108;
 constexpr int kBrowseRowH = 44;
 constexpr int kBrowseRows = (kContentBottom - kBrowseTop) / kBrowseRowH;
+
+constexpr int kRemapTop = 108;
+constexpr int kRemapRowH = 48;
+constexpr int kRemapRows = (kContentBottom - kRemapTop) / kRemapRowH;
+
+constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>,
+                     SwitchFrontend::kNumRemappableButtons>
+    kPhysicalButtonMap{{
+        {HidNpadButton_A, SwitchFrontend::InputButton::A},
+        {HidNpadButton_B, SwitchFrontend::InputButton::B},
+        {HidNpadButton_X, SwitchFrontend::InputButton::X},
+        {HidNpadButton_Y, SwitchFrontend::InputButton::Y},
+        {HidNpadButton_Up, SwitchFrontend::InputButton::Up},
+        {HidNpadButton_Down, SwitchFrontend::InputButton::Down},
+        {HidNpadButton_Left, SwitchFrontend::InputButton::Left},
+        {HidNpadButton_Right, SwitchFrontend::InputButton::Right},
+        {HidNpadButton_L, SwitchFrontend::InputButton::L},
+        {HidNpadButton_R, SwitchFrontend::InputButton::R},
+        {HidNpadButton_Plus, SwitchFrontend::InputButton::Start},
+        {HidNpadButton_Minus, SwitchFrontend::InputButton::Select},
+        {HidNpadButton_ZL, SwitchFrontend::InputButton::ZL},
+        {HidNpadButton_ZR, SwitchFrontend::InputButton::ZR},
+    }};
 
 void DrawListScrollbar(Canvas& c, int track_x, int top, int visible_rows, int row_h, int count,
                        int scroll) {
@@ -983,6 +1008,7 @@ private:
     int selected = 0;          // Index into `filtered`.
     int scroll_row = 0;
     int settings_sel = 0;
+    int settings_scroll = 0;
     int paths_sel = 0;
     std::string search;
     MenuSettings settings{};
@@ -1293,6 +1319,18 @@ private:
         if (nav & DirDown) {
             settings_sel = std::min(kNumSettings - 1, settings_sel + 1);
         }
+        settings_scroll =
+            std::clamp(settings_scroll, std::max(0, settings_sel - kSettingsRows + 1),
+                       std::max(0, std::min(settings_sel, kNumSettings - kSettingsRows)));
+        if (settings_sel == kRemapControlsRow) {
+            if ((nav & DirRight) || (down & HidNpadButton_A)) {
+                RemapControls();
+            }
+            if (down & HidNpadButton_B) {
+                EnterRail();
+            }
+            return false;
+        }
         bool changed = false;
         if (nav & DirLeft) {
             CycleSetting(settings, settings_sel, -1);
@@ -1429,11 +1467,16 @@ private:
                 install_sel = row;
             }
         } else if (tab == Tab::Settings) {
-            const int row = (ty - (kContentTop + 16)) / (kRowH + 8);
-            if (row >= 0 && row < kNumSettings) {
+            const int row = settings_scroll + (ty - kSettingsTop) / (kRowH + 8);
+            const int rows_bottom = kSettingsTop + kSettingsRows * (kRowH + 8);
+            if (ty >= kSettingsTop && ty < rows_bottom && row < kNumSettings) {
                 settings_sel = row;
-                CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
-                settings_dirty = true;
+                if (row == kRemapControlsRow) {
+                    RemapControls();
+                } else {
+                    CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
+                    settings_dirty = true;
+                }
             }
         } else {
             for (int i = 0; i < PathRowCount; ++i) {
@@ -1573,6 +1616,98 @@ private:
         hx += DrawHint(c, hx, hy, "B", has_parent ? "Up" : "Cancel") + 22;
         hx += DrawHint(c, hx, hy, "+", "Select this folder") + 22;
         DrawHint(c, hx, hy, "Y", "Cancel");
+    }
+
+    void RemapControls() {
+        auto bindings = SwitchFrontend::GetButtonBindings();
+        int sel = 0;
+        int scroll = 0;
+        bool capturing = false;
+        Repeater rep;
+
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+
+            if (capturing) {
+                for (const auto& [hid_mask, phys] : kPhysicalButtonMap) {
+                    if ((down & hid_mask) != 0) {
+                        bindings[sel] = phys;
+                        capturing = false;
+                        break;
+                    }
+                }
+            } else {
+                const HidAnalogStickState ls = padGetStickPos(pad_state, 0);
+                constexpr int dz = 12000;
+                const u32 nav = rep.Step((down & HidNpadButton_Up) || ls.y > dz,
+                                         (down & HidNpadButton_Down) || ls.y < -dz, false, false);
+                const int count = static_cast<int>(bindings.size());
+                if (nav & DirUp) {
+                    sel = std::max(0, sel - 1);
+                }
+                if (nav & DirDown) {
+                    sel = std::min(count - 1, sel + 1);
+                }
+                scroll = std::clamp(scroll, std::max(0, sel - kRemapRows + 1),
+                                    std::max(0, std::min(sel, count - kRemapRows)));
+                if (down & HidNpadButton_A) {
+                    capturing = true;
+                }
+                if (down & HidNpadButton_Y) {
+                    bindings[sel] = static_cast<SwitchFrontend::InputButton>(sel);
+                }
+                if (down & HidNpadButton_B) {
+                    break;
+                }
+            }
+
+            DrawRemapControls(bindings, sel, scroll, capturing);
+            Present();
+        }
+        SwitchFrontend::SetButtonBindings(bindings);
+        SwitchFrontend::SaveConfig();
+    }
+
+    void DrawRemapControls(
+        const std::array<SwitchFrontend::InputButton, SwitchFrontend::kNumRemappableButtons>&
+            bindings,
+        int sel, int scroll, bool capturing) {
+        Canvas& c = canvas;
+        c.Clear(kColBg);
+
+        g_font.Draw(c, 40, 44, "Remap controls", 28, kColText);
+        c.FillRect(40, 76, kScreenW - 80, 1, kColRail);
+
+        const int count = static_cast<int>(bindings.size());
+        for (int i = scroll; i < std::min(count, scroll + kRemapRows); ++i) {
+            const int y = kRemapTop + (i - scroll) * kRemapRowH;
+            if (i == sel) {
+                c.FillRoundRect(32, y, kScreenW - 64, kRemapRowH - 4, 8, kColSurfaceHi);
+                c.FillRoundRect(32, y + 8, 4, kRemapRowH - 20, 2, kColAccent);
+            }
+            g_font.Draw(c, 52, CenterBaseline(y, kRemapRowH - 4, 20),
+                        SwitchFrontend::RemappableButtonLabel(i), 20, kColText);
+            const std::string value = SwitchFrontend::InputButtonName(bindings[i]);
+            const int vw = g_font.Measure(value, 20);
+            g_font.Draw(c, kScreenW - 52 - vw, CenterBaseline(y, kRemapRowH - 4, 20), value, 20,
+                        i == sel ? kColAccent : kColTextDim);
+        }
+        DrawListScrollbar(c, kScreenW - 20, kRemapTop, kRemapRows, kRemapRowH, count, scroll);
+
+        c.FillRect(0, kContentBottom, kScreenW, kHintH, kColHintBar);
+        c.FillRect(0, kContentBottom, kScreenW, 1, kColRail);
+        if (capturing) {
+            const std::string prompt = std::string{"Press a button for "} +
+                                       SwitchFrontend::RemappableButtonLabel(sel) + "...";
+            g_font.Draw(c, 40, kContentBottom + (kHintH - 20) / 2, prompt, 20, kColAccent);
+        } else {
+            int hx = 40;
+            const int hy = kContentBottom + (kHintH - 26) / 2;
+            hx += DrawHint(c, hx, hy, "A", "Remap") + 22;
+            hx += DrawHint(c, hx, hy, "Y", "Reset") + 22;
+            DrawHint(c, hx, hy, "B", "Back");
+        }
     }
 
     void DrawPathsPage(Canvas& c) {
@@ -1838,6 +1973,10 @@ private:
     }
 
     static constexpr int kRowH = 41;
+    static constexpr int kSettingsFooterH = 84;
+    static constexpr int kSettingsTop = kContentTop + 16;
+    static constexpr int kSettingsRows =
+        (kContentBottom - kSettingsFooterH - kSettingsTop) / (kRowH + 8);
 
     void DrawSettingsPage(Canvas& c) {
         DrawHeader(c, "");
@@ -1845,8 +1984,9 @@ private:
         const auto rows = BuildSettingRows(settings);
         const int x = kContentX + 24;
         const int w = kContentW - 48;
-        int y = kContentTop + 16;
-        for (int i = 0; i < static_cast<int>(rows.size()); ++i) {
+        const int count = static_cast<int>(rows.size());
+        for (int i = settings_scroll; i < std::min(count, settings_scroll + kSettingsRows); ++i) {
+            const int y = kSettingsTop + (i - settings_scroll) * (kRowH + 8);
             const bool on = i == settings_sel;
             if (on) {
                 c.FillRoundRect(x, y, w, kRowH, 10, content_focus ? kColSurfaceHi : kColSurface);
@@ -1857,12 +1997,14 @@ private:
             const int vw = g_font.Measure(rows[i].value, 22);
             g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), rows[i].value, 22,
                         on && content_focus ? kColAccent : kColTextDim);
-            y += kRowH + 8;
         }
-        y += 8;
+        DrawListScrollbar(c, kScreenW - 10, kSettingsTop, kSettingsRows, kRowH + 8, count,
+                          settings_scroll);
+
+        const int footer_y = kSettingsTop + kSettingsRows * (kRowH + 8) + 8;
         const std::string backend = std::string{"Graphics backend: "} + BackendName(settings.graphics_api);
-        g_font.Draw(c, x + 20, y + 16, backend, 18, kColTextDim);
-        g_font.Draw(c, x + 20, y + 42, "Changes apply the next time you launch a game.", 18,
+        g_font.Draw(c, x + 20, footer_y + 16, backend, 18, kColTextDim);
+        g_font.Draw(c, x + 20, footer_y + 42, "Changes apply the next time you launch a game.", 18,
                     kColTextDim);
 
         if (focus == Focus::Rail) {
