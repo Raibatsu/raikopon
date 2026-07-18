@@ -463,7 +463,7 @@ bool RasterizerVulkan::AccelerateDrawBatchInternal(bool is_indexed) {
         SetupIndexArray();
     }
 
-    const bool wait_built = !async_shaders || regs.pipeline.num_vertices <= 6;
+    const bool wait_built = !async_shaders;
     if (!pipeline_cache.BindPipeline(pipeline_info, wait_built)) {
         return true;
     }
