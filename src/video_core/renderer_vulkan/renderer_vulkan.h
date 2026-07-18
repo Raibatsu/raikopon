@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <array>
 #include <chrono>
+#include <vector>
 
 #include "common/common_types.h"
 #include "common/math_util.h"
@@ -88,6 +90,7 @@ public:
 private:
     void ReloadPipeline(Settings::StereoRenderOption render_3d);
     void CompileShaders();
+    void CreateOverlayFont();
     void BuildLayouts();
     void BuildPipelines();
     void ConfigureFramebufferTexture(TextureInfo& texture,
@@ -116,7 +119,22 @@ private:
 
     void DrawCursor(const Layout::FramebufferLayout& layout);
 
-    void DrawFpsOverlay(const Layout::FramebufferLayout& layout);
+    // On-screen overlay geometry.
+    struct OverlayDraw {
+        struct Batch {
+            std::array<float, 4> color;
+            u32 first; // Vertex offset from base_vertex.
+            u32 count;
+        };
+        std::vector<Batch> batches;
+        u32 base_vertex{};
+    };
+
+    OverlayDraw PrepareFpsOverlay(const Layout::FramebufferLayout& layout);
+
+    OverlayDraw PrepareQuickMenu(const Layout::FramebufferLayout& layout);
+
+    void RecordOverlay(OverlayDraw overlay);
 
     void LoadFBToScreenInfo(const Pica::FramebufferConfig& framebuffer, ScreenInfo& screen_info,
                             bool right_eye);
@@ -135,6 +153,11 @@ private:
     RenderManager renderpass_cache;
     PresentWindow main_present_window;
     StreamBuffer vertex_buffer;
+    // Dedicated ring for overlay geometry.
+    // This is imperitive to having the menu work and definitely didn't take me
+    // multiple hours of debugging to figure out the menu was eating itself.
+    // See the note in renderer_vulkan.cpp regarding why.
+    StreamBuffer overlay_vertex_buffer;
     DescriptorUpdateQueue update_queue;
     RasterizerVulkan rasterizer;
     std::unique_ptr<PresentWindow> secondary_present_window_ptr;
@@ -156,10 +179,18 @@ private:
     vk::Pipeline cursor_pipeline{};
     vk::UniquePipelineLayout cursor_pipeline_layout{};
 
-    // Draw a FPS counter over the top-left side of the screen.
+    // Text is drawn with a pre-baked font that lies in overlay_font.h/cpp
+    vk::ShaderModule overlay_vertex_shader{};
     vk::ShaderModule overlay_fragment_shader{};
     vk::Pipeline overlay_pipeline{};
     vk::UniquePipelineLayout overlay_pipeline_layout{};
+    vk::Image overlay_font_image{};
+    VmaAllocation overlay_font_allocation{};
+    vk::ImageView overlay_font_view{};
+    vk::Sampler overlay_font_sampler{};
+    vk::UniqueDescriptorSetLayout overlay_descriptor_layout{};
+    vk::UniqueDescriptorPool overlay_descriptor_pool{};
+    vk::DescriptorSet overlay_descriptor_set{};
     float overlay_game_fps = 0.0f;
     std::chrono::steady_clock::time_point overlay_last_update{};
 };

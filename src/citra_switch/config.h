@@ -57,6 +57,12 @@ bool IsRunning();
 // Advances the screen layout to the next preset while a game runs.
 void CycleScreenLayout();
 
+// Steps the screen layout by `delta` presets and applies it live.
+void StepScreenLayout(int delta);
+
+// The name of the currently selected screen layout preset.
+const char* CurrentScreenLayoutName();
+
 // True if the most recent BootRom never reached a successful system.Load.
 bool LoadFailed();
 

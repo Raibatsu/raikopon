@@ -350,6 +350,10 @@ void TogglePointerMode() {
     s_pointer_mode.store(!s_pointer_mode.load(std::memory_order_relaxed), std::memory_order_relaxed);
 }
 
+void SetPointerMode(bool enabled) {
+    s_pointer_mode.store(enabled, std::memory_order_relaxed);
+}
+
 void ResetPointer() {
     s_pointer_mode.store(false, std::memory_order_relaxed);
     s_pointer_fx.store(0.5f, std::memory_order_relaxed);

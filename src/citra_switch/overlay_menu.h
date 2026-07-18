@@ -1,0 +1,38 @@
+// SPDX-FileCopyrightText: Azahar Emulator Project
+// Copyright(c) 2026: PalindromicBreadLoaf(palindromicbreadloaf@tuta.com)
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+// An in-game menu to change quick settings that apply on-the-fly.
+namespace SwitchFrontend {
+
+// What the caller should do after a navigation frame.
+enum class QuickMenuAction {
+    None,
+    Close,
+    ExitGame,
+};
+
+// One frame of navigation.
+struct QuickMenuNav {
+    bool up{};
+    bool down{};
+    bool left{};
+    bool right{};
+    bool confirm{}; // A
+    bool cancel{};  // B
+};
+
+// True while the overlay is showing.
+bool IsQuickMenuOpen();
+
+// Opens/closes the overlay saving any changed settings.
+void OpenQuickMenu();
+void CloseQuickMenu();
+void ToggleQuickMenu();
+
+// Applies one navigation frame, updates the live settings, and repaints the overlay.
+QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav);
+
+} // namespace SwitchFrontend

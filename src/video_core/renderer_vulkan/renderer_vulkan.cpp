@@ -10,6 +10,7 @@
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "video_core/gpu.h"
+#include "video_core/overlay.h"
 #include "video_core/pica/pica_core.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 #include "video_core/renderer_vulkan/vk_memory_util.h"
@@ -23,12 +24,15 @@
 #include "video_core/host_shaders/vulkan_cursor_frag.h"
 #include "video_core/host_shaders/vulkan_cursor_vert.h"
 #include "video_core/host_shaders/vulkan_overlay_frag.h"
+#include "video_core/host_shaders/vulkan_overlay_vert.h"
+#include "video_core/renderer_vulkan/overlay_font.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 #include <vector>
 
 #include <vk_mem_alloc.h>
@@ -55,6 +59,11 @@ struct ScreenRectVertex {
 };
 
 constexpr u32 VERTEX_BUFFER_SIZE = sizeof(ScreenRectVertex) * 8192;
+
+// The on-screen overlay gets its own ring, kept separate from the present vertex_buffer above.
+// Sharing a ring causes memory exhaustion and thus the menu to overwrite its own tail,
+// causing a crash.
+constexpr u32 OVERLAY_VERTEX_BUFFER_SIZE = sizeof(float) * 4 * 32768;
 
 constexpr std::array<f32, 4 * 4> MakeOrthographicMatrix(u32 width, u32 height) {
     // clang-format off
@@ -124,6 +133,8 @@ RendererVulkan::RendererVulkan(Core::System& system, Pica::PicaCore& pica_,
       main_present_window{window, instance, scheduler, IsLowRefreshRate()},
       vertex_buffer{instance, scheduler, vk::BufferUsageFlagBits::eVertexBuffer,
                     VERTEX_BUFFER_SIZE},
+      overlay_vertex_buffer{instance, scheduler, vk::BufferUsageFlagBits::eVertexBuffer,
+                            OVERLAY_VERTEX_BUFFER_SIZE},
       update_queue{instance}, rasterizer{memory,
                                          pica,
                                          system.CustomTexManager(),
@@ -136,6 +147,7 @@ RendererVulkan::RendererVulkan(Core::System& system, Pica::PicaCore& pica_,
                                          main_present_window.ImageCount()},
       present_heap{instance, scheduler.GetMasterSemaphore(), PRESENT_BINDINGS, 32} {
     CompileShaders();
+    CreateOverlayFont();
     BuildLayouts();
     BuildPipelines();
     if (secondary_window) {
@@ -170,7 +182,11 @@ RendererVulkan::~RendererVulkan() {
     device.destroyShaderModule(cursor_fragment_shader);
 
     device.destroyPipeline(overlay_pipeline);
+    device.destroyShaderModule(overlay_vertex_shader);
     device.destroyShaderModule(overlay_fragment_shader);
+    device.destroySampler(overlay_font_sampler);
+    device.destroyImageView(overlay_font_view);
+    vmaDestroyImage(instance.GetAllocator(), overlay_font_image, overlay_font_allocation);
 }
 
 void RendererVulkan::PrepareRendertarget() {
@@ -317,6 +333,8 @@ void RendererVulkan::CompileShaders() {
     cursor_fragment_shader =
         Compile(HostShaders::VULKAN_CURSOR_FRAG, vk::ShaderStageFlagBits::eFragment, device);
 
+    overlay_vertex_shader =
+        Compile(HostShaders::VULKAN_OVERLAY_VERT, vk::ShaderStageFlagBits::eVertex, device);
     overlay_fragment_shader =
         Compile(HostShaders::VULKAN_OVERLAY_FRAG, vk::ShaderStageFlagBits::eFragment, device);
 
@@ -341,6 +359,185 @@ void RendererVulkan::CompileShaders() {
     }
 }
 
+void RendererVulkan::CreateOverlayFont() {
+    vk::Device device = instance.GetDevice();
+
+    // R8 coverage atlas holding the glyphs.
+    const vk::ImageCreateInfo image_info = {
+        .imageType = vk::ImageType::e2D,
+        .format = vk::Format::eR8Unorm,
+        .extent = {static_cast<u32>(OverlayFont::kAtlasWidth),
+                   static_cast<u32>(OverlayFont::kAtlasHeight), 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    };
+    const VmaAllocationCreateInfo alloc_info = {
+        .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+    };
+    VkImage unsafe_image{};
+    VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
+    VkResult result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
+                                     &unsafe_image, &overlay_font_allocation, nullptr);
+    if (result != VK_SUCCESS) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan, "Failed allocating overlay font atlas with error {}", result);
+        UNREACHABLE();
+    }
+    overlay_font_image = vk::Image{unsafe_image};
+
+    const vk::ImageViewCreateInfo view_info = {
+        .image = overlay_font_image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8Unorm,
+        .subresourceRange{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+    overlay_font_view = device.createImageView(view_info);
+
+    const vk::SamplerCreateInfo sampler_info = {
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        .anisotropyEnable = false,
+        .compareEnable = false,
+        .borderColor = vk::BorderColor::eFloatTransparentBlack,
+        .unnormalizedCoordinates = false,
+    };
+    overlay_font_sampler = device.createSampler(sampler_info);
+
+    const vk::DeviceSize atlas_size = sizeof(OverlayFont::kAtlas);
+    const vk::BufferCreateInfo staging_info = {
+        .size = atlas_size,
+        .usage = vk::BufferUsageFlagBits::eTransferSrc,
+    };
+    const VmaAllocationCreateInfo staging_alloc_info = {
+        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    VkBuffer unsafe_staging{};
+    VmaAllocation staging_allocation{};
+    VmaAllocationInfo staging_mapped{};
+    VkBufferCreateInfo unsafe_staging_info = static_cast<VkBufferCreateInfo>(staging_info);
+    result = vmaCreateBuffer(instance.GetAllocator(), &unsafe_staging_info, &staging_alloc_info,
+                             &unsafe_staging, &staging_allocation, &staging_mapped);
+    if (result != VK_SUCCESS) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan, "Failed allocating overlay font staging buffer with error {}",
+                     result);
+        UNREACHABLE();
+    }
+    std::memcpy(staging_mapped.pMappedData, OverlayFont::kAtlas, atlas_size);
+    vk::Buffer staging_buffer{unsafe_staging};
+
+    renderpass_cache.EndRendering();
+    scheduler.Record([image = overlay_font_image, staging_buffer,
+                      width = static_cast<u32>(OverlayFont::kAtlasWidth),
+                      height = static_cast<u32>(OverlayFont::kAtlasHeight)](
+                         vk::CommandBuffer cmdbuf) {
+        const vk::ImageSubresourceRange range = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        const vk::ImageMemoryBarrier to_transfer = {
+            .srcAccessMask = vk::AccessFlagBits::eNone,
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = range,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                               vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, to_transfer);
+
+        const vk::BufferImageCopy copy = {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {width, height, 1},
+        };
+        cmdbuf.copyBufferToImage(staging_buffer, image, vk::ImageLayout::eTransferDstOptimal, copy);
+
+        const vk::ImageMemoryBarrier to_shader = {
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = range,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                               vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, to_shader);
+    });
+    scheduler.Finish();
+    vmaDestroyBuffer(instance.GetAllocator(), staging_buffer, staging_allocation);
+
+    // A persistent descriptor set bound to the atlas.
+    const vk::DescriptorSetLayoutBinding binding = {
+        .binding = 0,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+        .stageFlags = vk::ShaderStageFlagBits::eFragment,
+    };
+    overlay_descriptor_layout = device.createDescriptorSetLayoutUnique({
+        .bindingCount = 1,
+        .pBindings = &binding,
+    });
+    const vk::DescriptorPoolSize pool_size = {
+        .type = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+    };
+    overlay_descriptor_pool = device.createDescriptorPoolUnique({
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size,
+    });
+    const vk::DescriptorSetLayout set_layout = *overlay_descriptor_layout;
+    overlay_descriptor_set = device.allocateDescriptorSets({
+        .descriptorPool = *overlay_descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &set_layout,
+    })[0];
+
+    const vk::DescriptorImageInfo image_desc = {
+        .sampler = overlay_font_sampler,
+        .imageView = overlay_font_view,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    const vk::WriteDescriptorSet write = {
+        .dstSet = overlay_descriptor_set,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .pImageInfo = &image_desc,
+    };
+    device.updateDescriptorSets(write, {});
+}
+
 void RendererVulkan::BuildLayouts() {
     const vk::PushConstantRange push_range = {
         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -360,13 +557,16 @@ void RendererVulkan::BuildLayouts() {
     const vk::PipelineLayoutCreateInfo cursor_layout_info = {};
     cursor_pipeline_layout = instance.GetDevice().createPipelineLayoutUnique(cursor_layout_info);
 
-    // The FPS overlay reuses the cursor's position-only vertex layout but passes a solid color to the fragment stage.
+    // The overlay samples the font atlas and takes a per-batch tint via push constant.
     const vk::PushConstantRange overlay_push_range = {
         .stageFlags = vk::ShaderStageFlagBits::eFragment,
         .offset = 0,
         .size = sizeof(float) * 4,
     };
+    const vk::DescriptorSetLayout overlay_set_layout = *overlay_descriptor_layout;
     const vk::PipelineLayoutCreateInfo overlay_layout_info = {
+        .setLayoutCount = 1,
+        .pSetLayouts = &overlay_set_layout,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &overlay_push_range,
     };
@@ -627,22 +827,30 @@ void RendererVulkan::BuildPipelines() {
     {
         const vk::VertexInputBindingDescription overlay_binding = {
             .binding = 0,
-            .stride = sizeof(float) * 2,
+            .stride = sizeof(float) * 4,
             .inputRate = vk::VertexInputRate::eVertex,
         };
 
-        const vk::VertexInputAttributeDescription overlay_attribute = {
-            .location = 0,
-            .binding = 0,
-            .format = vk::Format::eR32G32Sfloat,
-            .offset = 0,
+        const std::array overlay_attributes = {
+            vk::VertexInputAttributeDescription{
+                .location = 0,
+                .binding = 0,
+                .format = vk::Format::eR32G32Sfloat,
+                .offset = 0,
+            },
+            vk::VertexInputAttributeDescription{
+                .location = 1,
+                .binding = 0,
+                .format = vk::Format::eR32G32Sfloat,
+                .offset = sizeof(float) * 2,
+            },
         };
 
         const vk::PipelineVertexInputStateCreateInfo overlay_vertex_input = {
             .vertexBindingDescriptionCount = 1,
             .pVertexBindingDescriptions = &overlay_binding,
-            .vertexAttributeDescriptionCount = 1,
-            .pVertexAttributeDescriptions = &overlay_attribute,
+            .vertexAttributeDescriptionCount = static_cast<u32>(overlay_attributes.size()),
+            .pVertexAttributeDescriptions = overlay_attributes.data(),
         };
 
         const vk::PipelineInputAssemblyStateCreateInfo overlay_input_assembly = {
@@ -712,7 +920,7 @@ void RendererVulkan::BuildPipelines() {
         const std::array overlay_shader_stages = {
             vk::PipelineShaderStageCreateInfo{
                 .stage = vk::ShaderStageFlagBits::eVertex,
-                .module = cursor_vertex_shader,
+                .module = overlay_vertex_shader,
                 .pName = "main",
             },
             vk::PipelineShaderStageCreateInfo{
@@ -1155,6 +1363,12 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
         ReloadPipeline(layout.render_3d_mode);
     }
 
+    // Build overlay geometry before the present render pass opens otherwise a flush
+    // can happen mid build causing a crash.
+    renderpass_cache.EndRendering();
+    OverlayDraw fps_overlay = PrepareFpsOverlay(layout);
+    OverlayDraw quick_menu = PrepareQuickMenu(layout);
+
     PrepareDraw(frame, layout);
 
     const auto& top_screen = layout.top_screen;
@@ -1193,7 +1407,8 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
 
     DrawCursor(layout);
 
-    DrawFpsOverlay(layout);
+    RecordOverlay(std::move(fps_overlay));
+    RecordOverlay(std::move(quick_menu));
 
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
 }
@@ -1259,41 +1474,68 @@ void RendererVulkan::DrawCursor(const Layout::FramebufferLayout& layout) {
 }
 
 namespace {
-struct FpsFontGlyph {
-    char ch;
-    std::array<u8, 5> rows;
-};
+// Builds overlay geometry in output-pixel coordinates, emitting position + atlas-UV vertices.
+class OverlayBuilder {
+public:
+    OverlayBuilder(std::vector<float>& verts, float width, float height)
+        : verts{verts}, inv_w{2.0f / width}, inv_h{2.0f / height} {}
 
-constexpr std::array<FpsFontGlyph, 14> FPS_FONT = {{
-    {'0', {0b111, 0b101, 0b101, 0b101, 0b111}},
-    {'1', {0b010, 0b110, 0b010, 0b010, 0b111}},
-    {'2', {0b111, 0b001, 0b111, 0b100, 0b111}},
-    {'3', {0b111, 0b001, 0b111, 0b001, 0b111}},
-    {'4', {0b101, 0b101, 0b111, 0b001, 0b001}},
-    {'5', {0b111, 0b100, 0b111, 0b001, 0b111}},
-    {'6', {0b111, 0b100, 0b111, 0b101, 0b111}},
-    {'7', {0b111, 0b001, 0b001, 0b001, 0b001}},
-    {'8', {0b111, 0b101, 0b111, 0b101, 0b111}},
-    {'9', {0b111, 0b101, 0b111, 0b001, 0b111}},
-    {'F', {0b111, 0b100, 0b111, 0b100, 0b100}},
-    {'P', {0b111, 0b101, 0b111, 0b100, 0b100}},
-    {'S', {0b111, 0b100, 0b111, 0b001, 0b111}},
-    {' ', {0b000, 0b000, 0b000, 0b000, 0b000}},
-}};
+    u32 VertexCount() const {
+        return static_cast<u32>(verts.size() / kFloatsPerVertex);
+    }
 
-const std::array<u8, 5>* FindFpsGlyph(char c) {
-    for (const auto& glyph : FPS_FONT) {
-        if (glyph.ch == c) {
-            return &glyph.rows;
+    void AddRect(float x0, float y0, float x1, float y1) {
+        PushQuad(x0, y0, x1, y1, OverlayFont::kWhiteU, OverlayFont::kWhiteV, OverlayFont::kWhiteU,
+                 OverlayFont::kWhiteV);
+    }
+
+    // Width in output pixels that a string occupies.
+    static float Measure(std::string_view text, float scale) {
+        float width = 0.0f;
+        for (char c : text) {
+            width += OverlayFont::GlyphFor(c).xadvance * scale;
+        }
+        return width;
+    }
+
+    // Draws a string with its line box's top-left at (ox, oy).
+    void AddText(float ox, float oy, std::string_view text, float scale) {
+        float pen = ox;
+        for (char c : text) {
+            const OverlayFont::Glyph& g = OverlayFont::GlyphFor(c);
+            if (g.w > 0.0f && g.h > 0.0f) {
+                const float qx = pen + g.xoff * scale;
+                const float qy = oy + g.yoff * scale;
+                PushQuad(qx, qy, qx + g.w * scale, qy + g.h * scale, g.u0, g.v0, g.u1, g.v1);
+            }
+            pen += g.xadvance * scale;
         }
     }
-    return nullptr;
-}
+
+private:
+    static constexpr int kFloatsPerVertex = 4;
+
+    void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1) {
+        const float l = x0 * inv_w - 1.0f;
+        const float r = x1 * inv_w - 1.0f;
+        const float t = y0 * inv_h - 1.0f;
+        const float b = y1 * inv_h - 1.0f;
+        verts.insert(verts.end(), {
+                                      l, t, u0, v0, r, t, u1, v0, r, b, u1, v1,
+                                      l, t, u0, v0, r, b, u1, v1, l, b, u0, v1,
+                                  });
+    }
+
+    std::vector<float>& verts;
+    float inv_w;
+    float inv_h;
+};
 } // namespace
 
-void RendererVulkan::DrawFpsOverlay(const Layout::FramebufferLayout& layout) {
+RendererVulkan::OverlayDraw RendererVulkan::PrepareFpsOverlay(
+    const Layout::FramebufferLayout& layout) {
     if (!Settings::values.show_fps.GetValue()) {
-        return;
+        return {};
     }
 
     // Refresh the frame rate a couple of times a second so the reading stays legible.
@@ -1311,75 +1553,247 @@ void RendererVulkan::DrawFpsOverlay(const Layout::FramebufferLayout& layout) {
     const float w = static_cast<float>(layout.width);
     const float h = static_cast<float>(layout.height);
     if (w <= 0.0f || h <= 0.0f) {
-        return;
+        return {};
     }
 
-    // Scale the font "pixel" to the output so the counter is a consistent size everywhere.
-    const float px = std::max(2.0f, std::round(h / 180.0f));
-    const float glyph_h = 5.0f * px;
-    const float advance = 3.0f * px + px; // glyph width plus a one-column gap
-    const float margin = 3.0f * px;
+    // Font em size scaled to the output so the counter stays a consistent size everywhere.
+    const float em = std::max(14.0f, std::round(h / 32.0f));
+    const float scale = em / OverlayFont::kBakePixelHeight;
+    const float margin = std::round(em * 0.6f);
+    const float pad = std::round(em * 0.35f);
+
+    // A *tasteful* box around the menu.
+    float ink_top = OverlayFont::kAscent;
+    float ink_bottom = 0.0f;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const OverlayFont::Glyph& g = OverlayFont::GlyphFor(*p);
+        if (g.h > 0.0f) {
+            ink_top = std::min(ink_top, g.yoff);
+            ink_bottom = std::max(ink_bottom, g.yoff + g.h);
+        }
+    }
 
     std::vector<float> verts;
-    verts.reserve(512);
+    verts.reserve(256);
+    OverlayBuilder builder{verts, w, h};
 
-    const auto add_rect = [&](float x0, float y0, float x1, float y1) {
-        const float l = x0 / w * 2.0f - 1.0f;
-        const float r = x1 / w * 2.0f - 1.0f;
-        const float t = y0 / h * 2.0f - 1.0f;
-        const float b = y1 / h * 2.0f - 1.0f;
-        verts.insert(verts.end(), {l, t, r, t, r, b, l, t, r, b, l, b});
-    };
+    const float text_w = OverlayBuilder::Measure(text, scale);
 
-    const int glyph_count = static_cast<int>(std::strlen(text));
-    const float text_w = glyph_count > 0 ? glyph_count * advance - px : 0.0f;
+    builder.AddRect(margin - pad, margin + ink_top * scale - pad, margin + text_w + pad,
+                    margin + ink_bottom * scale + pad);
+    const u32 box_vertices = builder.VertexCount();
 
-    // Background box first then the glyph pixels.
-    const float pad = px;
-    add_rect(margin - pad, margin - pad, margin + text_w + pad, margin + glyph_h + pad);
-
-    float pen_x = margin;
-    for (const char* p = text; *p != '\0'; ++p, pen_x += advance) {
-        const std::array<u8, 5>* rows = FindFpsGlyph(*p);
-        if (rows == nullptr) {
-            continue;
-        }
-        for (int ry = 0; ry < 5; ++ry) {
-            const u8 bits = (*rows)[ry];
-            for (int cx = 0; cx < 3; ++cx) {
-                if (bits & (1u << (2 - cx))) {
-                    const float x0 = pen_x + cx * px;
-                    const float y0 = margin + ry * px;
-                    add_rect(x0, y0, x0 + px, y0 + px);
-                }
-            }
-        }
-    }
-
-    constexpr u32 box_vertices = 6;
-    const u32 glyph_vertices = static_cast<u32>(verts.size() / 2) - box_vertices;
+    builder.AddText(margin, margin, text, scale);
+    const u32 glyph_vertices = builder.VertexCount() - box_vertices;
 
     const u64 size = verts.size() * sizeof(float);
-    auto [data, offset, invalidate] = vertex_buffer.Map(size, 16);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
     std::memcpy(data, verts.data(), size);
-    vertex_buffer.Commit(size);
+    overlay_vertex_buffer.Commit(size);
 
-    const u32 first_vertex = static_cast<u32>(offset) / (sizeof(float) * 2);
+    constexpr std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
+    constexpr std::array<float, 4> text_color = {0.53f, 1.0f, 0.53f, 1.0f};
 
-    scheduler.Record([this, first_vertex, glyph_vertices](vk::CommandBuffer cmdbuf) {
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches.push_back({box_color, 0, box_vertices});
+    if (glyph_vertices > 0) {
+        overlay.batches.push_back({text_color, box_vertices, glyph_vertices});
+    }
+    return overlay;
+}
+
+RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
+    const Layout::FramebufferLayout& layout) {
+    if (!VideoCore::IsOverlayMenuVisible()) {
+        return {};
+    }
+    const VideoCore::OverlayMenuState state = VideoCore::GetOverlayMenuState();
+    if (!state.visible) {
+        return {};
+    }
+
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return {};
+    }
+
+    std::vector<float> verts;
+    verts.reserve(2048);
+    OverlayBuilder builder{verts, w, h};
+
+    // Font em size scaled to the output so the menu is a consistent size everywhere.
+    const float em = std::max(18.0f, std::round(h / 26.0f));
+    const float title_em = std::round(em * 1.18f);
+    const float scale = em / OverlayFont::kBakePixelHeight;
+    const float title_scale = title_em / OverlayFont::kBakePixelHeight;
+    const float line_h = OverlayFont::kLineHeight * scale;
+    const float title_line_h = OverlayFont::kLineHeight * title_scale;
+    const float row_h = std::round(line_h * 1.5f);
+    const float footer_h = line_h;
+    const float pad = std::round(em * 0.9f);
+    const float sep_gap = std::round(row_h * 0.4f);
+    const float col_gap = em * 1.4f;
+
+    // Size the panel to its contents and centre it.
+    float max_row_w = 0.0f;
+    for (const auto& item : state.items) {
+        float rw = OverlayBuilder::Measure(item.label, scale);
+        if (!item.value.empty()) {
+            rw += col_gap + OverlayBuilder::Measure(item.value, scale);
+        }
+        max_row_w = std::max(max_row_w, rw);
+    }
+    const int n = static_cast<int>(state.items.size());
+    const float inner_w = std::max({max_row_w, OverlayBuilder::Measure(state.title, title_scale),
+                                    OverlayBuilder::Measure(state.hint, scale)});
+    const float panel_w = std::clamp(inner_w + 2.0f * pad, 0.35f * w, 0.92f * w);
+    const float panel_h =
+        pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap + footer_h + pad;
+    const float panel_x0 = std::round((w - panel_w) / 2.0f);
+    const float panel_y0 = std::round((h - panel_h) / 2.0f);
+    const float panel_x1 = panel_x0 + panel_w;
+    const float panel_y1 = panel_y0 + panel_h;
+
+    std::vector<OverlayDraw::Batch> batches;
+    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
+        const u32 count = builder.VertexCount() - start;
+        if (count > 0) {
+            batches.push_back({color, start, count});
+        }
+    };
+
+    constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.55f};
+    constexpr std::array<float, 4> c_panel = {0.10f, 0.11f, 0.14f, 0.96f};
+    constexpr std::array<float, 4> c_accent = {0.30f, 0.34f, 0.45f, 0.9f};
+    constexpr std::array<float, 4> c_highlight = {0.20f, 0.45f, 0.85f, 0.9f};
+    constexpr std::array<float, 4> c_title = {1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr std::array<float, 4> c_row = {0.82f, 0.85f, 0.92f, 1.0f};
+    constexpr std::array<float, 4> c_sel = {1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr std::array<float, 4> c_footer = {0.60f, 0.63f, 0.72f, 1.0f};
+
+    // Dim the running game.
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(0.0f, 0.0f, w, h);
+        emit(c_dim, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0, panel_y0, panel_x1, panel_y1);
+        emit(c_panel, s);
+    }
+
+    // Walk down the panel building each section's vertical extents.
+    float pen_y = panel_y0 + pad;
+    const float title_x =
+        std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.title, title_scale)) / 2.0f);
+    const float title_y = pen_y;
+    pen_y += title_line_h + sep_gap * 0.5f;
+    const float underline_y = std::round(pen_y);
+    pen_y += sep_gap * 0.5f;
+    const float rows_top = pen_y;
+    pen_y = rows_top + static_cast<float>(n) * row_h + sep_gap * 0.5f;
+    const float footer_line_y = std::round(pen_y);
+    pen_y += sep_gap * 0.5f;
+    const float footer_y = pen_y;
+
+    // Title underline and footer separator.
+    {
+        const u32 s = builder.VertexCount();
+        const float lx0 = panel_x0 + pad;
+        const float lx1 = panel_x1 - pad;
+        const float th = std::max(1.0f, std::round(em / 12.0f));
+        builder.AddRect(lx0, underline_y, lx1, underline_y + th);
+        builder.AddRect(lx0, footer_line_y, lx1, footer_line_y + th);
+        emit(c_accent, s);
+    }
+
+    const bool has_selection = n > 0 && state.selected >= 0 && state.selected < n;
+
+    // Highlight bar behind the selected row.
+    if (has_selection) {
+        const u32 s = builder.VertexCount();
+        const float top = rows_top + static_cast<float>(state.selected) * row_h;
+        const float inset = std::round(row_h * 0.08f);
+        builder.AddRect(panel_x0 + pad * 0.5f, top + inset, panel_x1 - pad * 0.5f,
+                        top + row_h - inset);
+        emit(c_highlight, s);
+    }
+
+    // Title.
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddText(title_x, title_y, state.title, title_scale);
+        emit(c_title, s);
+    }
+
+    const auto add_row = [&](int i) {
+        const auto& item = state.items[i];
+        const float top = rows_top + static_cast<float>(i) * row_h;
+        const float ty = std::round(top + (row_h - line_h) / 2.0f);
+        builder.AddText(panel_x0 + pad, ty, item.label, scale);
+        if (!item.value.empty()) {
+            const float vx = panel_x1 - pad - OverlayBuilder::Measure(item.value, scale);
+            builder.AddText(vx, ty, item.value, scale);
+        }
+    };
+
+    // Draw non-selected rows, then the selected row brighter on top of its highlight.
+    {
+        const u32 s = builder.VertexCount();
+        for (int i = 0; i < n; ++i) {
+            if (i != state.selected) {
+                add_row(i);
+            }
+        }
+        emit(c_row, s);
+    }
+    if (has_selection) {
+        const u32 s = builder.VertexCount();
+        add_row(state.selected);
+        emit(c_sel, s);
+    }
+
+    // Footer hint.
+    if (!state.hint.empty()) {
+        const u32 s = builder.VertexCount();
+        const float fx =
+            std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.hint, scale)) / 2.0f);
+        builder.AddText(fx, footer_y, state.hint, scale);
+        emit(c_footer, s);
+    }
+
+    if (batches.empty()) {
+        return {};
+    }
+
+    const u32 size = static_cast<u32>(verts.size() * sizeof(float));
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    overlay_vertex_buffer.Commit(size);
+
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches = std::move(batches);
+    return overlay;
+}
+
+void RendererVulkan::RecordOverlay(OverlayDraw overlay) {
+    if (overlay.batches.empty()) {
+        return;
+    }
+    scheduler.Record([this, base_vertex = overlay.base_vertex,
+                      batches = std::move(overlay.batches)](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, overlay_pipeline);
-        cmdbuf.bindVertexBuffers(0, vertex_buffer.Handle(), {0});
-
-        const std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
-        cmdbuf.pushConstants(*overlay_pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
-                             sizeof(box_color), box_color.data());
-        cmdbuf.draw(box_vertices, 1, first_vertex, 0);
-
-        if (glyph_vertices > 0) {
-            const std::array<float, 4> text_color = {0.53f, 1.0f, 0.53f, 1.0f};
+        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *overlay_pipeline_layout, 0,
+                                  overlay_descriptor_set, {});
+        cmdbuf.bindVertexBuffers(0, overlay_vertex_buffer.Handle(), {0});
+        for (const auto& b : batches) {
             cmdbuf.pushConstants(*overlay_pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
-                                 sizeof(text_color), text_color.data());
-            cmdbuf.draw(glyph_vertices, 1, first_vertex + box_vertices, 0);
+                                 static_cast<u32>(b.color.size() * sizeof(float)), b.color.data());
+            cmdbuf.draw(b.count, 1, base_vertex + b.first, 0);
         }
     });
 }

@@ -19,6 +19,8 @@ add_executable(citra_switch
     menu.h
     menu_data.cpp
     menu_data.h
+    overlay_menu.cpp
+    overlay_menu.h
     rail_icons.h
 )
 
