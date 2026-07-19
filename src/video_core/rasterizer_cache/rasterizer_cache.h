@@ -1093,6 +1093,12 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
         return true;
     }
 
+    // Once the decoded custom-texture set reaches the memory budget, stop pulling in
+    // new textures so a large pack can't exhaust the heap.
+    if (material->IsUnloaded() && custom_tex_manager.IsOverMemoryBudget()) {
+        return false;
+    }
+
     surface.flags |= SurfaceFlagBits::Custom;
 
     const auto upload = [this, level, surface_id, material]() -> bool {
