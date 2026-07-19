@@ -89,7 +89,7 @@ void RasterizerAccelerated::AddTriangle(const Pica::OutputVertex& v0, const Pica
     vertex_batch.emplace_back(v2, AreQuaternionsOpposite(v0.quat, v2.quat));
 }
 
-RasterizerAccelerated::VertexArrayInfo RasterizerAccelerated::AnalyzeVertexArray(
+[[gnu::hot]] RasterizerAccelerated::VertexArrayInfo RasterizerAccelerated::AnalyzeVertexArray(
     bool is_indexed, u32 stride_alignment) {
     const auto& vertex_attributes = regs.pipeline.vertex_attributes;
 
