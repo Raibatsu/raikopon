@@ -65,6 +65,40 @@ std::atomic<bool> s_pointer_mode{false};
 std::atomic<float> s_pointer_fx{0.5f};
 std::atomic<float> s_pointer_fy{0.5f};
 
+// The physical Switch button bound to each control. Written from the menu thread, read on the
+// input/emulation threads, hence the atomics.
+std::array<std::atomic<InputButton>, NumMappableControls> s_mapping{};
+
+// The 3DS button each of the first fourteen controls drives. The controls line up with these in order.
+constexpr std::array<Settings::NativeButton::Values, 14> kControlToNative{{
+    Settings::NativeButton::A,      Settings::NativeButton::B,
+    Settings::NativeButton::X,      Settings::NativeButton::Y,
+    Settings::NativeButton::Up,     Settings::NativeButton::Down,
+    Settings::NativeButton::Left,   Settings::NativeButton::Right,
+    Settings::NativeButton::L,      Settings::NativeButton::R,
+    Settings::NativeButton::Start,  Settings::NativeButton::Select,
+    Settings::NativeButton::ZL,     Settings::NativeButton::ZR,
+}};
+
+// The default (recommended) control layout.
+constexpr std::array<InputButton, NumMappableControls> kDefaultMapping{{
+    InputButton::A,     InputButton::B,      InputButton::X,     InputButton::Y,
+    InputButton::Up,    InputButton::Down,   InputButton::Left,  InputButton::Right,
+    InputButton::L,     InputButton::R,      InputButton::Start, InputButton::Select,
+    InputButton::ZL,    InputButton::ZR,
+    InputButton::L3, // TogglePointer
+    InputButton::R3, // CycleLayout
+    InputButton::ZR, // TouchTap
+}};
+
+// Seeds the mappings with their defaults at static-init time, before the config is loaded.
+[[maybe_unused]] const bool s_mapping_seeded = [] {
+    for (int i = 0; i < NumMappableControls; ++i) {
+        s_mapping[i].store(kDefaultMapping[i], std::memory_order_relaxed);
+    }
+    return true;
+}();
+
 // Elapsed time since the previous UpdateInput.
 float PointerDeltaSeconds() {
     using Clock = std::chrono::steady_clock;
@@ -118,7 +152,7 @@ class SwitchButtonFactory final : public Input::Factory<Input::ButtonDevice> {
 public:
     std::unique_ptr<Input::ButtonDevice> Create(const Common::ParamPackage& params) override {
         const int button =
-            std::clamp(params.Get("button", 0), 0, static_cast<int>(InputButton::ZR));
+            std::clamp(params.Get("button", 0), 0, static_cast<int>(InputButton::R3));
         return std::make_unique<SwitchButton>(static_cast<InputButton>(button));
     }
 };
@@ -209,38 +243,11 @@ void AdvancePointer(const InputState& state, float dt, float left_x, float left_
                        std::memory_order_relaxed);
 }
 
-constexpr std::array<Settings::NativeButton::Values, kNumRemappableButtons>
-    kRemappableNativeButtons{
-        Settings::NativeButton::A,     Settings::NativeButton::B,
-        Settings::NativeButton::X,     Settings::NativeButton::Y,
-        Settings::NativeButton::Up,    Settings::NativeButton::Down,
-        Settings::NativeButton::Left,  Settings::NativeButton::Right,
-        Settings::NativeButton::L,     Settings::NativeButton::R,
-        Settings::NativeButton::Start, Settings::NativeButton::Select,
-        Settings::NativeButton::ZL,    Settings::NativeButton::ZR,
-    };
-
-constexpr std::array<const char*, kNumRemappableButtons> kRemappableLabels{
-    "A", "B", "X", "Y", "D-Pad Up", "D-Pad Down", "D-Pad Left", "D-Pad Right",
-    "L", "R", "Start", "Select", "ZL", "ZR",
-};
-
-std::array<InputButton, kNumRemappableButtons> s_bindings{
-    InputButton::A,     InputButton::B,      InputButton::X,      InputButton::Y,
-    InputButton::Up,    InputButton::Down,   InputButton::Left,   InputButton::Right,
-    InputButton::L,     InputButton::R,      InputButton::Start,  InputButton::Select,
-    InputButton::ZL,    InputButton::ZR,
-};
-
-void ApplyBindings() {
+// Sticks, motion, and touch never change.
+void SetProfileDefaults() {
     auto& profile = Settings::values.current_input_profile;
     profile.name = "Nintendo Switch";
-
     profile.buttons.fill("engine:null");
-    for (std::size_t i = 0; i < kNumRemappableButtons; ++i) {
-        profile.buttons[kRemappableNativeButtons[i]] = ButtonParam(s_bindings[i]);
-    }
-
     profile.analogs[Settings::NativeAnalog::CirclePad] =
         AnalogParam(Settings::NativeAnalog::CirclePad);
     profile.analogs[Settings::NativeAnalog::CStick] = AnalogParam(Settings::NativeAnalog::CStick);
@@ -258,10 +265,73 @@ void InitializeInput() {
     Input::RegisterFactory<Input::AnalogDevice>("switch", std::make_shared<SwitchAnalogFactory>());
     Input::RegisterFactory<Input::MotionDevice>("switch", std::make_shared<SwitchMotionFactory>());
     StoreMotion(kRestAccel, {});
-    ApplyBindings();
+    SetProfileDefaults();
+    ApplyButtonMappings();
 }
 
-const char* InputButtonName(InputButton button) {
+InputButton GetMapping(MappableControl control) {
+    return s_mapping[static_cast<int>(control)].load(std::memory_order_relaxed);
+}
+
+void SetMapping(MappableControl control, InputButton button) {
+    s_mapping[static_cast<int>(control)].store(button, std::memory_order_relaxed);
+}
+
+InputButton DefaultMapping(MappableControl control) {
+    return kDefaultMapping[static_cast<int>(control)];
+}
+
+void ApplyButtonMappings() {
+    auto& profile = Settings::values.current_input_profile;
+    for (int i = 0; i < static_cast<int>(kControlToNative.size()); ++i) {
+        profile.buttons[kControlToNative[i]] =
+            ButtonParam(GetMapping(static_cast<MappableControl>(i)));
+    }
+}
+
+const char* ControlName(MappableControl control) {
+    switch (control) {
+    case MappableControl::A:
+        return "A";
+    case MappableControl::B:
+        return "B";
+    case MappableControl::X:
+        return "X";
+    case MappableControl::Y:
+        return "Y";
+    case MappableControl::Up:
+        return "D-Pad Up";
+    case MappableControl::Down:
+        return "D-Pad Down";
+    case MappableControl::Left:
+        return "D-Pad Left";
+    case MappableControl::Right:
+        return "D-Pad Right";
+    case MappableControl::L:
+        return "L";
+    case MappableControl::R:
+        return "R";
+    case MappableControl::Start:
+        return "Start";
+    case MappableControl::Select:
+        return "Select";
+    case MappableControl::ZL:
+        return "ZL";
+    case MappableControl::ZR:
+        return "ZR";
+    case MappableControl::TogglePointer:
+        return "Toggle Touch Pointer";
+    case MappableControl::CycleLayout:
+        return "Cycle Screen Layout";
+    case MappableControl::TouchTap:
+        return "Touch Tap (pointer mode)";
+    case MappableControl::Count:
+        break;
+    }
+    return "";
+}
+
+const char* PhysicalButtonName(InputButton button) {
     switch (button) {
     case InputButton::A:
         return "A";
@@ -284,29 +354,61 @@ const char* InputButtonName(InputButton button) {
     case InputButton::R:
         return "R";
     case InputButton::Start:
-        return "+";
+        return "+ (Plus)";
     case InputButton::Select:
-        return "-";
+        return "- (Minus)";
     case InputButton::ZL:
         return "ZL";
     case InputButton::ZR:
         return "ZR";
-    default:
-        return "?";
+    case InputButton::L3:
+        return "L3 (Left Stick)";
+    case InputButton::R3:
+        return "R3 (Right Stick)";
     }
+    return "";
 }
 
-const char* RemappableButtonLabel(std::size_t slot) {
-    return slot < kRemappableLabels.size() ? kRemappableLabels[slot] : "?";
-}
-
-std::array<InputButton, kNumRemappableButtons> GetButtonBindings() {
-    return s_bindings;
-}
-
-void SetButtonBindings(const std::array<InputButton, kNumRemappableButtons>& bindings) {
-    s_bindings = bindings;
-    ApplyBindings();
+const char* ControlConfigKey(MappableControl control) {
+    switch (control) {
+    case MappableControl::A:
+        return "map_a";
+    case MappableControl::B:
+        return "map_b";
+    case MappableControl::X:
+        return "map_x";
+    case MappableControl::Y:
+        return "map_y";
+    case MappableControl::Up:
+        return "map_up";
+    case MappableControl::Down:
+        return "map_down";
+    case MappableControl::Left:
+        return "map_left";
+    case MappableControl::Right:
+        return "map_right";
+    case MappableControl::L:
+        return "map_l";
+    case MappableControl::R:
+        return "map_r";
+    case MappableControl::Start:
+        return "map_start";
+    case MappableControl::Select:
+        return "map_select";
+    case MappableControl::ZL:
+        return "map_zl";
+    case MappableControl::ZR:
+        return "map_zr";
+    case MappableControl::TogglePointer:
+        return "map_toggle_pointer";
+    case MappableControl::CycleLayout:
+        return "map_cycle_layout";
+    case MappableControl::TouchTap:
+        return "map_touch_tap";
+    case MappableControl::Count:
+        break;
+    }
+    return "";
 }
 
 void UpdateInput(const InputState& state) {
@@ -316,8 +418,9 @@ void UpdateInput(const InputState& state) {
     const bool stick_pointer =
         pointer_mode && s_pointer_source.load(std::memory_order_relaxed) == PointerSource::Stick;
 
-    // In pointer mode ZL/ZR tap the touchscreen instead of acting as 3DS shoulder buttons.
-    constexpr std::uint64_t tap_mask = ButtonMask(InputButton::ZL) | ButtonMask(InputButton::ZR);
+    // In pointer mode the button bound to TouchTap taps the touchscreen instead of reaching the
+    // guest.
+    const std::uint64_t tap_mask = ButtonMask(GetMapping(MappableControl::TouchTap));
     const bool tap = pointer_mode && (state.buttons & tap_mask) != 0;
     const std::uint64_t buttons = pointer_mode ? state.buttons & ~tap_mask : state.buttons;
     s_buttons.store(buttons, std::memory_order_relaxed);

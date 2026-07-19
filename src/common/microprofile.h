@@ -8,6 +8,11 @@
 // external sampling profilers like "Very Sleepy", and will improve performance somewhat.
 // #define MICROPROFILE_ENABLED 0
 
+// No profiler viewer exists on Switch, so this is entirely just wasting resources.
+#ifdef __SWITCH__
+#define MICROPROFILE_ENABLED 0
+#endif
+
 // Customized Citra settings.
 // This file wraps the MicroProfile header so that these are consistent everywhere.
 #define MICROPROFILE_WEBSERVER 0
