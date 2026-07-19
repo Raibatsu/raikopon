@@ -135,6 +135,7 @@ private:
         ReadSetting("Renderer", Settings::values.use_vsync);
         ReadSetting("Renderer", Settings::values.async_shader_compilation);
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
+        ReadSetting("Renderer", Settings::values.use_hw_shader);
         ReadSetting("Renderer", Settings::values.show_fps);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
 
@@ -188,6 +189,7 @@ private:
            << (v.async_shader_compilation.GetValue() ? "true" : "false") << '\n';
         ss << "use_disk_shader_cache = " << (v.use_disk_shader_cache.GetValue() ? "true" : "false")
            << '\n';
+        ss << "use_hw_shader = " << (v.use_hw_shader.GetValue() ? "true" : "false") << '\n';
         ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[System]\n";

@@ -468,6 +468,7 @@ MenuSettings GetMenuSettings() {
         .use_vsync = v.use_vsync.GetValue(),
         .async_shader_compilation = v.async_shader_compilation.GetValue(),
         .use_disk_shader_cache = v.use_disk_shader_cache.GetValue(),
+        .use_hw_shader = v.use_hw_shader.GetValue(),
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetValue(),
         .show_fps = v.show_fps.GetValue(),
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue()),
@@ -490,6 +491,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_vsync = s.use_vsync;
     v.async_shader_compilation = s.async_shader_compilation;
     v.use_disk_shader_cache = s.use_disk_shader_cache;
+    v.use_hw_shader = s.use_hw_shader;
     v.disable_pipeline_fast_path = s.disable_pipeline_fast_path;
     v.show_fps = s.show_fps;
     v.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage, 5, 400);
