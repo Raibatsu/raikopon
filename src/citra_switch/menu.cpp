@@ -674,7 +674,7 @@ constexpr int kRemapRowH = 48;
 constexpr int kRemapRows = (kContentBottom - kRemapTop) / kRemapRowH;
 
 constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>,
-                     SwitchFrontend::kNumRemappableButtons>
+                     SwitchFrontend::NumPhysicalButtons>
     kPhysicalButtonMap{{
         {HidNpadButton_A, SwitchFrontend::InputButton::A},
         {HidNpadButton_B, SwitchFrontend::InputButton::B},
@@ -690,6 +690,8 @@ constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>,
         {HidNpadButton_Minus, SwitchFrontend::InputButton::Select},
         {HidNpadButton_ZL, SwitchFrontend::InputButton::ZL},
         {HidNpadButton_ZR, SwitchFrontend::InputButton::ZR},
+        {HidNpadButton_StickL, SwitchFrontend::InputButton::L3},
+        {HidNpadButton_StickR, SwitchFrontend::InputButton::R3},
     }};
 
 void DrawListScrollbar(Canvas& c, int track_x, int top, int visible_rows, int row_h, int count,
@@ -1714,7 +1716,6 @@ private:
     }
 
     void RemapControls() {
-        auto bindings = SwitchFrontend::GetButtonBindings();
         int sel = 0;
         int scroll = 0;
         bool capturing = false;
@@ -1727,7 +1728,8 @@ private:
             if (capturing) {
                 for (const auto& [hid_mask, phys] : kPhysicalButtonMap) {
                     if ((down & hid_mask) != 0) {
-                        bindings[sel] = phys;
+                        SwitchFrontend::SetMapping(static_cast<SwitchFrontend::MappableControl>(sel),
+                                                   phys);
                         capturing = false;
                         break;
                     }
@@ -1737,7 +1739,7 @@ private:
                 constexpr int dz = 12000;
                 const u32 nav = rep.Step((down & HidNpadButton_Up) || ls.y > dz,
                                          (down & HidNpadButton_Down) || ls.y < -dz, false, false);
-                const int count = static_cast<int>(bindings.size());
+                const int count = SwitchFrontend::NumMappableControls;
                 if (nav & DirUp) {
                     sel = std::max(0, sel - 1);
                 }
@@ -1750,40 +1752,40 @@ private:
                     capturing = true;
                 }
                 if (down & HidNpadButton_Y) {
-                    bindings[sel] = static_cast<SwitchFrontend::InputButton>(sel);
+                    const auto control = static_cast<SwitchFrontend::MappableControl>(sel);
+                    SwitchFrontend::SetMapping(control, SwitchFrontend::DefaultMapping(control));
                 }
                 if (down & HidNpadButton_B) {
                     break;
                 }
             }
 
-            DrawRemapControls(bindings, sel, scroll, capturing);
+            DrawRemapControls(sel, scroll, capturing);
             Present();
         }
-        SwitchFrontend::SetButtonBindings(bindings);
+        SwitchFrontend::ApplyButtonMappings();
         SwitchFrontend::SaveConfig();
     }
 
-    void DrawRemapControls(
-        const std::array<SwitchFrontend::InputButton, SwitchFrontend::kNumRemappableButtons>&
-            bindings,
-        int sel, int scroll, bool capturing) {
+    void DrawRemapControls(int sel, int scroll, bool capturing) {
         Canvas& c = canvas;
         c.Clear(kColBg);
 
         g_font.Draw(c, 40, 44, "Remap controls", 28, kColText);
         c.FillRect(40, 76, kScreenW - 80, 1, kColRail);
 
-        const int count = static_cast<int>(bindings.size());
+        const int count = SwitchFrontend::NumMappableControls;
         for (int i = scroll; i < std::min(count, scroll + kRemapRows); ++i) {
+            const auto control = static_cast<SwitchFrontend::MappableControl>(i);
             const int y = kRemapTop + (i - scroll) * kRemapRowH;
             if (i == sel) {
                 c.FillRoundRect(32, y, kScreenW - 64, kRemapRowH - 4, 8, kColSurfaceHi);
                 c.FillRoundRect(32, y + 8, 4, kRemapRowH - 20, 2, kColAccent);
             }
             g_font.Draw(c, 52, CenterBaseline(y, kRemapRowH - 4, 20),
-                        SwitchFrontend::RemappableButtonLabel(i), 20, kColText);
-            const std::string value = SwitchFrontend::InputButtonName(bindings[i]);
+                        SwitchFrontend::ControlName(control), 20, kColText);
+            const std::string value =
+                SwitchFrontend::PhysicalButtonName(SwitchFrontend::GetMapping(control));
             const int vw = g_font.Measure(value, 20);
             g_font.Draw(c, kScreenW - 52 - vw, CenterBaseline(y, kRemapRowH - 4, 20), value, 20,
                         i == sel ? kColAccent : kColTextDim);
@@ -1793,8 +1795,10 @@ private:
         c.FillRect(0, kContentBottom, kScreenW, kHintH, kColHintBar);
         c.FillRect(0, kContentBottom, kScreenW, 1, kColRail);
         if (capturing) {
-            const std::string prompt = std::string{"Press a button for "} +
-                                       SwitchFrontend::RemappableButtonLabel(sel) + "...";
+            const std::string prompt =
+                std::string{"Press a button for "} +
+                SwitchFrontend::ControlName(static_cast<SwitchFrontend::MappableControl>(sel)) +
+                "...";
             g_font.Draw(c, 40, kContentBottom + (kHintH - 20) / 2, prompt, 20, kColAccent);
         } else {
             int hx = 40;

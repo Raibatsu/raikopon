@@ -22,7 +22,7 @@ size_t __nx_heap_size = 0;
 
 namespace {
 
-constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 14> button_map{{
+constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 16> button_map{{
     {HidNpadButton_A, SwitchFrontend::InputButton::A},
     {HidNpadButton_B, SwitchFrontend::InputButton::B},
     {HidNpadButton_X, SwitchFrontend::InputButton::X},
@@ -37,11 +37,12 @@ constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>, 14> button_map
     {HidNpadButton_Minus, SwitchFrontend::InputButton::Select},
     {HidNpadButton_ZL, SwitchFrontend::InputButton::ZL},
     {HidNpadButton_ZR, SwitchFrontend::InputButton::ZR},
+    {HidNpadButton_StickL, SwitchFrontend::InputButton::L3},
+    {HidNpadButton_StickR, SwitchFrontend::InputButton::R3},
 }};
 
 // Each controller style reports its six-axis sensor through a handle of its own.
 // Sideways Joy-Con is disabled because it's more work and I don't see a big need for it.
-// The emulator doesn't have support for button re-mapping yet anyways.
 std::array<HidSixAxisSensorHandle, 4> six_axis_handles{};
 
 void StartSixAxis() {
@@ -137,6 +138,7 @@ void RunGame(PadState& pad, const std::string& rom) {
 
     if (SwitchFrontend::BootRom(rom)) {
         u64 prev_held = 0;
+        std::uint64_t prev_input = 0;
         while (appletMainLoop()) {
             // Blocks while the system keyboard is up. The emulation thread is waiting on it, so
             // nothing is being drawn meanwhile.
@@ -145,6 +147,9 @@ void RunGame(PadState& pad, const std::string& rom) {
             SwitchFrontend::InputState state;
             const u64 held = PollInput(pad, state);
             const u64 pressed = held & ~prev_held;
+            // Emulator actions (cycle-layout, pointer-toggle) are edge-detected in the
+            // remappable InputButton space so they respect the user's Remap Controls choices.
+            const std::uint64_t input_pressed = state.buttons & ~prev_input;
 
             // The +/- chord toggles the in-game quick menu.
             constexpr u64 chord = HidNpadButton_Plus | HidNpadButton_Minus;
@@ -181,18 +186,29 @@ void RunGame(PadState& pad, const std::string& rom) {
                     break;
                 }
             } else if (!menu_open) {
-                // Clicking the right stick (R3) cycles through the screen layouts.
-                if ((pressed & HidNpadButton_StickR) != 0) {
+                using SwitchFrontend::ButtonMask;
+                using SwitchFrontend::GetMapping;
+                using SwitchFrontend::MappableControl;
+                // The button bound to Cycle Screen Layout (R3 by default) steps the layout.
+                if ((input_pressed & ButtonMask(GetMapping(MappableControl::CycleLayout))) != 0) {
                     SwitchFrontend::CycleScreenLayout();
                 }
-                // Clicking the left stick (L3) toggles the touch pointer.
-                if ((pressed & HidNpadButton_StickL) != 0 &&
-                    (held & HidNpadButton_Minus) == 0) {
+                // The button bound to Toggle Touch Pointer (L3 by default) toggles pointer mode.
+                // Suppressed while Minus is also held and the mapping is still the physical L3
+                // stick, so this doesn't also fire mid-gesture for the L3+Minus screen-mirror
+                // chord above.
+                const bool suppress_for_mirror_chord =
+                    GetMapping(MappableControl::TogglePointer) == SwitchFrontend::InputButton::L3 &&
+                    (held & HidNpadButton_Minus) != 0;
+                if ((input_pressed & ButtonMask(GetMapping(MappableControl::TogglePointer))) !=
+                        0 &&
+                    !suppress_for_mirror_chord) {
                     SwitchFrontend::TogglePointerMode();
                 }
             }
 
             prev_held = held;
+            prev_input = state.buttons;
             if (!SwitchFrontend::IsRunning()) {
                 break;
             }

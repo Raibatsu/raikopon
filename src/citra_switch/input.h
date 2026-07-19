@@ -9,6 +9,7 @@
 
 namespace SwitchFrontend {
 
+// A physical button on the Switch pad.
 enum class InputButton : std::uint8_t {
     A,
     B,
@@ -24,19 +25,40 @@ enum class InputButton : std::uint8_t {
     Select,
     ZL,
     ZR,
-
-    NumButtons,
+    L3,
+    R3,
 };
+
+// The number of physical buttons the user can bind a control to.
+inline constexpr int NumPhysicalButtons = static_cast<int>(InputButton::R3) + 1;
+
+// A control the player can remap.
+enum class MappableControl : std::uint8_t {
+    A,
+    B,
+    X,
+    Y,
+    Up,
+    Down,
+    Left,
+    Right,
+    L,
+    R,
+    Start,
+    Select,
+    ZL,
+    ZR,
+    TogglePointer,
+    CycleLayout,
+    TouchTap,
+    Count,
+};
+
+inline constexpr int NumMappableControls = static_cast<int>(MappableControl::Count);
 
 constexpr std::uint64_t ButtonMask(InputButton button) {
     return std::uint64_t{1} << static_cast<std::uint8_t>(button);
 }
-
-constexpr std::size_t kNumRemappableButtons = static_cast<std::size_t>(InputButton::NumButtons);
-
-const char* InputButtonName(InputButton button);
-
-const char* RemappableButtonLabel(std::size_t slot);
 
 // A six-axis sample nicely borrowed (read stolen) from libnx.
 struct MotionState {
@@ -77,6 +99,28 @@ struct PointerCursor {
 // Registers the Switch controller and sets up the default 3DS bindings.
 void InitializeInput();
 
+// The physical Switch button currently bound to `control`.
+InputButton GetMapping(MappableControl control);
+
+// Binds `control` to a physical Switch button. Guest-button changes take effect on the next
+// ApplyButtonMappings(). Emulator-action bindings are read live.
+void SetMapping(MappableControl control, InputButton button);
+
+// The default physical button for `control`.
+InputButton DefaultMapping(MappableControl control);
+
+// Rebuilds the guest input profile from the current guest-button mappings.
+void ApplyButtonMappings();
+
+// Display name of a control.
+const char* ControlName(MappableControl control);
+
+// Display name of a physical Switch button.
+const char* PhysicalButtonName(InputButton button);
+
+// Stable config.ini key for a control's binding.
+const char* ControlConfigKey(MappableControl control);
+
 // Pushes the latest libnx input to the emulation thread.
 void UpdateInput(const InputState& state);
 
@@ -92,11 +136,8 @@ int GetGyroSensitivityX();
 int GetGyroSensitivityY();
 void SetGyroSensitivity(int x_percent, int y_percent);
 
-std::array<InputButton, kNumRemappableButtons> GetButtonBindings();
-
-void SetButtonBindings(const std::array<InputButton, kNumRemappableButtons>& bindings);
-
-// Pointer mode lets the stick/gyro drive the 3DS touchscreen with ZL/ZR as the tap.
+// Pointer mode lets the stick/gyro drive the 3DS touchscreen, with the control bound to
+// MappableControl::TouchTap acting as the tap.
 bool IsPointerModeActive();
 void TogglePointerMode();
 void SetPointerMode(bool enabled);
