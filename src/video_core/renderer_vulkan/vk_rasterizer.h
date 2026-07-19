@@ -114,6 +114,7 @@ private:
     void MakeSoftwareVertexLayout();
 
 private:
+    VideoCore::RendererBase& renderer;
     const Instance& instance;
     Scheduler& scheduler;
     RenderManager& renderpass_cache;

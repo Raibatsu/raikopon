@@ -1369,6 +1369,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     renderpass_cache.EndRendering();
     OverlayDraw fps_overlay = PrepareFpsOverlay(layout);
     OverlayDraw shader_compile_overlay = PrepareShaderCompileOverlay(layout);
+    OverlayDraw loading_overlay = PrepareLoadingOverlay(layout);
     OverlayDraw quick_menu = PrepareQuickMenu(layout);
 
     PrepareDraw(frame, layout);
@@ -1411,6 +1412,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
 
     RecordOverlay(std::move(fps_overlay));
     RecordOverlay(std::move(shader_compile_overlay));
+    RecordOverlay(std::move(loading_overlay));
     RecordOverlay(std::move(quick_menu));
 
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
@@ -1670,6 +1672,129 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareShaderCompileOverlay(
     if (glyph_vertices > 0) {
         overlay.batches.push_back({text_color, box_vertices, glyph_vertices});
     }
+    return overlay;
+}
+
+void RendererVulkan::SetLoadingProgress(VideoCore::LoadCallbackStage stage, std::size_t current,
+                                        std::size_t total) {
+    loading_stage = stage;
+    loading_current = current;
+    loading_total = total;
+    loading_active = stage != VideoCore::LoadCallbackStage::Complete;
+    SwapBuffers();
+}
+
+RendererVulkan::OverlayDraw RendererVulkan::PrepareLoadingOverlay(
+    const Layout::FramebufferLayout& layout) {
+    if (!loading_active) {
+        return {};
+    }
+
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return {};
+    }
+
+    const char* title;
+    switch (loading_stage) {
+    case VideoCore::LoadCallbackStage::Prepare:
+        title = "Preparing...";
+        break;
+    case VideoCore::LoadCallbackStage::Preload:
+        title = "Loading shader cache...";
+        break;
+    case VideoCore::LoadCallbackStage::Decompile:
+        title = "Compiling shaders...";
+        break;
+    case VideoCore::LoadCallbackStage::Build:
+        title = "Building pipelines...";
+        break;
+    default:
+        title = "Loading...";
+        break;
+    }
+
+    char count_text[32] = "";
+    if (loading_total > 0) {
+        std::snprintf(count_text, sizeof(count_text), "%zu / %zu", loading_current,
+                     loading_total);
+    }
+    const bool has_count = count_text[0] != '\0';
+
+    // Larger than the corner HUD overlays since this is a full blocking screen, not a
+    // passive indicator alongside gameplay.
+    const float title_em = std::max(20.0f, std::round(h / 22.0f));
+    const float count_em = std::max(16.0f, std::round(h / 30.0f));
+    const float title_scale = title_em / OverlayFont::kBakePixelHeight;
+    const float count_scale = count_em / OverlayFont::kBakePixelHeight;
+    const float title_line_h = OverlayFont::kLineHeight * title_scale;
+    const float gap = std::round(title_em * 0.5f);
+    const float pad = std::round(title_em * 1.2f);
+
+    const float title_w = OverlayBuilder::Measure(title, title_scale);
+    const float count_w = has_count ? OverlayBuilder::Measure(count_text, count_scale) : 0.0f;
+    const float inner_w = std::max(title_w, count_w);
+    const float panel_w = inner_w + 2.0f * pad;
+    const float panel_h = pad + title_line_h + (has_count ? gap + count_em : 0.0f) + pad;
+    const float panel_x0 = std::round((w - panel_w) / 2.0f);
+    const float panel_y0 = std::round((h - panel_h) / 2.0f);
+
+    std::vector<float> verts;
+    verts.reserve(512);
+    OverlayBuilder builder{verts, w, h};
+
+    constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.75f};
+    constexpr std::array<float, 4> c_panel = {0.10f, 0.11f, 0.14f, 0.96f};
+    constexpr std::array<float, 4> c_title = {1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr std::array<float, 4> c_count = {0.70f, 0.73f, 0.82f, 1.0f};
+
+    std::vector<OverlayDraw::Batch> batches;
+    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
+        const u32 count = builder.VertexCount() - start;
+        if (count > 0) {
+            batches.push_back({color, start, count});
+        }
+    };
+
+    // Dim behind the panel.
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(0.0f, 0.0f, w, h);
+        emit(c_dim, s);
+    }
+
+    // Panel background.
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0, panel_y0, panel_x0 + panel_w, panel_y0 + panel_h);
+        emit(c_panel, s);
+    }
+
+    // Title, centered.
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddText(panel_x0 + (panel_w - title_w) / 2.0f, panel_y0 + pad, title,
+                        title_scale);
+        emit(c_title, s);
+    }
+
+    // Progress count, centered below the title.
+    if (has_count) {
+        const u32 s = builder.VertexCount();
+        builder.AddText(panel_x0 + (panel_w - count_w) / 2.0f, panel_y0 + pad + title_line_h + gap,
+                        count_text, count_scale);
+        emit(c_count, s);
+    }
+
+    const u64 size = verts.size() * sizeof(float);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    overlay_vertex_buffer.Commit(size);
+
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches = std::move(batches);
     return overlay;
 }
 
