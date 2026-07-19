@@ -281,7 +281,7 @@ void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_po
             layout =
                 Layout::LargeFrameLayout(width, height, Settings::values.swap_screen.GetValue(),
                                          Settings::values.upright_screen.GetValue(), 1.0f,
-                                         Settings::SmallScreenPosition::MiddleRight);
+                                         Settings::values.small_screen_position.GetValue());
             break;
 #ifndef ANDROID
         case Settings::LayoutOption::SeparateWindows:
