@@ -26,7 +26,7 @@ namespace Pica::Shader {
 #ifdef __SWITCH__
 
 JitEngine::JitEngine()
-    : compile_workers{1, "PICA Shader JIT", {}, {3, 0}},
+    : compile_workers{1, "PICA Shader JIT", {}, {0}},
       interpreter{std::make_unique<InterpreterEngine>()} {}
 JitEngine::~JitEngine() = default;
 
