@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <thread>
 
@@ -60,6 +61,20 @@ constexpr std::array<ScreenLayoutPreset, 7> s_layout_presets{{
 
 // Kept consistent with Settings so the first press advances past the boot default.
 std::size_t s_layout_index = 0;
+
+// Bitmask of presets R3 cycles through. Bit i set means preset i is in the rotation.
+std::atomic<std::uint32_t> s_layout_cycle_mask{(1u << s_layout_presets.size()) - 1};
+
+// Applies the preset at s_layout_index to the live settings and relays out the framebuffer.
+void ApplyCurrentLayout() {
+    const ScreenLayoutPreset& preset = s_layout_presets[s_layout_index];
+    Settings::values.layout_option = preset.layout;
+    Settings::values.swap_screen = preset.swap_screen;
+    Settings::values.upright_screen = preset.upright_screen;
+    Settings::values.small_screen_position = preset.small_screen_position;
+    Core::System::GetInstance().GPU().Renderer().UpdateCurrentFramebufferLayout();
+    LOG_INFO(Frontend, "Screen layout: {}", preset.name);
+}
 
 /// Returns true if `path` is a 3DS title.
 bool IsLoadableRom(const std::string& path) {
@@ -209,19 +224,26 @@ void StepScreenLayout(int delta) {
     s_layout_index = static_cast<std::size_t>(((static_cast<int>(s_layout_index) + delta) % count +
                                                count) %
                                               count);
-    const ScreenLayoutPreset& preset = s_layout_presets[s_layout_index];
-
-    Settings::values.layout_option = preset.layout;
-    Settings::values.swap_screen = preset.swap_screen;
-    Settings::values.upright_screen = preset.upright_screen;
-    Settings::values.small_screen_position = preset.small_screen_position;
-
-    system.GPU().Renderer().UpdateCurrentFramebufferLayout();
-    LOG_INFO(Frontend, "Screen layout: {}", preset.name);
+    ApplyCurrentLayout();
 }
 
 void CycleScreenLayout() {
-    StepScreenLayout(1);
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+
+    const std::uint32_t mask = s_layout_cycle_mask.load(std::memory_order_relaxed);
+    const int count = static_cast<int>(s_layout_presets.size());
+    // Advance to the next preset that is enabled in R3's rotation.
+    for (int step = 1; step <= count; ++step) {
+        const int idx = (static_cast<int>(s_layout_index) + step) % count;
+        if ((mask & (1u << idx)) != 0) {
+            s_layout_index = static_cast<std::size_t>(idx);
+            ApplyCurrentLayout();
+            return;
+        }
+    }
 }
 
 void MirrorScreenSides() {
@@ -275,6 +297,26 @@ void MirrorScreenSides() {
 
 const char* CurrentScreenLayoutName() {
     return s_layout_presets[s_layout_index].name;
+}
+
+int GetScreenLayoutCount() {
+    return static_cast<int>(s_layout_presets.size());
+}
+
+const char* GetScreenLayoutName(int index) {
+    if (index < 0 || index >= static_cast<int>(s_layout_presets.size())) {
+        return "";
+    }
+    return s_layout_presets[index].name;
+}
+
+std::uint32_t GetLayoutCycleMask() {
+    return s_layout_cycle_mask.load(std::memory_order_relaxed);
+}
+
+void SetLayoutCycleMask(std::uint32_t mask) {
+    const std::uint32_t all = (1u << s_layout_presets.size()) - 1;
+    s_layout_cycle_mask.store(mask & all, std::memory_order_relaxed);
 }
 
 bool LoadFailed() {

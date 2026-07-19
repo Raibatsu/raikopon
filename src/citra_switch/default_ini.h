@@ -56,6 +56,9 @@ pointer_source =
 # Gyro pointer sensitivity per axis, as a percentage of the default speed (100, default). 10-500.
 gyro_sensitivity_x =
 gyro_sensitivity_y =
+# Bitmask of screen-layout presets the R3 button cycles through (bit 0 = the first preset).
+# Defaults to every preset enabled. The quick menu always offers every layout.
+layout_cycle_mask =
 )";
 
 } // namespace DefaultINI
