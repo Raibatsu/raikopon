@@ -80,7 +80,12 @@ void Scheduler::WaitWorker() {
     MICROPROFILE_SCOPE(Vulkan_WaitForWorker);
     DispatchWork();
 
-    // Ensure the queue is drained.
+    // Wait only for the worker to have picked up every dispatched chunk, not for whichever
+    // chunk it's currently executing to actually finish on the GPU. The stronger "and
+    // finished executing" wait this used to do turns any transient slowdown on the worker's
+    // core (e.g. a background shader/pipeline compile sharing core 3) into an immediate stall
+    // here, rather than letting this thread carry on with the next frame's CPU work while the
+    // worker catches up.
     {
         std::unique_lock ql{queue_mutex};
         event_cv.wait(ql, [this] { return work_queue.empty(); });
@@ -88,7 +93,11 @@ void Scheduler::WaitWorker() {
 
     // Now wait for execution to finish.
     // This needs to be done in the same order as WorkerThread.
-    std::scoped_lock el{execution_mutex};
+    static constexpr u64 kMaxTicksAhead = 2;
+    const u64 issued = master_semaphore->CurrentTick();
+    if (issued > kMaxTicksAhead) {
+        master_semaphore->Wait(issued - kMaxTicksAhead);
+    }
 }
 
 void Scheduler::Wait(u64 tick) {

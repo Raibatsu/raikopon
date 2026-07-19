@@ -7,6 +7,7 @@
 #include "common/memory_detect.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
+#include "common/shader_compile_stats.h"
 #include "core/core.h"
 #include "core/frontend/emu_window.h"
 #include "video_core/gpu.h"
@@ -1367,6 +1368,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     // can happen mid build causing a crash.
     renderpass_cache.EndRendering();
     OverlayDraw fps_overlay = PrepareFpsOverlay(layout);
+    OverlayDraw shader_compile_overlay = PrepareShaderCompileOverlay(layout);
     OverlayDraw quick_menu = PrepareQuickMenu(layout);
 
     PrepareDraw(frame, layout);
@@ -1408,6 +1410,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     DrawCursor(layout);
 
     RecordOverlay(std::move(fps_overlay));
+    RecordOverlay(std::move(shader_compile_overlay));
     RecordOverlay(std::move(quick_menu));
 
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
@@ -1593,6 +1596,73 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareFpsOverlay(
 
     constexpr std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
     constexpr std::array<float, 4> text_color = {0.53f, 1.0f, 0.53f, 1.0f};
+
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches.push_back({box_color, 0, box_vertices});
+    if (glyph_vertices > 0) {
+        overlay.batches.push_back({text_color, box_vertices, glyph_vertices});
+    }
+    return overlay;
+}
+
+RendererVulkan::OverlayDraw RendererVulkan::PrepareShaderCompileOverlay(
+    const Layout::FramebufferLayout& layout) {
+    const auto progress = Common::ShaderCompileStats::GetProgress();
+    if (!progress) {
+        return {};
+    }
+
+    char text[48];
+    std::snprintf(text, sizeof(text), "Compiling shaders: %u/%u", progress->done,
+                 progress->total);
+
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return {};
+    }
+
+    // Same sizing scheme as the FPS counter so the two read as one system.
+    const float em = std::max(14.0f, std::round(h / 32.0f));
+    const float scale = em / OverlayFont::kBakePixelHeight;
+    const float margin = std::round(em * 0.6f);
+    const float pad = std::round(em * 0.35f);
+    const float line_h = OverlayFont::kLineHeight * scale;
+
+    // Stack below the FPS counter instead of overlapping it, when that's also shown.
+    const float top = Settings::values.show_fps.GetValue() ? margin + line_h + pad * 2.0f : margin;
+
+    float ink_top = OverlayFont::kAscent;
+    float ink_bottom = 0.0f;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const OverlayFont::Glyph& g = OverlayFont::GlyphFor(*p);
+        if (g.h > 0.0f) {
+            ink_top = std::min(ink_top, g.yoff);
+            ink_bottom = std::max(ink_bottom, g.yoff + g.h);
+        }
+    }
+
+    std::vector<float> verts;
+    verts.reserve(256);
+    OverlayBuilder builder{verts, w, h};
+
+    const float text_w = OverlayBuilder::Measure(text, scale);
+
+    builder.AddRect(margin - pad, top + ink_top * scale - pad, margin + text_w + pad,
+                    top + ink_bottom * scale + pad);
+    const u32 box_vertices = builder.VertexCount();
+
+    builder.AddText(margin, top, text, scale);
+    const u32 glyph_vertices = builder.VertexCount() - box_vertices;
+
+    const u64 size = verts.size() * sizeof(float);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    overlay_vertex_buffer.Commit(size);
+
+    constexpr std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
+    constexpr std::array<float, 4> text_color = {1.0f, 0.78f, 0.35f, 1.0f};
 
     OverlayDraw overlay;
     overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);

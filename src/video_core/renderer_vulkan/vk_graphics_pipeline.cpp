@@ -8,6 +8,7 @@
 #include "common/hash.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
+#include "common/shader_compile_stats.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -103,7 +104,11 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
     }
 
     // Fallback to (a)synchronous compilation
-    worker->QueueWork([this] { Build(); });
+    Common::ShaderCompileStats::BeginCompile();
+    worker->QueueWork([this] {
+        Build();
+        Common::ShaderCompileStats::EndCompile();
+    });
     is_pending = true;
     return wait_built;
 }

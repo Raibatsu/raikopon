@@ -6,6 +6,7 @@
 #include "common/file_util.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
+#include "common/shader_compile_stats.h"
 #include "common/static_lru_cache.h"
 #include "common/zstd_compression.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -123,12 +124,14 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
 
             shader.program = std::move(program);
             const vk::Device device = parent.instance.GetDevice();
+            Common::ShaderCompileStats::BeginCompile();
             parent.shader_workers.QueueWork([device, &shader, this, spirv_id] {
                 auto spirv = CompileGLSL(shader.program, vk::ShaderStageFlagBits::eVertex);
                 AppendVSSPIRV(vs_cache, spirv, spirv_id);
                 shader.program.clear();
                 shader.module = CompileSPV(spirv, device);
                 shader.MarkDone();
+                Common::ShaderCompileStats::EndCompile();
             });
         }
 
@@ -157,6 +160,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
     if (new_shader) {
         LOG_NEW_OBJECT(Render_Vulkan, "New FS config {:016X}", fs_config_hash);
 
+        Common::ShaderCompileStats::BeginCompile();
         parent.shader_workers.QueueWork([fs_config, user, this, &shader, fs_config_hash]() {
             std::vector<u32> spirv;
             const bool use_spirv = parent.profile.vk_use_spirv_generator;
@@ -178,6 +182,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
                                     .fs_config = fs_config};
                 AppendFSConfig(fs_cache, entry, fs_config_hash);
             }
+            Common::ShaderCompileStats::EndCompile();
         });
     }
 
@@ -212,6 +217,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFixedGeometrySh
         if (new_shader) {
             LOG_NEW_OBJECT(Render_Vulkan, "New GS config {:016X}", gs_config_hash);
 
+            Common::ShaderCompileStats::BeginCompile();
             parent.shader_workers.QueueWork([gs_config, this, &shader, gs_config_hash]() {
                 ExtraFixedGSConfig extra;
                 extra.use_clip_planes = parent.profile.has_clip_planes;
@@ -228,6 +234,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFixedGeometrySh
                     .gs_config = gs_config,
                 };
                 AppendGSConfig(gs_cache, entry, gs_config_hash);
+                Common::ShaderCompileStats::EndCompile();
             });
         }
 

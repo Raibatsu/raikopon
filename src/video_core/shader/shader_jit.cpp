@@ -11,6 +11,7 @@
 #include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/shader_compile_stats.h"
 #include "video_core/shader/shader.h"
 #include "video_core/shader/shader_interpreter.h"
 #include "video_core/shader/shader_jit.h"
@@ -50,6 +51,7 @@ void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCod
     }
     entry->shader = std::move(shader);
     entry->ready.store(true, std::memory_order_release);
+    Common::ShaderCompileStats::EndCompile();
 }
 
 void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
@@ -80,6 +82,7 @@ void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
         // to outlive this one job.
         auto program_code = std::make_shared<ProgramCode>(setup.GetProgramCode());
         auto swizzle_data = std::make_shared<SwizzleData>(setup.GetSwizzleData());
+        Common::ShaderCompileStats::BeginCompile();
         compile_workers.QueueWork([this, entry, program_code, swizzle_data] {
             CompileEntry(entry, program_code, swizzle_data);
         });

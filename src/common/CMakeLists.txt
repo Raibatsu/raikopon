@@ -74,6 +74,8 @@ add_library(citra_common STATIC EXCLUDE_FROM_ALL
     setting_keys.h
     settings.cpp
     settings.h
+    shader_compile_stats.cpp
+    shader_compile_stats.h
     slot_vector.h
     serialization/atomic.h
     serialization/boost_discrete_interval.hpp
@@ -142,7 +144,8 @@ target_sources(citra_common PRIVATE
 )
 if (DEKOPON)
   # <switch.h> pulls in libnx headers that clash with the precompiled header set.
-  set_source_files_properties(horizon_thread.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+  set_source_files_properties(horizon_thread.cpp shader_compile_stats.cpp
+                              PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 endif()
 
 if (MSVC)
@@ -180,11 +183,6 @@ find_library(BACKTRACE_LIBRARY backtrace)
 if (BACKTRACE_LIBRARY AND ${CMAKE_SYSTEM_NAME} STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL GNU)
     target_link_libraries(citra_common PRIVATE ${BACKTRACE_LIBRARY} dl)
     target_compile_definitions(citra_common PRIVATE CITRA_LINUX_GCC_BACKTRACE)
-endif()
-
-if (SSE42_COMPILE_OPTION)
-    target_compile_definitions(citra_common PRIVATE CITRA_HAS_SSE42)
-    target_compile_options(citra_common PRIVATE ${SSE42_COMPILE_OPTION})
 endif()
 
 target_link_libraries(citra_common PUBLIC xxHash::xxhash)

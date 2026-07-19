@@ -84,7 +84,17 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                              RenderManager& renderpass_cache_, DescriptorUpdateQueue& update_queue_)
     : instance{instance_}, scheduler{scheduler_}, renderpass_cache{renderpass_cache_},
       update_queue{update_queue_},
+#ifdef __SWITCH__
+      // hardware_concurrency() isn't reliable here, and we specifically want one worker per
+      // target core below so compile load actually spreads across both instead of funneling
+      // onto core 3 alone. Core 1 (audio) was tried as a third target too, but with no
+      // thread-priority mechanism to defer to the audio thread (Common::SetCurrentThreadPriority
+      // is a no-op on Switch) it wasn't clearly worth the added memory-bandwidth contention
+      // from a third core compiling concurrently. Back to {3, 0} to isolate that effect.
+      num_worker_threads{2},
+#else
       num_worker_threads{std::max(std::thread::hardware_concurrency(), 2U) / 2},
+#endif
       // Keep shader/pipeline compilation off the CPU JIT core (2) so compile bursts don't stall emulation
       pipeline_workers{num_worker_threads, "Pipeline workers", {}, {3, 0}},
       shader_workers{num_worker_threads, "Shader workers", {}, {3, 0}},
