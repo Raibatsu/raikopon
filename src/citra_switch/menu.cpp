@@ -562,6 +562,7 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"VSync", s.use_vsync ? "On" : "Off"},
         {"Async Shader Compilation", s.async_shader_compilation ? "On" : "Off"},
         {"Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off"},
+        {"Hardware Shader", s.use_hw_shader ? "On" : "Off"},
         {"Show FPS Counter", s.show_fps ? "On" : "Off"},
         {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
@@ -576,9 +577,9 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Remap Controls", ">"},
     };
 }
-constexpr int kNumSettings = 16;
+constexpr int kNumSettings = 17;
 // The R3 layout row opens a picker.
-constexpr int kLayoutCycleRow = 13;
+constexpr int kLayoutCycleRow = 14;
 constexpr int kRemapControlsRow = kNumSettings - 1;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
@@ -596,33 +597,36 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         s.use_disk_shader_cache = dir > 0;
         break;
     case 4:
-        s.show_fps = dir > 0;
+        s.use_hw_shader = dir > 0;
         break;
     case 5:
-        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
+        s.show_fps = dir > 0;
         break;
     case 6:
-        s.is_new_3ds = dir > 0;
+        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
         break;
     case 7:
-        s.use_cpu_jit = dir > 0;
+        s.is_new_3ds = dir > 0;
         break;
     case 8:
-        s.region_value = std::clamp(s.region_value + dir, -1, 6);
+        s.use_cpu_jit = dir > 0;
         break;
     case 9:
-        s.language = std::clamp(s.language + dir, 0, 11);
+        s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
     case 10:
-        s.pointer_source = dir > 0 ? 1 : 0;
+        s.language = std::clamp(s.language + dir, 0, 11);
         break;
     case 11:
-        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        s.pointer_source = dir > 0 ? 1 : 0;
         break;
     case 12:
+        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        break;
+    case 13:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
-    case 14:
+    case 15:
         s.disable_pipeline_fast_path = dir > 0;
         break;
     default:
