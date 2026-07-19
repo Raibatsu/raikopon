@@ -256,8 +256,18 @@ void MirrorScreenSides() {
     const auto layout = Settings::values.layout_option.GetValue();
     const bool uses_small_screen_position = layout == Settings::LayoutOption::LargeScreen ||
                                             layout == Settings::LayoutOption::SideScreen;
+    const bool is_single_screen = layout == Settings::LayoutOption::TopScreenOnly ||
+                                  layout == Settings::LayoutOption::BottomScreenOnly;
 
-    if (uses_small_screen_position) {
+    if (is_single_screen) {
+        // TopScreenOnly/BottomScreenOnly pick their screen purely from layout_option
+        // (see framebuffer_layout.cpp) and ignore swap_screen entirely, so mirroring
+        // has to flip the layout itself rather than the swap_screen flag.
+        Settings::values.layout_option = layout == Settings::LayoutOption::TopScreenOnly
+                                             ? Settings::LayoutOption::BottomScreenOnly
+                                             : Settings::LayoutOption::TopScreenOnly;
+        LOG_INFO(Frontend, "Swapped single screen");
+    } else if (uses_small_screen_position) {
         SmallScreenPosition pos = Settings::values.small_screen_position.GetValue();
         switch (pos) {
         case SmallScreenPosition::TopRight:
