@@ -1367,6 +1367,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     // can happen mid build causing a crash.
     renderpass_cache.EndRendering();
     OverlayDraw fps_overlay = PrepareFpsOverlay(layout);
+    OverlayDraw shader_notice = PrepareShaderNotice(layout);
     OverlayDraw quick_menu = PrepareQuickMenu(layout);
 
     PrepareDraw(frame, layout);
@@ -1408,6 +1409,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     DrawCursor(layout);
 
     RecordOverlay(std::move(fps_overlay));
+    RecordOverlay(std::move(shader_notice));
     RecordOverlay(std::move(quick_menu));
 
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
@@ -1593,6 +1595,79 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareFpsOverlay(
 
     constexpr std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
     constexpr std::array<float, 4> text_color = {0.53f, 1.0f, 0.53f, 1.0f};
+
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches.push_back({box_color, 0, box_vertices});
+    if (glyph_vertices > 0) {
+        overlay.batches.push_back({text_color, box_vertices, glyph_vertices});
+    }
+    return overlay;
+}
+
+RendererVulkan::OverlayDraw RendererVulkan::PrepareShaderNotice(
+    const Layout::FramebufferLayout& layout) {
+    const u32 pending = VideoCore::GetPendingShaderCompiles();
+    const auto now = std::chrono::steady_clock::now();
+    if (pending > 0) {
+        shader_notice_until = now + std::chrono::milliseconds(500);
+    }
+    if (now >= shader_notice_until) {
+        return {};
+    }
+
+    char text[32];
+    if (pending > 0) {
+        std::snprintf(text, sizeof(text), "Compiling shaders  %u", pending);
+    } else {
+        std::snprintf(text, sizeof(text), "Compiling shaders");
+    }
+
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return {};
+    }
+
+    const float em = std::max(14.0f, std::round(h / 32.0f));
+    const float scale = em / OverlayFont::kBakePixelHeight;
+    const float margin = std::round(em * 0.6f);
+    const float pad = std::round(em * 0.35f);
+
+    float ink_top = OverlayFont::kAscent;
+    float ink_bottom = 0.0f;
+    for (const char* p = text; *p != '\0'; ++p) {
+        const OverlayFont::Glyph& g = OverlayFont::GlyphFor(*p);
+        if (g.h > 0.0f) {
+            ink_top = std::min(ink_top, g.yoff);
+            ink_bottom = std::max(ink_bottom, g.yoff + g.h);
+        }
+    }
+
+    std::vector<float> verts;
+    verts.reserve(256);
+    OverlayBuilder builder{verts, w, h};
+
+    const float text_w = OverlayBuilder::Measure(text, scale);
+
+    // Anchor the box to the bottom-left so it stays clear of the FPS counter.
+    const float ox = margin;
+    const float oy = h - margin - pad - ink_bottom * scale;
+
+    builder.AddRect(ox - pad, oy + ink_top * scale - pad, ox + text_w + pad,
+                    oy + ink_bottom * scale + pad);
+    const u32 box_vertices = builder.VertexCount();
+
+    builder.AddText(ox, oy, text, scale);
+    const u32 glyph_vertices = builder.VertexCount() - box_vertices;
+
+    const u64 size = verts.size() * sizeof(float);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    overlay_vertex_buffer.Commit(size);
+
+    constexpr std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
+    constexpr std::array<float, 4> text_color = {1.0f, 0.82f, 0.35f, 1.0f};
 
     OverlayDraw overlay;
     overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
