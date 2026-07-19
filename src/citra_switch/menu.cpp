@@ -21,6 +21,7 @@
 #include FT_FREETYPE_H
 
 #include "citra_switch/config.h"
+#include "citra_switch/input.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
 #include "citra_switch/rail_icons.h"
@@ -571,11 +572,13 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
         {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
+        {"Controller Mapping", "Configure"},
     };
 }
-constexpr int kNumSettings = 14;
-// The R3 layout row opens a picker.
+constexpr int kNumSettings = 15;
+// These rows open a modal picker instead of cycling a value in place.
 constexpr int kLayoutCycleRow = 13;
+constexpr int kControllerMapRow = 14;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -956,6 +959,9 @@ public:
             // +/- together exits the app, but will not allow during an install.
             if (!install_active && (held & (HidNpadButton_Plus | HidNpadButton_Minus)) ==
                                        (HidNpadButton_Plus | HidNpadButton_Minus)) {
+                if (remap_open) {
+                    CloseRemap();
+                }
                 Flush();
                 return {MenuAction::Exit, {}};
             }
@@ -973,6 +979,8 @@ public:
                 PumpInstall();
             } else if (layout_picker_open) {
                 HandleLayoutPicker(down, nav);
+            } else if (remap_open) {
+                HandleRemap(down, nav);
             } else if (details_open) {
                 // Any of the buttons that could have opened the panel also closes it.
                 if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_Plus)) {
@@ -993,7 +1001,7 @@ public:
                 return result;
             }
 
-            if (!install_active && !details_open && !layout_picker_open) {
+            if (!install_active && !details_open && !layout_picker_open && !remap_open) {
                 HandleTouch();
             }
             if (pending_launch) {
@@ -1007,6 +1015,9 @@ public:
             if (g_notice_frames > 0) {
                 --g_notice_frames;
             }
+        }
+        if (remap_open) {
+            CloseRemap();
         }
         Flush();
         return {MenuAction::Exit, {}};
@@ -1052,6 +1063,11 @@ private:
     // R3 screen-layout picker.
     bool layout_picker_open = false;
     int layout_picker_sel = 0;
+
+    // Controller remapping page.
+    bool remap_open = false;
+    int remap_sel = 0;
+    int remap_scroll = 0;
 
     // Install page.
     std::string install_dir;
@@ -1360,10 +1376,14 @@ private:
         }
         ScrollSettingsIntoView();
 
-        // The R3 layout row opens a modal picker.
-        if (settings_sel == kLayoutCycleRow) {
+        // These rows open a modal picker rather than cycling a value in place.
+        if (settings_sel == kLayoutCycleRow || settings_sel == kControllerMapRow) {
             if ((down & HidNpadButton_A) || (nav & DirRight)) {
-                OpenLayoutPicker();
+                if (settings_sel == kLayoutCycleRow) {
+                    OpenLayoutPicker();
+                } else {
+                    OpenRemap();
+                }
             }
             if (down & HidNpadButton_B) {
                 EnterRail();
@@ -1404,6 +1424,55 @@ private:
         }
         if (down & HidNpadButton_B) {
             layout_picker_open = false;
+        }
+    }
+
+    void OpenRemap() {
+        remap_sel = 0;
+        remap_scroll = 0;
+        remap_open = true;
+    }
+
+    void CloseRemap() {
+        remap_open = false;
+        // Rebuild the guest input profile and persist.
+        ApplyButtonMappings();
+        SaveConfig();
+    }
+
+    void ScrollRemapIntoView() {
+        remap_scroll = std::clamp(remap_scroll, std::max(0, remap_sel - kRemapVisibleRows + 1),
+                                  remap_sel);
+    }
+
+    // Cycles the physical Switch button bound to `control` by `dir`.
+    void StepRemapMapping(MappableControl control, int dir) {
+        const int cur = static_cast<int>(GetMapping(control));
+        const int next = (cur + dir + NumPhysicalButtons) % NumPhysicalButtons;
+        SetMapping(control, static_cast<InputButton>(next));
+    }
+
+    void HandleRemap(u64 down, u32 nav) {
+        if (nav & DirUp) {
+            remap_sel = (remap_sel - 1 + NumMappableControls) % NumMappableControls;
+        }
+        if (nav & DirDown) {
+            remap_sel = (remap_sel + 1) % NumMappableControls;
+        }
+        ScrollRemapIntoView();
+
+        const auto control = static_cast<MappableControl>(remap_sel);
+        if (nav & DirLeft) {
+            StepRemapMapping(control, -1);
+        }
+        if ((nav & DirRight) || (down & HidNpadButton_A)) {
+            StepRemapMapping(control, +1);
+        }
+        if (down & HidNpadButton_Y) {
+            SetMapping(control, DefaultMapping(control));
+        }
+        if (down & HidNpadButton_B) {
+            CloseRemap();
         }
     }
 
@@ -1531,6 +1600,8 @@ private:
                 settings_sel = row;
                 if (row == kLayoutCycleRow) {
                     OpenLayoutPicker();
+                } else if (row == kControllerMapRow) {
+                    OpenRemap();
                 } else {
                     CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
                     settings_dirty = true;
@@ -1743,6 +1814,9 @@ private:
         if (layout_picker_open) {
             DrawLayoutPicker(c);
         }
+        if (remap_open) {
+            DrawRemapPage(c);
+        }
         if (install_active) {
             DrawInstallProgress(c);
         }
@@ -1950,6 +2024,16 @@ private:
     static constexpr int kSettingsVisibleRows =
         (kContentBottom - kSettingsTop - kSettingsFooterH) / kSettingsRowStride;
 
+    // The controller-mapping modal covers most of the screen and scrolls its own list.
+    static constexpr int kRemapW = 860;
+    static constexpr int kRemapRowH = 42;
+    static constexpr int kRemapTopPad = 92;    // Room for the title.
+    static constexpr int kRemapBottomPad = 56; // Room for the button hints.
+    static constexpr int kRemapPanelY = 44;
+    static constexpr int kRemapPanelH = kScreenH - 2 * kRemapPanelY;
+    static constexpr int kRemapVisibleRows =
+        (kRemapPanelH - kRemapTopPad - kRemapBottomPad) / kRemapRowH;
+
     void DrawSettingsPage(Canvas& c) {
         DrawHeader(c, "");
         const bool content_focus = focus == Focus::Content;
@@ -1984,7 +2068,7 @@ private:
         } else {
             int hx = kContentX + 24;
             const int hy = kContentBottom + (kHintH - 26) / 2;
-            if (settings_sel == kLayoutCycleRow) {
+            if (settings_sel == kLayoutCycleRow || settings_sel == kControllerMapRow) {
                 hx += DrawHint(c, hx, hy, "A", "Configure") + 22;
             } else {
                 hx += DrawHint(c, hx, hy, "<>", "Change") + 22;
@@ -2033,6 +2117,50 @@ private:
         const int hy = y + h - 38;
         hx += DrawHint(c, hx, hy, "A", "Toggle") + 22;
         DrawHint(c, hx, hy, "B", "Done");
+    }
+
+    // A near-fullscreen modal that allows rebinding inputs.
+    void DrawRemapPage(Canvas& c) {
+        const int x = (kScreenW - kRemapW) / 2;
+        const int y = kRemapPanelY;
+        const int w = kRemapW;
+        const int h = kRemapPanelH;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        g_font.Draw(c, x + 24, y + 40, "Controller Mapping", 24, kColText);
+        g_font.Draw(c, x + 24, y + 66,
+                    "Controller changes apply the next time you launch a game.",
+                    16, kColTextDim);
+
+        const int list_top = y + kRemapTopPad;
+        const int rx = x + 16;
+        const int rw = w - 32;
+        const int last = std::min(NumMappableControls, remap_scroll + kRemapVisibleRows);
+        for (int i = remap_scroll; i < last; ++i) {
+            const int ry = list_top + (i - remap_scroll) * kRemapRowH;
+            const bool on = i == remap_sel;
+            if (on) {
+                c.FillRoundRect(rx, ry, rw, kRemapRowH - 4, 8, kColSurfaceHi);
+                c.FillRoundRect(rx, ry + 8, 4, kRemapRowH - 20, 2, kColAccent);
+            }
+            const auto control = static_cast<MappableControl>(i);
+            g_font.Draw(c, rx + 20, CenterBaseline(ry, kRemapRowH - 4, 20), ControlName(control), 20,
+                        kColText);
+            const char* value = PhysicalButtonName(GetMapping(control));
+            const int vw = g_font.Measure(value, 20);
+            g_font.Draw(c, rx + rw - 24 - vw, CenterBaseline(ry, kRemapRowH - 4, 20), value, 20,
+                        on ? kColAccent : kColTextDim);
+        }
+        DrawListScrollbar(c, x + w - 12, list_top, kRemapVisibleRows, kRemapRowH,
+                          NumMappableControls, remap_scroll);
+
+        int hx = x + 24;
+        const int hy = y + h - 38;
+        hx += DrawHint(c, hx, hy, "<>", "Change") + 22;
+        hx += DrawHint(c, hx, hy, "A", "Next") + 22;
+        hx += DrawHint(c, hx, hy, "Y", "Default") + 22;
+        DrawHint(c, hx, hy, "B", "Back");
     }
 
     void DrawHintBar(Canvas& c) {

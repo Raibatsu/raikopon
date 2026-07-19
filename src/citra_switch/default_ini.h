@@ -58,6 +58,29 @@ gyro_sensitivity_y =
 # Bitmask of screen-layout presets the R3 button cycles through (bit 0 = the first preset).
 # Defaults to every preset enabled. The quick menu always offers every layout.
 layout_cycle_mask =
+
+[Controls]
+# Controller remapping, editable from Settings > Controller Mapping.
+# Each control stores the physical Switch button that drives it, by index:
+#   0:A 1:B 2:X 3:Y 4:Up 5:Down 6:Left 7:Right 8:L 9:R 10:+ 11:- 12:ZL 13:ZR 14:L3 15:R3
+# map_toggle_pointer/map_cycle_layout/map_touch_tap are the emulator actions.
+map_a =
+map_b =
+map_x =
+map_y =
+map_up =
+map_down =
+map_left =
+map_right =
+map_l =
+map_r =
+map_start =
+map_select =
+map_zl =
+map_zr =
+map_toggle_pointer =
+map_cycle_layout =
+map_touch_tap =
 )";
 
 } // namespace DefaultINI
