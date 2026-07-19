@@ -2,6 +2,7 @@
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -167,6 +168,18 @@ private:
         SwitchFrontend::SetLayoutCycleMask(static_cast<std::uint32_t>(
             config->GetInteger("Switch", "layout_cycle_mask", all_layouts)));
 
+        // Each control stores the index of the physical Switch button it drives.
+        for (int i = 0; i < SwitchFrontend::NumMappableControls; ++i) {
+            const auto control = static_cast<SwitchFrontend::MappableControl>(i);
+            const int def = static_cast<int>(SwitchFrontend::DefaultMapping(control));
+            const int raw =
+                config->GetInteger("Controls", SwitchFrontend::ControlConfigKey(control), def);
+            const int clamped = std::clamp(raw, 0, SwitchFrontend::NumPhysicalButtons - 1);
+            SwitchFrontend::SetMapping(control,
+                                       static_cast<SwitchFrontend::InputButton>(clamped));
+        }
+        SwitchFrontend::ApplyButtonMappings();
+
         launch_count = config->GetInteger("Switch", "launch_count", 0) + 1;
     }
 
@@ -203,7 +216,14 @@ private:
         ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
         ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
         ss << "layout_cycle_mask = " << SwitchFrontend::GetLayoutCycleMask() << '\n';
-        ss << "launch_count = " << launch_count << '\n';
+        ss << "launch_count = " << launch_count << "\n\n";
+
+        ss << "[Controls]\n";
+        for (int i = 0; i < SwitchFrontend::NumMappableControls; ++i) {
+            const auto control = static_cast<SwitchFrontend::MappableControl>(i);
+            ss << SwitchFrontend::ControlConfigKey(control) << " = "
+               << static_cast<int>(SwitchFrontend::GetMapping(control)) << '\n';
+        }
 
         return ss.str();
     }
