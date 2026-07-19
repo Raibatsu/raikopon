@@ -87,6 +87,9 @@ public:
     void SwapBuffers() override;
     void TryPresent(int timeout_ms, bool is_secondary) override {}
 
+    void SetLoadingProgress(VideoCore::LoadCallbackStage stage, std::size_t current,
+                            std::size_t total);
+
 private:
     void ReloadPipeline(Settings::StereoRenderOption render_3d);
     void CompileShaders();
@@ -133,6 +136,8 @@ private:
     OverlayDraw PrepareFpsOverlay(const Layout::FramebufferLayout& layout);
 
     OverlayDraw PrepareShaderCompileOverlay(const Layout::FramebufferLayout& layout);
+
+    OverlayDraw PrepareLoadingOverlay(const Layout::FramebufferLayout& layout);
 
     OverlayDraw PrepareQuickMenu(const Layout::FramebufferLayout& layout);
 
@@ -195,6 +200,14 @@ private:
     vk::DescriptorSet overlay_descriptor_set{};
     float overlay_game_fps = 0.0f;
     std::chrono::steady_clock::time_point overlay_last_update{};
+
+    // Set by SetLoadingProgress while LoadDefaultDiskResources is blocking the emulation
+    // thread; read by PrepareLoadingOverlay. loading_active goes back to false once that call
+    // reports LoadCallbackStage::Complete.
+    bool loading_active = false;
+    VideoCore::LoadCallbackStage loading_stage{};
+    std::size_t loading_current = 0;
+    std::size_t loading_total = 0;
 };
 
 } // namespace Vulkan

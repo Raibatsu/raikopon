@@ -5,6 +5,7 @@
 #include <boost/serialization/unique_ptr.hpp>
 #include "common/archives.h"
 #include "common/logging/log.h"
+#include "common/thread_worker.h"
 #include "core/core.h"
 #include "core/file_sys/errors.h"
 #include "core/file_sys/file_backend.h"
@@ -17,6 +18,23 @@
 
 SERIALIZE_EXPORT_IMPL(Service::FS::File)
 SERIALIZE_EXPORT_IMPL(Service::FS::FileSessionSlot)
+
+namespace {
+// Dedicated pool for cache-capable-backend reads (e.g. RomFS), so a read never runs inline
+// on the calling thread (normally the CPU-emulation thread) and, when it does need a worker,
+// doesn't spawn an unpinned OS thread the way ctx.RunAsync's std::async fallback would. Reads
+// are mostly I/O-bound (waiting on the SD card) rather than CPU-bound, so sharing a core with
+// other light work is lower-risk than the CPU-bound shader-compile pools.
+//
+// Lazily constructed on first use (function-local static) rather than a namespace-scope
+// global: a plain global here would spawn its worker threads during static initialization,
+// before main() runs and before libnx/the threading runtime is guaranteed to be ready -
+// that crashed the app on launch, unconditionally, whether or not a game was ever loaded.
+Common::ThreadWorker& GetFileReadWorkers() {
+    static Common::ThreadWorker file_read_workers{2, "FS File Read Worker", {}, {0}};
+    return file_read_workers;
+}
+} // namespace
 
 namespace Service::FS {
 
@@ -126,7 +144,8 @@ void File::Read(Kernel::HLERequestContext& ctx) {
     }
 
     // LOG_DEBUG(Service_FS, "cache={}, offset={}, length={}", cache_ready, offset, length);
-    ctx.RunAsync(
+    ctx.RunOnThreadWorker(
+        GetFileReadWorkers(),
         [this, async_data](Kernel::HLERequestContext& ctx) {
             async_data->data = std::make_unique_for_overwrite<u8[]>(async_data->length);
             const auto read =
@@ -167,7 +186,7 @@ void File::Read(Kernel::HLERequestContext& ctx) {
             }
             rb.PushMappedBuffer(*async_data->buffer);
         },
-        really_async);
+        true);
 }
 
 void File::Write(Kernel::HLERequestContext& ctx) {

@@ -2,12 +2,15 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <chrono>
+#include <thread>
 #include "common/alignment.h"
 #include "common/literals.h"
 #include "common/logging/log.h"
 #include "common/math_util.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
+#include "common/shader_compile_stats.h"
 #include "core/core.h"
 #include "core/loader/loader.h"
 #include "core/memory.h"
@@ -62,8 +65,8 @@ RasterizerVulkan::RasterizerVulkan(Memory::MemorySystem& memory, Pica::PicaCore&
                                    Frontend::EmuWindow& emu_window, const Instance& instance,
                                    Scheduler& scheduler, RenderManager& renderpass_cache,
                                    DescriptorUpdateQueue& update_queue_, u32 image_count)
-    : RasterizerAccelerated{memory, pica}, instance{instance}, scheduler{scheduler},
-      renderpass_cache{renderpass_cache}, update_queue{update_queue_},
+    : RasterizerAccelerated{memory, pica}, renderer{renderer}, instance{instance},
+      scheduler{scheduler}, renderpass_cache{renderpass_cache}, update_queue{update_queue_},
       pipeline_cache{instance, scheduler, renderpass_cache, update_queue},
       runtime{instance, scheduler, renderpass_cache, update_queue, image_count},
       res_cache{memory, custom_tex_manager, runtime, regs, renderer},
@@ -153,17 +156,33 @@ void RasterizerVulkan::LoadDefaultDiskResources(
         program_id = 0;
     }
 
-    if (callback) {
-        callback(VideoCore::LoadCallbackStage::Prepare, 0, 0, "");
-    }
+    auto& renderer_vk = static_cast<RendererVulkan&>(renderer);
+    const VideoCore::DiskResourceLoadCallback wrapped_callback =
+        [&callback, &renderer_vk](VideoCore::LoadCallbackStage stage, std::size_t value,
+                                  std::size_t total, const std::string& object) {
+            if (callback) {
+                callback(stage, value, total, object);
+            }
+            renderer_vk.SetLoadingProgress(stage, value, total);
+        };
+
+    wrapped_callback(VideoCore::LoadCallbackStage::Prepare, 0, 0, "");
 
     pipeline_cache.SetProgramID(program_id);
     pipeline_cache.SetAccurateMul(accurate_mul);
-    pipeline_cache.LoadCache(stop_loading, callback);
+    pipeline_cache.LoadCache(stop_loading, wrapped_callback);
 
-    if (callback) {
-        callback(VideoCore::LoadCallbackStage::Complete, 0, 0, "");
+    while (!stop_loading) {
+        const auto progress = Common::ShaderCompileStats::GetProgress();
+        if (!progress) {
+            break;
+        }
+        wrapped_callback(VideoCore::LoadCallbackStage::Build, progress->done, progress->total,
+                         "");
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
+
+    wrapped_callback(VideoCore::LoadCallbackStage::Complete, 0, 0, "");
 }
 
 void RasterizerVulkan::SyncDrawState() {
