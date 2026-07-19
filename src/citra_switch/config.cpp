@@ -163,6 +163,10 @@ private:
             config->GetInteger("Switch", "gyro_sensitivity_x", 100),
             config->GetInteger("Switch", "gyro_sensitivity_y", 100));
 
+        const long all_layouts = (1L << SwitchFrontend::GetScreenLayoutCount()) - 1;
+        SwitchFrontend::SetLayoutCycleMask(static_cast<std::uint32_t>(
+            config->GetInteger("Switch", "layout_cycle_mask", all_layouts)));
+
         launch_count = config->GetInteger("Switch", "launch_count", 0) + 1;
     }
 
@@ -198,6 +202,7 @@ private:
         ss << "pointer_source = " << static_cast<int>(SwitchFrontend::GetPointerSource()) << '\n';
         ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
         ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
+        ss << "layout_cycle_mask = " << SwitchFrontend::GetLayoutCycleMask() << '\n';
         ss << "launch_count = " << launch_count << '\n';
 
         return ss.str();

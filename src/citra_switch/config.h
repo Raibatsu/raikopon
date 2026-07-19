@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 
 // Facade between the <switch.h> main() and the Azahar core.
@@ -64,6 +65,16 @@ void StepScreenLayout(int delta);
 
 // The name of the currently selected screen layout preset.
 const char* CurrentScreenLayoutName();
+
+// The number of screen layout presets R3 and the quick menu can select.
+int GetScreenLayoutCount();
+
+// The display name of preset `index` or "" if out of range.
+const char* GetScreenLayoutName(int index);
+
+// Bitmask of presets included in R3's cycle (bit i = preset i).
+std::uint32_t GetLayoutCycleMask();
+void SetLayoutCycleMask(std::uint32_t mask);
 
 // True if the most recent BootRom never reached a successful system.Load.
 bool LoadFailed();
