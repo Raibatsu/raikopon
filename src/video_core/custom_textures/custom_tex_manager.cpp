@@ -28,6 +28,9 @@ MICROPROFILE_DEFINE(CustomTexManager_TickFrame, "CustomTexManager", "TickFrame",
 
 constexpr std::size_t MAX_UPLOADS_PER_TICK = 8;
 
+// A resident custom texture costs roughly its decoded size twice.
+constexpr u64 CUSTOM_TEX_MEM_FACTOR = 2;
+
 using namespace Common::Literals;
 
 bool IsPow2(u32 value) {
@@ -303,7 +306,8 @@ bool CustomTexManager::Decode(Material* material, std::function<bool()>&& upload
         const bool was_unloaded = material->IsUnloaded();
         material->LoadFromDisk(flip_png_files);
         if (was_unloaded) {
-            custom_tex_mem_usage.fetch_add(material->size, std::memory_order_relaxed);
+            custom_tex_mem_usage.fetch_add(material->size * CUSTOM_TEX_MEM_FACTOR,
+                                           std::memory_order_relaxed);
         }
         return upload();
     }
@@ -311,7 +315,8 @@ bool CustomTexManager::Decode(Material* material, std::function<bool()>&& upload
         material->state = DecodeState::Pending;
         workers->QueueWork([material, this] {
             material->LoadFromDisk(flip_png_files);
-            custom_tex_mem_usage.fetch_add(material->size, std::memory_order_relaxed);
+            custom_tex_mem_usage.fetch_add(material->size * CUSTOM_TEX_MEM_FACTOR,
+                                           std::memory_order_relaxed);
         });
     }
     async_uploads.push_back({
