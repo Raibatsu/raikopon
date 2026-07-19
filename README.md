@@ -19,7 +19,18 @@ Other features include:
 - CIA installation support
 - Switch software (and hardware) keyboard support
 - Multiple screen layouts via R3 (Press the right stick)
+- Virtual touch input via L3
+- Full button remapping support
+- In-game menu accessible via '+' and '-'
+- System language/region toggle
 - And other things I'm probably forgetting.
+
+Features currently in the pipeline are:
+- Mod support
+- Arctic Base support
+- Cheats support
+
+Feel free to request more features, but do note they may or may not be implemented due to either feasibility or time.
 
 # Installation
 
