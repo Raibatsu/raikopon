@@ -571,14 +571,16 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
+        {"Preload Custom Textures", s.preload_textures ? "On" : "Off"},
+        {"Dump Textures", s.dump_textures ? "On" : "Off"},
         {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
         {"Controller Mapping", "Configure"},
     };
 }
-constexpr int kNumSettings = 15;
+constexpr int kNumSettings = 17;
 // These rows open a modal picker instead of cycling a value in place.
-constexpr int kLayoutCycleRow = 13;
-constexpr int kControllerMapRow = 14;
+constexpr int kLayoutCycleRow = 15;
+constexpr int kControllerMapRow = 16;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -620,6 +622,12 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         break;
     case 12:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
+        break;
+    case 13:
+        s.preload_textures = dir > 0;
+        break;
+    case 14:
+        s.dump_textures = dir > 0;
         break;
     default:
         break;

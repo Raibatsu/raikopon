@@ -36,6 +36,17 @@ show_fps = false
 # Has chance of crashing on some games, although should be safe.
 use_shader_jit =
 
+[Utility]
+# Load a custom texture pack from load/textures/<TITLE_ID>/ (0, default).
+# Can also be toggled live from the quick menu.
+custom_textures = false
+# Preload the whole pack at boot instead of streaming it in (0, default).
+# Costs memory up front but avoids in-game hitches. Only matters with custom_textures on.
+preload_textures = false
+# Dump the game's textures to dump/textures/<TITLE_ID>/ to build a pack (0, default).
+# Takes effect on the next launch.
+dump_textures = false
+
 [System]
 # Console region. -1: auto-select (default), 0: JPN, 1: USA, 2: EUR, 3: AUS, 4: CHN, 5: KOR, 6: TWN.
 region_value =
