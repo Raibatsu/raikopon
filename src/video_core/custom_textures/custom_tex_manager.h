@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <list>
 #include <span>
 #include <unordered_map>
@@ -59,6 +60,12 @@ public:
     /// Decodes the textures in material to a consumable format and uploads it.
     bool Decode(Material* material, std::function<bool()>&& upload);
 
+    /// True once the decoded custom textures have reached the memory budget.
+    bool IsOverMemoryBudget() const noexcept {
+        return max_custom_tex_mem != 0 &&
+               custom_tex_mem_usage.load(std::memory_order_relaxed) >= max_custom_tex_mem;
+    }
+
     /// True when mipmap uploads should be skipped (legacy packs only)
     bool SkipMipmaps() const noexcept {
         return skip_mipmap;
@@ -79,6 +86,9 @@ private:
     /// Creates the thread workers.
     void CreateWorkers();
 
+    /// Computes the per-session custom-texture memory budget from available memory.
+    void ComputeMemoryBudget();
+
 private:
     Core::System& system;
     Frontend::ImageInterface& image_interface;
@@ -88,6 +98,8 @@ private:
     std::vector<std::unique_ptr<CustomTexture>> custom_textures;
     std::list<AsyncUpload> async_uploads;
     std::unique_ptr<Common::ThreadWorker> workers;
+    std::atomic<u64> custom_tex_mem_usage{0};
+    u64 max_custom_tex_mem{0};
     bool textures_loaded{false};
     bool async_custom_loading{true};
     bool skip_mipmap{false};
