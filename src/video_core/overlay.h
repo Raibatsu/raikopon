@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "common/common_types.h"
+
 // A render-agnostic description of an on-screen overlay menu. The frontend fills it in from the
 // input thread and the active renderer reads it back on the emulation thread to draw it on top of
 // the game.
@@ -35,5 +37,10 @@ OverlayMenuState GetOverlayMenuState();
 
 // Skip the copy above when nothing is shown.
 bool IsOverlayMenuVisible();
+
+// Shader-compilation activity.
+void NotifyShaderCompileBegin();
+void NotifyShaderCompileEnd();
+u32 GetPendingShaderCompiles();
 
 } // namespace VideoCore

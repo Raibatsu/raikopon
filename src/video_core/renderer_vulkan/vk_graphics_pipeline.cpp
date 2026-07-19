@@ -7,6 +7,7 @@
 #include "common/alignment.h"
 #include "common/hash.h"
 #include "common/microprofile.h"
+#include "video_core/overlay.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -101,7 +102,11 @@ bool GraphicsPipeline::TryBuild(bool wait_built) {
     }
 
     // Fallback to (a)synchronous compilation
-    worker->QueueWork([this] { Build(); });
+    VideoCore::NotifyShaderCompileBegin();
+    worker->QueueWork([this] {
+        Build();
+        VideoCore::NotifyShaderCompileEnd();
+    });
     is_pending = true;
     return wait_built;
 }
