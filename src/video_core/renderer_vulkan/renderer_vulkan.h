@@ -132,6 +132,8 @@ private:
 
     OverlayDraw PrepareFpsOverlay(const Layout::FramebufferLayout& layout);
 
+    OverlayDraw PrepareShaderCompileOverlay(const Layout::FramebufferLayout& layout);
+
     OverlayDraw PrepareQuickMenu(const Layout::FramebufferLayout& layout);
 
     void RecordOverlay(OverlayDraw overlay);

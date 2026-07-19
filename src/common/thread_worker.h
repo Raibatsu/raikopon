@@ -38,7 +38,9 @@ class StatefulThreadWorker {
         std::conditional_t<with_state, std::function<StateType(std::size_t)>, DummyCallable>;
 
 public:
-    // `preferred_cores` optionally pins each worker to the first available core in the list
+    // `preferred_cores` optionally pins workers to cores from this list, round-robining each
+    // worker's index across it so a multi-worker pool spreads out instead of every worker
+    // funneling onto the list's first available core.
     explicit StatefulThreadWorker(std::size_t num_workers, std::string_view name,
                                   StateMaker func = {},
                                   std::vector<std::uint32_t> preferred_cores = {})
@@ -46,9 +48,14 @@ public:
         const auto lambda = [this, func, cores = std::move(preferred_cores)](
                                 std::stop_token stop_token, std::size_t index) {
             Common::SetCurrentThreadName(thread_name.data());
-            for (const std::uint32_t core_id : cores) {
-                if (Common::Horizon::PinCurrentThread(core_id)) {
-                    break;
+            if (!cores.empty()) {
+                const std::uint32_t assigned = cores[index % cores.size()];
+                if (!Common::Horizon::PinCurrentThread(assigned)) {
+                    for (const std::uint32_t core_id : cores) {
+                        if (Common::Horizon::PinCurrentThread(core_id)) {
+                            break;
+                        }
+                    }
                 }
             }
             {
