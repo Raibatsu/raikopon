@@ -64,10 +64,11 @@ endif()
 nx_generate_nacp(OUTPUT dekopon.nacp
     NAME "Dekopon"
     AUTHOR "Azahar Team \& PalindromicBreadLoaf"
-    VERSION "1.0.0"
+    VERSION "1.1.0"
 )
 
 # Compile deko3d shaders with uam and pack them into the romfs.
+# Do note that the Deko3D backend was never finished and currently isn't planned to be.
 if (ENABLE_DEKO3D)
     find_program(UAM_EXE NAMES uam
         PATHS "$ENV{DEVKITPRO}/tools/bin" "${DEVKITPRO}/tools/bin" "/opt/devkitpro/tools/bin"
