@@ -67,6 +67,8 @@ Currently, selecting a mod from a list is not supported. Be sure that the folder
   remembered. For large packs, `preload_textures = true` loads the whole pack at boot to avoid 
   in-game hitching, at the cost of more memory. This may run you out of RAM depending on the texture pack size.
   It's best to use no more than 1080p textures since you'll run out of RAM fast using 4K textures for basically zero visual gain.
+  Also, note that you may run into a crash trying to use too many custom textures and higher resolutions than 1x. There are
+  some safeguards in place to prevent crashes, but it may still happen.
 - Dumping): set `dump_textures = true` in the `[Utility]` config section. Textures
   the game uses are written to `/switch/dekopon/dump/textures/<TITLE_ID>/`. This setting takes
   effect on the next launch. (You should also really just do this on PC. Performance will be degraded
