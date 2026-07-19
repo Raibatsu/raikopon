@@ -23,6 +23,76 @@
 
 namespace Pica::Shader {
 
+#ifdef __SWITCH__
+
+JitEngine::JitEngine()
+    : compile_workers{1, "PICA Shader JIT", {}, {3, 0}},
+      interpreter{std::make_unique<InterpreterEngine>()} {}
+JitEngine::~JitEngine() = default;
+
+void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
+                             std::shared_ptr<const SwizzleData> swizzle_data) {
+    std::unique_ptr<JitShader> shader;
+    if (!exec_memory_exhausted.load(std::memory_order_relaxed)) {
+        try {
+            shader = std::make_unique<JitShader>();
+            shader->Compile(program_code.get(), swizzle_data.get());
+        } catch (const std::bad_alloc&) {
+            LOG_WARNING(HW_GPU, "Out of executable memory for the shader JIT, falling back to "
+                                "the interpreter for this and all subsequent shaders");
+            exec_memory_exhausted.store(true, std::memory_order_relaxed);
+            shader.reset();
+        } catch (const std::exception& e) {
+            LOG_ERROR(HW_GPU, "Failed to compile shader, falling back to the interpreter: {}",
+                      e.what());
+            shader.reset();
+        }
+    }
+    entry->shader = std::move(shader);
+    entry->ready.store(true, std::memory_order_release);
+}
+
+void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
+    ASSERT(entry_point < MAX_PROGRAM_CODE_LENGTH);
+    setup.entry_point = entry_point;
+
+    setup.DoProgramCodeFixup();
+    const u64 code_hash = setup.GetProgramCodeHash();
+    const u64 swizzle_hash = setup.GetSwizzleDataHash();
+    const u64 cache_key = Common::HashCombine(code_hash, swizzle_hash);
+
+    CacheEntry* entry;
+    bool is_new;
+    {
+        std::lock_guard lock{cache_mutex};
+        auto [iter, inserted] = cache.try_emplace(cache_key);
+        if (inserted) {
+            iter->second = std::make_unique<CacheEntry>();
+        }
+        entry = iter->second.get();
+        is_new = inserted;
+    }
+
+    if (is_new) {
+        // Copy the bytecode off the live ShaderSetup so the compile job can run on another
+        // thread without touching state the caller keeps mutating. JitShader::Compile only
+        // reads through these pointers for the duration of the call, so the copies just need
+        // to outlive this one job.
+        auto program_code = std::make_shared<ProgramCode>(setup.GetProgramCode());
+        auto swizzle_data = std::make_shared<SwizzleData>(setup.GetSwizzleData());
+        compile_workers.QueueWork([this, entry, program_code, swizzle_data] {
+            CompileEntry(entry, program_code, swizzle_data);
+        });
+    }
+
+    // Ready shaders run on the JIT; anything still compiling (or that failed to compile)
+    // falls back to the interpreter via Run()'s existing null-cached_shader path.
+    setup.cached_shader =
+        entry->ready.load(std::memory_order_acquire) ? entry->shader.get() : nullptr;
+}
+
+#else
+
 JitEngine::JitEngine() : interpreter{std::make_unique<InterpreterEngine>()} {}
 JitEngine::~JitEngine() = default;
 
@@ -63,6 +133,8 @@ void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
     setup.cached_shader = shader.get();
     cache.emplace_hint(iter, cache_key, std::move(shader));
 }
+
+#endif // __SWITCH__
 
 MICROPROFILE_DECLARE(GPU_Shader);
 

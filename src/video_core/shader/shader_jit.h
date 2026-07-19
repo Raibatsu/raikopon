@@ -11,6 +11,12 @@
 #include <unordered_map>
 #include "common/common_types.h"
 #include "video_core/shader/shader.h"
+#ifdef __SWITCH__
+#include <atomic>
+#include <mutex>
+#include "common/thread_worker.h"
+#include "video_core/pica/shader_setup.h"
+#endif
 
 namespace Pica::Shader {
 
@@ -26,11 +32,26 @@ public:
     void Run(const ShaderSetup& setup, ShaderUnit& state) const override;
 
 private:
+#ifdef __SWITCH__
+    struct CacheEntry {
+        std::unique_ptr<JitShader> shader;
+        std::atomic<bool> ready{false};
+    };
+
+    void CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
+                      std::shared_ptr<const SwizzleData> swizzle_data);
+
+    std::unordered_map<u64, std::unique_ptr<CacheEntry>> cache;
+    std::mutex cache_mutex;
+    Common::ThreadWorker compile_workers;
+    std::atomic<bool> exec_memory_exhausted{false};
+#else
     /// A null entry marks a shader that failed to compile and runs on the interpreter instead.
     std::unordered_map<u64, std::unique_ptr<JitShader>> cache;
-    std::unique_ptr<InterpreterEngine> interpreter;
     /// Set once executable memory is exhausted.
     bool exec_memory_exhausted = false;
+#endif
+    std::unique_ptr<InterpreterEngine> interpreter;
 };
 
 } // namespace Pica::Shader
