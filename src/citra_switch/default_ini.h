@@ -35,6 +35,10 @@ show_fps = false
 # Only affects draws that fall back to the CPU shader engine.
 # Has chance of crashing on some games, although should be safe.
 use_shader_jit =
+# Skip drawing the right eye of the top screen (0, default).
+# Greatly improves performance in some games, but can cause flickering in others.
+# Can also be toggled live from the quick menu.
+disable_right_eye_render = false
 
 [Utility]
 # Load a custom texture pack from load/textures/<TITLE_ID>/ (0, default).
