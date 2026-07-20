@@ -162,8 +162,9 @@ void MasterSemaphoreFence::SubmitWork(vk::CommandBuffer cmdbuf, vk::Semaphore wa
 
 void MasterSemaphoreFence::WaitThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanFence");
-    // Mostly blocked on GPU fences
-    Common::Horizon::PinCurrentThreadPreferred({3, 0});
+    // Mostly blocked on GPU fences - same treatment as VulkanWorker in vk_scheduler.cpp (prefer
+    // core 1, float onto 0 too, never core 3).
+    Common::Horizon::PinCurrentThreadAffinity(1, (1ULL << 0) | (1ULL << 1));
     const vk::Device device{instance.GetDevice()};
     while (!token.stop_requested()) {
         vk::Fence fence;

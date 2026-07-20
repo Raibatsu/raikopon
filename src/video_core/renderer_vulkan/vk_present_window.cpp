@@ -310,8 +310,9 @@ void PresentWindow::WaitPresent() {
 
 void PresentWindow::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanPresent");
-    // See VulkanWorker: park presentation alongside submission.
-    Common::Horizon::PinCurrentThreadPreferred({3, 0});
+    // Exclusive core 0, off the CPU-JIT (2) and audio (1) cores. Core 3 is avoided entirely -
+    // see the core-affinity notes in vk_scheduler.cpp's WorkerThread.
+    Common::Horizon::PinCurrentThreadPreferred({0});
     while (!token.stop_requested()) {
         std::unique_lock lock{queue_mutex};
 

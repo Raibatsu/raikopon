@@ -87,17 +87,17 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
 #ifdef __SWITCH__
       // hardware_concurrency() isn't reliable here, and we specifically want one worker per
       // target core below so compile load actually spreads across both instead of funneling
-      // onto core 3 alone. Core 1 (audio) was tried as a third target too, but with no
-      // thread-priority mechanism to defer to the audio thread (Common::SetCurrentThreadPriority
-      // is a no-op on Switch) it wasn't clearly worth the added memory-bandwidth contention
-      // from a third core compiling concurrently. Back to {3, 0} to isolate that effect.
+      // onto one core alone.
       num_worker_threads{2},
 #else
       num_worker_threads{std::max(std::thread::hardware_concurrency(), 2U) / 2},
 #endif
-      // Keep shader/pipeline compilation off the CPU JIT core (2) so compile bursts don't stall emulation
-      pipeline_workers{num_worker_threads, "Pipeline workers", {}, {3, 0}},
-      shader_workers{num_worker_threads, "Shader workers", {}, {3, 0}},
+      // Keep shader/pipeline compilation off the CPU JIT core (2) and never target core 3 (not
+      // guaranteed to be available to a homebrew .nro - see vk_scheduler.cpp's WorkerThread).
+      // The two pools' core lists are reversed so, worker-index for worker-index, shader and
+      // pipeline compiles land on different cores instead of both funneling onto the same one.
+      pipeline_workers{num_worker_threads, "Pipeline workers", {}, {1, 0}},
+      shader_workers{num_worker_threads, "Shader workers", {}, {0, 1}},
       descriptor_heaps{
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), BUFFER_BINDINGS, 32},
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), TEXTURE_BINDINGS<1>},

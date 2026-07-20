@@ -126,8 +126,11 @@ void Scheduler::DispatchWork() {
 
 void Scheduler::WorkerThread(std::stop_token stop_token) {
     Common::SetCurrentThreadName("VulkanWorker");
-    // Keep GPU command submission off the CPU JIT core (2) and the audio core (1)
-    Common::Horizon::PinCurrentThreadPreferred({3, 0});
+    // Prefer core 1 but allow floating onto core 0 too, off the CPU JIT (2) and present (0-
+    // exclusive) cores. Deliberately never targets core 3 - homebrew .nro launches aren't
+    // guaranteed that core, and pinning threads there when it's unavailable silently falls
+    // back onto whatever core *is* allowed, defeating the whole point of spreading work out.
+    Common::Horizon::PinCurrentThreadAffinity(1, (1ULL << 0) | (1ULL << 1));
 
     const auto TryPopQueue{[this](auto& work) -> bool {
         if (work_queue.empty()) {
