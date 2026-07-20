@@ -85,6 +85,7 @@ struct MenuSettings {
     bool async_shader_compilation{};
     bool use_disk_shader_cache{};
     bool show_fps{};              // On-screen framerate counter.
+    bool disable_right_eye_render{};
     bool preload_textures{};      // Load the whole custom texture pack up front.
     bool dump_textures{};         // Write the game's textures out to disk.
     int cpu_clock_percentage{};   // 5..400.

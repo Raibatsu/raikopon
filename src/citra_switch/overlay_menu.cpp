@@ -31,6 +31,7 @@ enum class Item {
     PointerMode,
     FpsCounter,
     CustomTextures,
+    DisableRightEyeRender,
     Cheat,
     CheatsEmpty,
     Resume,
@@ -135,6 +136,7 @@ void RebuildRows() {
         s_rows.push_back({Item::PointerMode});
         s_rows.push_back({Item::FpsCounter});
         s_rows.push_back({Item::CustomTextures});
+        s_rows.push_back({Item::DisableRightEyeRender});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
     } else {
@@ -173,6 +175,8 @@ std::string Label(const Row& row) {
         return "FPS Counter";
     case Item::CustomTextures:
         return "Custom Textures";
+    case Item::DisableRightEyeRender:
+        return "No Right Eye";
     case Item::Cheat:
         return CheatName(row.cheat_index);
     case Item::CheatsEmpty:
@@ -201,6 +205,8 @@ std::string Value(const Row& row) {
         return Settings::values.show_fps.GetValue() ? "On" : "Off";
     case Item::CustomTextures:
         return Settings::values.custom_textures.GetValue() ? "On" : "Off";
+    case Item::DisableRightEyeRender:
+        return Settings::values.disable_right_eye_render.GetValue() ? "On" : "Off";
     case Item::Cheat:
         return CheatEnabled(row.cheat_index) ? "On" : "Off";
     default:
@@ -232,6 +238,9 @@ void Adjust(const Row& row, int dir) {
     case Item::CustomTextures:
         Settings::values.custom_textures = dir > 0;
         break;
+    case Item::DisableRightEyeRender:
+        Settings::values.disable_right_eye_render = dir > 0;
+        break;
     case Item::Cheat:
         ToggleCheat(row.cheat_index);
         break;
@@ -255,6 +264,10 @@ void Activate(const Row& row) {
         break;
     case Item::CustomTextures:
         Settings::values.custom_textures = !Settings::values.custom_textures.GetValue();
+        break;
+    case Item::DisableRightEyeRender:
+        Settings::values.disable_right_eye_render =
+            !Settings::values.disable_right_eye_render.GetValue();
         break;
     case Item::Cheat:
         ToggleCheat(row.cheat_index);

@@ -563,6 +563,7 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Async Shader Compilation", s.async_shader_compilation ? "On" : "Off"},
         {"Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off"},
         {"Show FPS Counter", s.show_fps ? "On" : "Off"},
+        {"Disable Right Eye Render", s.disable_right_eye_render ? "On" : "Off"},
         {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
@@ -577,10 +578,10 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Controller Mapping", "Configure"},
     };
 }
-constexpr int kNumSettings = 17;
+constexpr int kNumSettings = 18;
 // These rows open a modal picker instead of cycling a value in place.
-constexpr int kLayoutCycleRow = 15;
-constexpr int kControllerMapRow = 16;
+constexpr int kLayoutCycleRow = 16;
+constexpr int kControllerMapRow = 17;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
@@ -600,33 +601,36 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         s.show_fps = dir > 0;
         break;
     case 5:
-        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
+        s.disable_right_eye_render = dir > 0;
         break;
     case 6:
-        s.is_new_3ds = dir > 0;
+        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
         break;
     case 7:
-        s.use_cpu_jit = dir > 0;
+        s.is_new_3ds = dir > 0;
         break;
     case 8:
-        s.region_value = std::clamp(s.region_value + dir, -1, 6);
+        s.use_cpu_jit = dir > 0;
         break;
     case 9:
-        s.language = std::clamp(s.language + dir, 0, 11);
+        s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
     case 10:
-        s.pointer_source = dir > 0 ? 1 : 0;
+        s.language = std::clamp(s.language + dir, 0, 11);
         break;
     case 11:
-        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        s.pointer_source = dir > 0 ? 1 : 0;
         break;
     case 12:
-        s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
+        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
         break;
     case 13:
-        s.preload_textures = dir > 0;
+        s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
     case 14:
+        s.preload_textures = dir > 0;
+        break;
+    case 15:
         s.dump_textures = dir > 0;
         break;
     default:

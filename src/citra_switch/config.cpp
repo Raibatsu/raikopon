@@ -138,6 +138,7 @@ private:
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
         ReadSetting("Renderer", Settings::values.show_fps);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
+        ReadSetting("Renderer", Settings::values.disable_right_eye_render);
 
         // Utility
         ReadSetting("Utility", Settings::values.custom_textures);
@@ -206,7 +207,9 @@ private:
            << (v.async_shader_compilation.GetValue() ? "true" : "false") << '\n';
         ss << "use_disk_shader_cache = " << (v.use_disk_shader_cache.GetValue() ? "true" : "false")
            << '\n';
-        ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << "\n\n";
+        ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << '\n';
+        ss << "disable_right_eye_render = "
+           << (v.disable_right_eye_render.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[Utility]\n";
         ss << "custom_textures = " << (v.custom_textures.GetValue() ? "true" : "false") << '\n';
