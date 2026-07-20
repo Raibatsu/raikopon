@@ -4,9 +4,12 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <mutex>
 #include <string>
 #include <thread>
 
@@ -33,6 +36,15 @@ std::atomic<bool> s_stop{true};
 // Set true once system.Load succeeds.
 // This lets the menu tell a crash/bad ROM apart from a clean exit.
 std::atomic<bool> s_load_ok{false};
+
+// Guards the pause-wait handshake below — closes the lost-wakeup window between a waiter
+// checking the predicate and actually going to sleep. Does not "protect" s_paused's value
+// (that's atomic); it exists purely for the wait/notify pairing.
+std::mutex s_pause_mutex;
+std::condition_variable s_pause_cv;
+// True while EmuThread should stop calling RunLoop() and block instead.
+std::atomic<bool> s_paused{false};
+bool s_auto_muted = false;
 
 // The screen arrangements R3 cycles through.
 struct ScreenLayoutPreset {
@@ -161,6 +173,20 @@ void EmuThread(std::string path) {
 
         LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
         while (!s_stop) {
+            if (s_paused.load(std::memory_order_relaxed)) {
+                {
+                    std::unique_lock<std::mutex> lock(s_pause_mutex);
+                    s_pause_cv.wait_for(lock, std::chrono::milliseconds(16), [] {
+                        return !s_paused.load(std::memory_order_relaxed) ||
+                               s_stop.load(std::memory_order_relaxed);
+                    });
+                }
+                if (s_paused.load(std::memory_order_relaxed) &&
+                    !s_stop.load(std::memory_order_relaxed)) {
+                    system.GPU().Renderer().SwapBuffers();
+                }
+                continue;
+            }
             const Core::System::ResultStatus result = system.RunLoop();
             if (result == Core::System::ResultStatus::Success) {
                 continue;
@@ -200,6 +226,7 @@ bool BootRom(const std::string& rom_arg) {
     LOG_INFO(Frontend, "Booting ROM {}", path);
 
     s_load_ok = false;
+    s_paused = false;
     auto& system = Core::System::GetInstance();
     FileUtil::SetCurrentRomPath(path);
 
@@ -236,6 +263,39 @@ bool BootRom(const std::string& rom_arg) {
 
 bool IsRunning() {
     return !s_stop;
+}
+
+void PauseEmulation() {
+    if (s_stop || s_paused.load(std::memory_order_relaxed)) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_pause_mutex);
+        s_paused.store(true, std::memory_order_relaxed);
+    }
+    if (!Settings::values.audio_muted) {
+        Settings::values.audio_muted = true;
+        s_auto_muted = true;
+    }
+}
+
+void ResumeEmulation() {
+    if (!s_paused.load(std::memory_order_relaxed)) {
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(s_pause_mutex);
+        s_paused.store(false, std::memory_order_relaxed);
+    }
+    s_pause_cv.notify_all();
+    if (s_auto_muted) {
+        Settings::values.audio_muted = false;
+        s_auto_muted = false;
+    }
+}
+
+bool IsPaused() {
+    return s_paused.load(std::memory_order_relaxed);
 }
 
 void StepScreenLayout(int delta) {
@@ -359,6 +419,7 @@ bool LoadFailed() {
 
 void StopRom() {
     s_stop = true;
+    s_pause_cv.notify_all(); // wake EmuThread if it's parked waiting for resume
     CancelKeyboard();
     if (s_emu_thread.joinable()) {
         s_emu_thread.join();
@@ -371,6 +432,11 @@ void StopRom() {
     auto& system = Core::System::GetInstance();
     if (system.IsPoweredOn()) {
         system.Shutdown();
+    }
+    s_paused = false;
+    if (s_auto_muted) {
+        Settings::values.audio_muted = false;
+        s_auto_muted = false;
     }
 }
 
