@@ -31,6 +31,8 @@ enum class Item {
     PointerMode,
     FpsCounter,
     CustomTextures,
+    TextureFilter,
+    RightEyeRender,
     Cheat,
     CheatsEmpty,
     Resume,
@@ -50,6 +52,25 @@ enum class Tab {
 
 // Percentage step for the gyro sensitivity rows.
 constexpr int kGyroStep = 10;
+
+const char* TextureFilterName(int filter) {
+    switch (filter) {
+    case 0:
+        return "None";
+    case 1:
+        return "Anime4K";
+    case 2:
+        return "Bicubic";
+    case 3:
+        return "ScaleForce";
+    case 4:
+        return "xBRZ";
+    case 5:
+        return "MMPX";
+    default:
+        return "None";
+    }
+}
 
 // Cheats past this many spill onto further pages so the panel never overflows the screen.
 constexpr int kCheatsPerPage = 8;
@@ -135,6 +156,8 @@ void RebuildRows() {
         s_rows.push_back({Item::PointerMode});
         s_rows.push_back({Item::FpsCounter});
         s_rows.push_back({Item::CustomTextures});
+        s_rows.push_back({Item::TextureFilter});
+        s_rows.push_back({Item::RightEyeRender});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
     } else {
@@ -173,6 +196,10 @@ std::string Label(const Row& row) {
         return "FPS Counter";
     case Item::CustomTextures:
         return "Custom Textures";
+    case Item::TextureFilter:
+        return "Texture Filter";
+    case Item::RightEyeRender:
+        return "Disable Right Eye";
     case Item::Cheat:
         return CheatName(row.cheat_index);
     case Item::CheatsEmpty:
@@ -201,6 +228,10 @@ std::string Value(const Row& row) {
         return Settings::values.show_fps.GetValue() ? "On" : "Off";
     case Item::CustomTextures:
         return Settings::values.custom_textures.GetValue() ? "On" : "Off";
+    case Item::TextureFilter:
+        return TextureFilterName(static_cast<int>(Settings::values.texture_filter.GetValue()));
+    case Item::RightEyeRender:
+        return Settings::values.disable_right_eye_render.GetValue() ? "On" : "Off";
     case Item::Cheat:
         return CheatEnabled(row.cheat_index) ? "On" : "Off";
     default:
@@ -232,6 +263,15 @@ void Adjust(const Row& row, int dir) {
     case Item::CustomTextures:
         Settings::values.custom_textures = dir > 0;
         break;
+    case Item::TextureFilter: {
+        const int current = static_cast<int>(Settings::values.texture_filter.GetValue());
+        Settings::values.texture_filter =
+            static_cast<Settings::TextureFilter>(std::clamp(current + dir, 0, 5));
+        break;
+    }
+    case Item::RightEyeRender:
+        Settings::values.disable_right_eye_render = dir > 0;
+        break;
     case Item::Cheat:
         ToggleCheat(row.cheat_index);
         break;
@@ -255,6 +295,10 @@ void Activate(const Row& row) {
         break;
     case Item::CustomTextures:
         Settings::values.custom_textures = !Settings::values.custom_textures.GetValue();
+        break;
+    case Item::RightEyeRender:
+        Settings::values.disable_right_eye_render =
+            !Settings::values.disable_right_eye_render.GetValue();
         break;
     case Item::Cheat:
         ToggleCheat(row.cheat_index);

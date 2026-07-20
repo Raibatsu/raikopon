@@ -38,6 +38,8 @@ texture_filter =
 use_integer_scaling =
 # Smooth (bilinear) filtering of the 3DS's low native resolution instead of a sharp/blocky look (1, default).
 filter_mode = true
+# Skip rendering the 3D right-eye view entirely, since Switch never displays it anyway (0, default).
+disable_right_eye_render =
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
 # Compile PICA vertex shaders to native code instead of interpreting them (1, default).

@@ -86,6 +86,7 @@ struct MenuSettings {
     bool use_disk_shader_cache{};
     bool use_hw_shader{};
     bool disable_pipeline_fast_path{};
+    bool disable_right_eye_render{}; // Skip rendering the 3D right-eye view entirely.
     int texture_filter{};         // Upscaling filter, 0 = None .. 5 = MMPX.
     bool use_integer_scaling{};   // Scale the screen by whole-number factors only.
     bool filter_mode{};           // Linear (on) vs nearest-neighbor (off) filtering.

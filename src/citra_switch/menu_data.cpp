@@ -470,6 +470,7 @@ MenuSettings GetMenuSettings() {
         .use_disk_shader_cache = v.use_disk_shader_cache.GetValue(),
         .use_hw_shader = v.use_hw_shader.GetValue(),
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetValue(),
+        .disable_right_eye_render = v.disable_right_eye_render.GetValue(),
         .texture_filter = static_cast<int>(v.texture_filter.GetValue()),
         .use_integer_scaling = v.use_integer_scaling.GetValue(),
         .filter_mode = v.filter_mode.GetValue(),
@@ -498,6 +499,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_disk_shader_cache = s.use_disk_shader_cache;
     v.use_hw_shader = s.use_hw_shader;
     v.disable_pipeline_fast_path = s.disable_pipeline_fast_path;
+    v.disable_right_eye_render = s.disable_right_eye_render;
     v.texture_filter =
         static_cast<Settings::TextureFilter>(std::clamp(s.texture_filter, 0, 5));
     v.use_integer_scaling = s.use_integer_scaling;
