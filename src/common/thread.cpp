@@ -60,9 +60,36 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
 
 #elif defined(__SWITCH__)
 
+// Hand-declared rather than including <switch.h>: that header's own `u128` typedef conflicts
+// with common_types.h's, which this file needs for the logging include above - same workaround
+// documented in common/horizon_thread.cpp.
+extern "C" unsigned svcSetThreadPriority(unsigned handle, unsigned priority);
+constexpr unsigned CurThreadHandle = 0xFFFF8000;
+
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
-    // TODO: Threading priorities
-    (void)new_priority;
+    // Switch thread priorities: 0 = highest, 63 = lowest; user applications default to 44.
+    unsigned priority;
+    switch (new_priority) {
+    case ThreadPriority::Low:
+        priority = 51;
+        break;
+    case ThreadPriority::Normal:
+        priority = 44;
+        break;
+    case ThreadPriority::High:
+        priority = 40;
+        break;
+    case ThreadPriority::VeryHigh:
+        priority = 36;
+        break;
+    case ThreadPriority::Critical:
+        priority = 32;
+        break;
+    default:
+        priority = 44;
+        break;
+    }
+    svcSetThreadPriority(CurThreadHandle, priority);
 }
 
 #else
