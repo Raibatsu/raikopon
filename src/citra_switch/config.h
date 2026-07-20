@@ -82,4 +82,15 @@ bool LoadFailed();
 // Signals the emulation thread to stop.
 void StopRom();
 
+// Stops calling RunLoop() until ResumeEmulation() is called, and mutes audio so the DSP's
+// stuck-last-sample FIFO-underrun behaviour isn't audible. No-op if not running or already paused.
+void PauseEmulation();
+
+// Resumes RunLoop() after a PauseEmulation() call, restoring audio if PauseEmulation() was the
+// one that muted it. No-op if not paused.
+void ResumeEmulation();
+
+// True while emulation is paused via PauseEmulation().
+bool IsPaused();
+
 } // namespace SwitchFrontend

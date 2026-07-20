@@ -468,6 +468,7 @@ void OpenQuickMenu() {
     s_cheat_page = 0;
     RebuildRows();
     s_open.store(true, std::memory_order_relaxed);
+    PauseEmulation();
     Repaint();
 }
 
@@ -480,6 +481,7 @@ void CloseQuickMenu() {
     if (was_open) {
         PersistCheats();
         SaveConfig();
+        ResumeEmulation();
     }
 }
 
