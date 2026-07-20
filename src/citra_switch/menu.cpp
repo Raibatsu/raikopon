@@ -529,6 +529,25 @@ const char* BackendName(int api) {
     }
 }
 
+const char* TextureFilterName(int filter) {
+    switch (filter) {
+    case 0:
+        return "None";
+    case 1:
+        return "Anime4K";
+    case 2:
+        return "Bicubic";
+    case 3:
+        return "ScaleForce";
+    case 4:
+        return "xBRZ";
+    case 5:
+        return "MMPX";
+    default:
+        return "None";
+    }
+}
+
 std::string ResolutionText(int factor) {
     if (factor == 0) {
         return "Auto (window)";
@@ -563,6 +582,9 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Async Shader Compilation", s.async_shader_compilation ? "On" : "Off"},
         {"Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off"},
         {"Hardware Shader", s.use_hw_shader ? "On" : "Off"},
+        {"Texture Filter", TextureFilterName(s.texture_filter)},
+        {"Linear Filtering", s.filter_mode ? "On" : "Off"},
+        {"Integer Scaling", s.use_integer_scaling ? "On" : "Off"},
         {"Show FPS Counter", s.show_fps ? "On" : "Off"},
         {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
@@ -579,9 +601,9 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Remap Controls", ">"},
     };
 }
-constexpr int kNumSettings = 19;
+constexpr int kNumSettings = 22;
 // These rows open a modal picker instead of cycling a value in place.
-constexpr int kLayoutCycleRow = 16;
+constexpr int kLayoutCycleRow = 19;
 constexpr int kRemapControlsRow = kNumSettings - 1;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
@@ -602,39 +624,48 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         s.use_hw_shader = dir > 0;
         break;
     case 5:
-        s.show_fps = dir > 0;
+        s.texture_filter = std::clamp(s.texture_filter + dir, 0, 5);
         break;
     case 6:
-        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
+        s.filter_mode = dir > 0;
         break;
     case 7:
-        s.is_new_3ds = dir > 0;
+        s.use_integer_scaling = dir > 0;
         break;
     case 8:
-        s.use_cpu_jit = dir > 0;
+        s.show_fps = dir > 0;
         break;
     case 9:
-        s.region_value = std::clamp(s.region_value + dir, -1, 6);
+        s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
         break;
     case 10:
-        s.language = std::clamp(s.language + dir, 0, 11);
+        s.is_new_3ds = dir > 0;
         break;
     case 11:
-        s.pointer_source = dir > 0 ? 1 : 0;
+        s.use_cpu_jit = dir > 0;
         break;
     case 12:
-        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
     case 13:
-        s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
+        s.language = std::clamp(s.language + dir, 0, 11);
         break;
     case 14:
-        s.preload_textures = dir > 0;
+        s.pointer_source = dir > 0 ? 1 : 0;
         break;
     case 15:
-        s.dump_textures = dir > 0;
+        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
+        break;
+    case 16:
+        s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
     case 17:
+        s.preload_textures = dir > 0;
+        break;
+    case 18:
+        s.dump_textures = dir > 0;
+        break;
+    case 20:
         s.disable_pipeline_fast_path = dir > 0;
         break;
     default:

@@ -32,6 +32,12 @@ use_disk_shader_cache =
 # Use hardware-accelerated PICA shaders instead of the software shader interpreter (1, default).
 use_hw_shader =
 disable_pipeline_fast_path =
+# Texture upscaling filter: 0: None (default), 1: Anime4K, 2: Bicubic, 3: ScaleForce, 4: xBRZ, 5: MMPX.
+texture_filter =
+# Scale the screen by whole-number factors only, avoiding uneven pixel stretching (0, default).
+use_integer_scaling =
+# Smooth (bilinear) filtering of the 3DS's low native resolution instead of a sharp/blocky look (1, default).
+filter_mode = true
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
 # Compile PICA vertex shaders to native code instead of interpreting them (1, default).
