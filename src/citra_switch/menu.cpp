@@ -598,10 +598,11 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Dump Textures", s.dump_textures ? "On" : "Off"},
         {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
         {"Disable Pipeline Fast Path", s.disable_pipeline_fast_path ? "On" : "Off"},
+        {"Disable Right Eye Rendering", s.disable_right_eye_render ? "On" : "Off"},
         {"Remap Controls", ">"},
     };
 }
-constexpr int kNumSettings = 22;
+constexpr int kNumSettings = 23;
 // These rows open a modal picker instead of cycling a value in place.
 constexpr int kLayoutCycleRow = 19;
 constexpr int kRemapControlsRow = kNumSettings - 1;
@@ -667,6 +668,9 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         break;
     case 20:
         s.disable_pipeline_fast_path = dir > 0;
+        break;
+    case 21:
+        s.disable_right_eye_render = dir > 0;
         break;
     default:
         break;
