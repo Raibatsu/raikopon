@@ -111,8 +111,22 @@ std::pair<std::optional<Kernel::MemoryMode>, ResultStatus> Apploader_Artic::Load
 
     // Provide the memory mode from the exheader.
     auto& ncch_caps = program_exheader.arm11_system_local_caps;
-    auto mode = static_cast<Kernel::MemoryMode>(ncch_caps.system_mode.Value());
-    return std::make_pair(mode, ResultStatus::Success);
+    const u8 raw_mode = ncch_caps.system_mode.Value();
+    switch (raw_mode) {
+    case static_cast<u8>(Kernel::MemoryMode::Prod):
+    case static_cast<u8>(Kernel::MemoryMode::Dev1):
+    case static_cast<u8>(Kernel::MemoryMode::Dev2):
+    case static_cast<u8>(Kernel::MemoryMode::Dev3):
+    case static_cast<u8>(Kernel::MemoryMode::Dev4):
+    case static_cast<u8>(Kernel::MemoryMode::NewProd):
+    case static_cast<u8>(Kernel::MemoryMode::NewDev1):
+        return std::make_pair(static_cast<Kernel::MemoryMode>(raw_mode), ResultStatus::Success);
+    default:
+        // See the identical check in AppLoader_NCCH::LoadKernelMemoryMode (ncch.cpp) for why
+        // this can't be cast unchecked.
+        LOG_ERROR(Loader, "Invalid exheader system_mode {} - ROM is likely corrupt", raw_mode);
+        return std::make_pair(std::nullopt, ResultStatus::ErrorInvalidFormat);
+    }
 }
 
 std::pair<std::optional<Kernel::New3dsHwCapabilities>, ResultStatus>

@@ -450,6 +450,10 @@ void ShowNotice(const std::string& text, bool error) {
     g_notice_is_error = error;
 }
 
+// Set for a blocking, single-button popup to show the next time the menu is entered
+// (e.g. right after a failed launch attempt). Empty means nothing is queued.
+std::string g_pending_popup;
+
 std::string ToLowerAscii(std::string_view s) {
     std::string out{s};
     for (char& c : out) {
@@ -458,6 +462,15 @@ std::string ToLowerAscii(std::string_view s) {
         }
     }
     return out;
+}
+
+// Case-insensitive check of `path`'s extension against `ext` (which must include the dot,
+// e.g. ".3ds").
+bool HasExtension(std::string_view path, std::string_view ext) {
+    if (path.size() < ext.size()) {
+        return false;
+    }
+    return ToLowerAscii(path.substr(path.size() - ext.size())) == ToLowerAscii(ext);
 }
 
 const char* RegionName(int region) {
@@ -1027,6 +1040,10 @@ public:
         DrawLoading();
         Present();
         Rescan();
+        if (!g_pending_popup.empty()) {
+            ShowPopup(g_pending_popup);
+            g_pending_popup.clear();
+        }
         while (appletMainLoop()) {
             padUpdate(&pad);
             const u64 down = padGetButtonsDown(&pad);
@@ -1242,8 +1259,11 @@ private:
                 selected = std::min(count - 1, selected + grid.cols);
             }
             if (down & HidNpadButton_A) {
-                result = {MenuAction::Launch, games[filtered[selected]].path};
-                return true;
+                const std::string& path = games[filtered[selected]].path;
+                if (!HasExtension(path, ".3ds") || ConfirmDecryptWarning()) {
+                    result = {MenuAction::Launch, path};
+                    return true;
+                }
             }
             // Guarded so that reaching for the +/- exit combo doesn't flash the panel open.
             if ((down & HidNpadButton_Plus) && !(held & HidNpadButton_Minus)) {
@@ -1391,6 +1411,39 @@ private:
             Present();
         }
         return false;
+    }
+
+    // Blocks on a warning shown before launching a raw .3ds dump, which is usually still
+    // encrypted and won't boot. Returns true if the user chooses to launch anyway.
+    bool ConfirmDecryptWarning() {
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            if (down & HidNpadButton_A) {
+                return true;
+            }
+            if (down & HidNpadButton_B) {
+                return false;
+            }
+            Draw();
+            DrawDecryptWarning(canvas);
+            Present();
+        }
+        return false;
+    }
+
+    // Blocks on a single-button acknowledgement popup, e.g. after a failed launch.
+    void ShowPopup(const std::string& message) {
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            if (down & (HidNpadButton_A | HidNpadButton_B)) {
+                return;
+            }
+            Draw();
+            DrawPopup(canvas, message);
+            Present();
+        }
     }
 
     // Move the cursor out to the Library/Settings rail
@@ -1592,7 +1645,11 @@ private:
                 if (tx >= tile_x && tx < tile_x + kTileW && ty >= tile_y &&
                     ty < tile_y + kTileH) {
                     if (selected == i) {
-                        pending_launch = games[filtered[i]].path; // Second tap launches.
+                        // Second tap launches.
+                        const std::string& path = games[filtered[i]].path;
+                        if (!HasExtension(path, ".3ds") || ConfirmDecryptWarning()) {
+                            pending_launch = path;
+                        }
                     }
                     selected = i;
                     EnsureVisible(grid);
@@ -2041,6 +2098,49 @@ private:
         DrawHint(c, hx, hy, "B", "Cancel");
     }
 
+    void DrawDecryptWarning(Canvas& c) {
+        constexpr int w = 640;
+        constexpr int h = 232;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        int ty = y + 20;
+        g_font.Draw(c, x + 24, ty + 22, "Raw .3ds ROM", 24, kColText);
+        ty += 44;
+        g_font.Draw(c, x + 24, ty + 18, "This looks like a raw .3ds dump, which is usually", 18,
+                    kColTextDim);
+        ty += 24;
+        g_font.Draw(c, x + 24, ty + 18, "still encrypted and won't boot as-is.", 18, kColTextDim);
+        ty += 32;
+        g_font.Draw(c, x + 24, ty + 18, "Decrypt it first, or use", 18,
+                    kColTextDim);
+        ty += 24;
+        g_font.Draw(c, x + 24, ty + 18, "a .cci/.cxi dump instead.", 18, kColTextDim);
+
+        int hx = x + 24;
+        const int hy = y + h - 38;
+        hx += DrawHint(c, hx, hy, "A", "Launch anyway") + 22;
+        DrawHint(c, hx, hy, "B", "Cancel");
+    }
+
+    void DrawPopup(Canvas& c, const std::string& message) {
+        constexpr int w = 620;
+        constexpr int h = 176;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        g_font.Draw(c, x + 24, y + 40, "Can't launch", 24, kColError);
+        g_font.Draw(c, x + 24, y + 78, g_font.Truncate(message, 18, w - 48), 18, kColText);
+
+        const int hx = x + 24;
+        const int hy = y + h - 38;
+        DrawHint(c, hx, hy, "A", "OK");
+    }
+
     void DrawInstallProgress(Canvas& c) {
         const std::size_t written = install_written.load();
         const std::size_t total = install_total.load();
@@ -2282,6 +2382,10 @@ MenuResult RunMenu(PadState& pad) {
 
 void SetMenuNotice(const std::string& text) {
     ShowNotice(text, true);
+}
+
+void SetLaunchErrorPopup(const std::string& text) {
+    g_pending_popup = text;
 }
 
 void ShutdownMenu() {

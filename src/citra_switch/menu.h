@@ -27,6 +27,10 @@ MenuResult RunMenu(PadState& pad);
 // Queues a one-shot notice for the next RunMenu entry.
 void SetMenuNotice(const std::string& text);
 
+// Queues a blocking, single-button popup to show the next time RunMenu is entered
+// (e.g. after a failed launch attempt).
+void SetLaunchErrorPopup(const std::string& text);
+
 // Frees the font and shared-font resources cached across RunMenu calls.
 void ShutdownMenu();
 

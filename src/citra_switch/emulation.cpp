@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <string>
 #include <thread>
 
@@ -80,12 +81,17 @@ void ApplyCurrentLayout() {
 
 /// Returns true if `path` is a 3DS title.
 bool IsLoadableRom(const std::string& path) {
-    auto loader = Loader::GetLoader(path);
-    if (!loader) {
+    try {
+        auto loader = Loader::GetLoader(path);
+        if (!loader) {
+            return false;
+        }
+        bool executable = false;
+        return loader->IsExecutable(executable) == Loader::ResultStatus::Success && executable;
+    } catch (const std::exception& e) {
+        LOG_WARNING(Frontend, "Exception probing '{}' for loadability: {}", path, e.what());
         return false;
     }
-    bool executable = false;
-    return loader->IsExecutable(executable) == Loader::ResultStatus::Success && executable;
 }
 
 /// Picks a ROM to boot
@@ -132,38 +138,49 @@ void EmuThread(std::string path) {
     // Mesa's Switch driver cannot reliably present renderbuffers across shared contexts
     window->MakeCurrent();
 
-    const Core::System::ResultStatus load_result = system.Load(*window, path);
-    if (load_result != Core::System::ResultStatus::Success) {
-        LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
-                     static_cast<int>(load_result));
-        window->DoneCurrent();
-        s_stop = true;
-        return;
-    }
-
-    s_load_ok = true;
-
-    u64 program_id = 0;
-    system.GetAppLoader().ReadProgramId(program_id);
-    system.GPU().ApplyPerProgramSettings(program_id);
-
-    // Load any cached disk shaders
-    system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
-        s_stop, [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
-
-    LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
-    while (!s_stop) {
-        const Core::System::ResultStatus result = system.RunLoop();
-        if (result == Core::System::ResultStatus::Success) {
-            continue;
+    try {
+        const Core::System::ResultStatus load_result = system.Load(*window, path);
+        if (load_result != Core::System::ResultStatus::Success) {
+            LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
+                         static_cast<int>(load_result));
+            window->DoneCurrent();
+            s_stop = true;
+            return;
         }
-        if (result == Core::System::ResultStatus::ShutdownRequested) {
-            LOG_INFO(Frontend, "Guest requested shutdown");
-        } else {
-            LOG_CRITICAL(Frontend, "Emulation halted: {} (error {})", system.GetStatusDetails(),
-                         static_cast<int>(result));
+
+        s_load_ok = true;
+
+        u64 program_id = 0;
+        system.GetAppLoader().ReadProgramId(program_id);
+        system.GPU().ApplyPerProgramSettings(program_id);
+
+        // Load any cached disk shaders
+        system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
+            s_stop,
+            [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
+
+        LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
+        while (!s_stop) {
+            const Core::System::ResultStatus result = system.RunLoop();
+            if (result == Core::System::ResultStatus::Success) {
+                continue;
+            }
+            if (result == Core::System::ResultStatus::ShutdownRequested) {
+                LOG_INFO(Frontend, "Guest requested shutdown");
+            } else {
+                LOG_CRITICAL(Frontend, "Emulation halted: {} (error {})", system.GetStatusDetails(),
+                             static_cast<int>(result));
+            }
+            break;
         }
-        break;
+    } catch (const std::exception& e) {
+        // A malformed/encrypted ROM can drive the loader into an oversized allocation or
+        // similar; without this, that exception would propagate out of the thread entry
+        // point and call std::terminate(), hard-crashing the whole app instead of just
+        // failing this one launch. s_load_ok is left as-is: if this fired before it was
+        // set, LoadFailed() still correctly reports the launch as failed.
+        LOG_CRITICAL(Frontend, "Emulation thread threw an exception loading/running '{}': {}", path,
+                     e.what());
     }
 
     window->DoneCurrent();
@@ -187,7 +204,12 @@ bool BootRom(const std::string& rom_arg) {
     FileUtil::SetCurrentRomPath(path);
 
     // Register the loader early so the core reuses it during Load.
-    auto app_loader = Loader::GetLoader(path);
+    std::unique_ptr<Loader::AppLoader> app_loader;
+    try {
+        app_loader = Loader::GetLoader(path);
+    } catch (const std::exception& e) {
+        LOG_WARNING(Frontend, "Exception creating loader for '{}': {}", path, e.what());
+    }
     if (app_loader) {
         system.RegisterAppLoaderEarly(app_loader);
     }
