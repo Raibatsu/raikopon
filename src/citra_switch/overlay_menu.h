@@ -20,8 +20,12 @@ struct QuickMenuNav {
     bool down{};
     bool left{};
     bool right{};
-    bool confirm{}; // A
-    bool cancel{};  // B
+    bool confirm{};   // A
+    bool cancel{};    // B
+    bool tab_prev{};  // L
+    bool tab_next{};  // R
+    bool page_prev{}; // ZL
+    bool page_next{}; // ZR
 };
 
 // True while the overlay is showing.

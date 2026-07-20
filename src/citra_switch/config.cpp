@@ -140,6 +140,11 @@ private:
         ReadSetting("Renderer", Settings::values.show_fps);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
 
+        // Utility
+        ReadSetting("Utility", Settings::values.custom_textures);
+        ReadSetting("Utility", Settings::values.preload_textures);
+        ReadSetting("Utility", Settings::values.dump_textures);
+
         // System
         ReadSetting("System", Settings::values.region_value);
 
@@ -204,6 +209,11 @@ private:
            << '\n';
         ss << "use_hw_shader = " << (v.use_hw_shader.GetValue() ? "true" : "false") << '\n';
         ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << "\n\n";
+
+        ss << "[Utility]\n";
+        ss << "custom_textures = " << (v.custom_textures.GetValue() ? "true" : "false") << '\n';
+        ss << "preload_textures = " << (v.preload_textures.GetValue() ? "true" : "false") << '\n';
+        ss << "dump_textures = " << (v.dump_textures.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[System]\n";
         ss << "region_value = " << v.region_value.GetValue() << "\n\n";

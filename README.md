@@ -22,13 +22,12 @@ Other features include:
 - Virtual touch input via L3
 - Full button remapping support
 - In-game menu accessible via '+' and '-'
+- Cheat, mod (LayeredFS), and texture-pack support
 - System language/region toggle
 - And other things I'm probably forgetting.
 
 Features currently in the pipeline are:
-- Mod support
 - Arctic Base support
-- Cheats support
 
 Feel free to request more features, but do note they may or may not be implemented due to either feasibility or time.
 
@@ -39,6 +38,41 @@ and copying it to your SD card in your standard homebrew location (probably /swi
 
 Your legally acquired ROMs go in `/switch/dekopon/roms/`
 (This can be changed in settings)
+
+# Cheats, mods and texture packs
+
+All three use the same folder layout as desktop Azahar/Citra, rooted at the dekopon directory on
+your SD card (`/switch/dekopon/` by default). In every path below, `<TITLE_ID>` is the game's Title ID
+in uppercase (e.g. `00040000000EC800`). If you have changed the default path, please reflect that in any of the directories below.
+
+## Cheats
+
+- Put a cheat file at `/switch/dekopon/cheats/<TITLE_ID>.txt`. The format is the standard Gateway / Action Replay format.
+- Open the in-game menu (`+` and `-`) to switch individual cheats on and off while the game runs.
+  Your choices are written back to the cheat file, so they persist across launches.
+
+## Mods
+
+Place mod files under `/switch/dekopon/load/mods/<TITLE_ID>/`:
+
+Mods are applied when the game boots.
+
+Currently, selecting a mod from a list is not supported. Be sure that the folders under titleID are
+`romfs` `exefs` and/or `exheader.bin`
+
+## Texture packs
+
+- Loading: drop a pack in `/switch/dekopon/load/textures/<TITLE_ID>/`, then enable
+  **Custom Textures** in the in-game menu (`+` and `-`). This toggle applies immediately and is
+  remembered. For large packs, `preload_textures = true` loads the whole pack at boot to avoid 
+  in-game hitching, at the cost of more memory. This may run you out of RAM depending on the texture pack size.
+  It's best to use no more than 1080p textures since you'll run out of RAM fast using 4K textures for basically zero visual gain.
+  Also, note that you may run into a crash trying to use too many custom textures and higher resolutions than 1x. There are
+  some safeguards in place to prevent crashes, but it may still happen.
+- Dumping): set `dump_textures = true` in the `[Utility]` config section. Textures
+  the game uses are written to `/switch/dekopon/dump/textures/<TITLE_ID>/`. This setting takes
+  effect on the next launch. (You should also really just do this on PC. Performance will be degraded
+  using this option.)
 
 # Build instructions
 ## Required packages
