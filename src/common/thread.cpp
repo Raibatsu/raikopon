@@ -60,9 +60,32 @@ void SetCurrentThreadPriority(ThreadPriority new_priority) {
 
 #elif defined(__SWITCH__)
 
+extern "C" unsigned svcSetThreadPriority(unsigned handle, unsigned priority);
+constexpr unsigned CurThreadHandle = 0xFFFF8000;
+
 void SetCurrentThreadPriority(ThreadPriority new_priority) {
-    // TODO: Threading priorities
-    (void)new_priority;
+    unsigned priority;
+    switch (new_priority) {
+    case ThreadPriority::Low:
+        priority = 51;
+        break;
+    case ThreadPriority::Normal:
+        priority = 44;
+        break;
+    case ThreadPriority::High:
+        priority = 40;
+        break;
+    case ThreadPriority::VeryHigh:
+        priority = 36;
+        break;
+    case ThreadPriority::Critical:
+        priority = 32;
+        break;
+    default:
+        priority = 44;
+        break;
+    }
+    svcSetThreadPriority(CurThreadHandle, priority);
 }
 
 #else

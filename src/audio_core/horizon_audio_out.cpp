@@ -52,6 +52,8 @@ void FillBuffer(AudioOut& audio_out, AudioOutBuffer& buffer) {
 
 void AudioThread(AudioOut* audio_out) {
     Common::Horizon::PinCurrentThread(1);
+    // Above the 44 default (lower is higher) so this thread isn't preempted right when it needs to append its next buffer.
+    svcSetThreadPriority(CUR_THREAD_HANDLE, 38);
 
     while (!audio_out->quit.load(std::memory_order_relaxed)) {
         AudioOutBuffer* released = nullptr;
