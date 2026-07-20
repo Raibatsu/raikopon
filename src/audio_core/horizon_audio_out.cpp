@@ -52,6 +52,10 @@ void FillBuffer(AudioOut& audio_out, AudioOutBuffer& buffer) {
 
 void AudioThread(AudioOut* audio_out) {
     Common::Horizon::PinCurrentThread(1);
+    // Boost priority (default is 44; lower is higher) so this thread isn't preempted right when
+    // it needs to append its next buffer - a missed deadline here is an audible glitch, and
+    // audio-stretching (on by default) reacts to that kind of timing jitter.
+    svcSetThreadPriority(CUR_THREAD_HANDLE, 38);
 
     while (!audio_out->quit.load(std::memory_order_relaxed)) {
         AudioOutBuffer* released = nullptr;
