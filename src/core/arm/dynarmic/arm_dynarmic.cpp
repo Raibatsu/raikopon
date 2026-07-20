@@ -376,6 +376,10 @@ std::unique_ptr<Dynarmic::A32::Jit> ARM_Dynarmic::MakeJit() {
     config.coprocessors[15] = std::make_shared<DynarmicCP15>(cp15_state);
     config.define_unpredictable_behaviour = true;
 
+#ifdef __SWITCH__
+    config.hook_hint_instructions = true;
+#endif
+
     // Multi-process state
     config.processor_id = GetID();
     config.global_monitor = &exclusive_monitor.monitor;
