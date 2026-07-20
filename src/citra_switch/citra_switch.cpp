@@ -184,6 +184,8 @@ void RunGame(PadState& pad, const std::string& rom) {
                     .tab_next = (pressed & HidNpadButton_R) != 0,
                     .page_prev = (pressed & HidNpadButton_ZL) != 0,
                     .page_next = (pressed & HidNpadButton_ZR) != 0,
+                    .modify = (pressed & HidNpadButton_X) != 0,
+                    .remove = (pressed & HidNpadButton_Y) != 0,
                 };
                 if (SwitchFrontend::UpdateQuickMenu(nav) ==
                     SwitchFrontend::QuickMenuAction::ExitGame) {

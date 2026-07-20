@@ -22,6 +22,7 @@
 
 #include "citra_switch/config.h"
 #include "citra_switch/input.h"
+#include "citra_switch/keyboard_prompt.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
 #include "citra_switch/rail_icons.h"
@@ -926,21 +927,28 @@ Grid ComputeGrid() {
     return g;
 }
 
-// swkbd search prompt
-std::string PromptSearch(const std::string& initial) {
+// General swkbd text prompt, sized for anything from a short name to a multi-line cheat code.
+std::string PromptKeyboardText(const std::string& header, const std::string& guide,
+                                const std::string& initial, int max_len) {
     SwkbdConfig kbd;
     if (R_FAILED(swkbdCreate(&kbd, 0))) {
         return initial;
     }
     swkbdConfigMakePresetDefault(&kbd);
-    swkbdConfigSetHeaderText(&kbd, "Search library");
-    swkbdConfigSetGuideText(&kbd, "Game title");
+    swkbdConfigSetHeaderText(&kbd, header.c_str());
+    swkbdConfigSetGuideText(&kbd, guide.c_str());
     swkbdConfigSetInitialText(&kbd, initial.c_str());
-    swkbdConfigSetStringLenMax(&kbd, 128);
-    char out[256] = {};
-    const Result rc = swkbdShow(&kbd, out, sizeof(out));
+    swkbdConfigSetStringLenMax(&kbd, static_cast<u32>(max_len));
+    // UTF-8 headroom: worst case is a few bytes per character.
+    std::vector<char> out(static_cast<std::size_t>(max_len) * 4 + 16, '\0');
+    const Result rc = swkbdShow(&kbd, out.data(), out.size());
     swkbdClose(&kbd);
-    return R_SUCCEEDED(rc) ? std::string{out} : initial;
+    return R_SUCCEEDED(rc) ? std::string{out.data()} : initial;
+}
+
+// swkbd search prompt
+std::string PromptSearch(const std::string& initial) {
+    return PromptKeyboardText("Search library", "Game title", initial, 128);
 }
 
 std::string FormatSize(u64 bytes) {
@@ -2386,6 +2394,11 @@ void SetMenuNotice(const std::string& text) {
 
 void SetLaunchErrorPopup(const std::string& text) {
     g_pending_popup = text;
+}
+
+std::string PromptKeyboard(const std::string& header, const std::string& guide,
+                            const std::string& initial, int max_len) {
+    return PromptKeyboardText(header, guide, initial, max_len);
 }
 
 void ShutdownMenu() {

@@ -15,6 +15,7 @@ add_executable(citra_switch
     horizon_sys_stubs.cpp
     input.cpp
     input.h
+    keyboard_prompt.h
     menu.cpp
     menu.h
     menu_data.cpp
