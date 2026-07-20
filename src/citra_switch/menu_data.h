@@ -87,6 +87,8 @@ struct MenuSettings {
     bool use_hw_shader{};
     bool disable_pipeline_fast_path{};
     bool show_fps{};              // On-screen framerate counter.
+    bool preload_textures{};      // Load the whole custom texture pack up front.
+    bool dump_textures{};         // Write the game's textures out to disk.
     int cpu_clock_percentage{};   // 5..400.
     bool is_new_3ds{};
     bool use_cpu_jit{};

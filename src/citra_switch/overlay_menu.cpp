@@ -2,21 +2,27 @@
 // Copyright(c) 2026: PalindromicBreadLoaf(palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <array>
+#include <algorithm>
 #include <atomic>
 #include <string>
+#include <vector>
 
 #include "citra_switch/config.h"
 #include "citra_switch/input.h"
 #include "citra_switch/overlay_menu.h"
 #include "common/settings.h"
+#include "core/cheats/cheat_base.h"
+#include "core/cheats/cheats.h"
+#include "core/core.h"
+#include "core/loader/loader.h"
 #include "video_core/overlay.h"
 
 namespace SwitchFrontend {
 
 namespace {
 
-// The rows shown in the menu.
+// The kind of row. Cheat rows are appended once per loaded cheat on the current page, so a row
+// also carries the cheat's index into the engine's list.
 enum class Item {
     ScreenLayout,
     GyroSensitivityX,
@@ -24,27 +30,135 @@ enum class Item {
     PointerSource,
     PointerMode,
     FpsCounter,
+    CustomTextures,
+    Cheat,
+    CheatsEmpty,
     Resume,
     ExitGame,
 };
 
-constexpr std::array<Item, 8> kItems = {
-    Item::ScreenLayout, Item::GyroSensitivityX, Item::GyroSensitivityY, Item::PointerSource,
-    Item::PointerMode,  Item::FpsCounter,       Item::Resume,           Item::ExitGame,
+struct Row {
+    Item item;
+    int cheat_index = -1;
+};
+
+// The overlay is split into tabs with L/R used to cycle between them.
+enum class Tab {
+    Settings,
+    Cheats,
 };
 
 // Percentage step for the gyro sensitivity rows.
 constexpr int kGyroStep = 10;
 
-std::atomic<bool> s_open{false};
-int s_selected = 0;
+// Cheats past this many spill onto further pages so the panel never overflows the screen.
+constexpr int kCheatsPerPage = 8;
 
-bool IsAction(Item item) {
-    return item == Item::Resume || item == Item::ExitGame;
+std::atomic<bool> s_open{false};
+Tab s_tab = Tab::Settings;
+int s_selected = 0;
+int s_cheat_page = 0;
+std::vector<Row> s_rows;
+bool s_cheats_dirty = false;
+
+Cheats::CheatEngine* GetCheatEngine() {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return nullptr;
+    }
+    return &system.CheatEngine();
 }
 
-const char* Label(Item item) {
-    switch (item) {
+int CheatCount() {
+    auto* engine = GetCheatEngine();
+    return engine ? static_cast<int>(engine->GetCheats().size()) : 0;
+}
+
+int CheatPageCount() {
+    const int count = CheatCount();
+    return count <= 0 ? 1 : (count + kCheatsPerPage - 1) / kCheatsPerPage;
+}
+
+std::string CheatName(int index) {
+    auto* engine = GetCheatEngine();
+    if (!engine) {
+        return "";
+    }
+    const auto cheats = engine->GetCheats();
+    return index >= 0 && index < static_cast<int>(cheats.size()) ? cheats[index]->GetName() : "";
+}
+
+bool CheatEnabled(int index) {
+    auto* engine = GetCheatEngine();
+    if (!engine) {
+        return false;
+    }
+    const auto cheats = engine->GetCheats();
+    return index >= 0 && index < static_cast<int>(cheats.size()) && cheats[index]->IsEnabled();
+}
+
+void ToggleCheat(int index) {
+    auto* engine = GetCheatEngine();
+    if (!engine) {
+        return;
+    }
+    const auto cheats = engine->GetCheats();
+    if (index < 0 || index >= static_cast<int>(cheats.size())) {
+        return;
+    }
+    cheats[index]->SetEnabled(!cheats[index]->IsEnabled());
+    s_cheats_dirty = true;
+}
+
+// Writes the enabled state the player just picked back to the cheat file so it sticks.
+void PersistCheats() {
+    if (!s_cheats_dirty) {
+        return;
+    }
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        u64 title_id = 0;
+        system.GetAppLoader().ReadProgramId(title_id);
+        system.CheatEngine().SaveCheatFile(title_id);
+    }
+    s_cheats_dirty = false;
+}
+
+// Rebuilds the visible rows for the active tab and page and keeps the cursor in range.
+void RebuildRows() {
+    s_rows.clear();
+    if (s_tab == Tab::Settings) {
+        s_rows.push_back({Item::ScreenLayout});
+        s_rows.push_back({Item::GyroSensitivityX});
+        s_rows.push_back({Item::GyroSensitivityY});
+        s_rows.push_back({Item::PointerSource});
+        s_rows.push_back({Item::PointerMode});
+        s_rows.push_back({Item::FpsCounter});
+        s_rows.push_back({Item::CustomTextures});
+        s_rows.push_back({Item::Resume});
+        s_rows.push_back({Item::ExitGame});
+    } else {
+        const int count = CheatCount();
+        s_cheat_page = std::clamp(s_cheat_page, 0, CheatPageCount() - 1);
+        const int first = s_cheat_page * kCheatsPerPage;
+        const int last = std::min(count, first + kCheatsPerPage);
+        for (int i = first; i < last; ++i) {
+            s_rows.push_back({Item::Cheat, i});
+        }
+        if (s_rows.empty()) {
+            s_rows.push_back({Item::CheatsEmpty});
+        }
+    }
+    s_selected = std::clamp(s_selected, 0, static_cast<int>(s_rows.size()) - 1);
+}
+
+bool IsAction(const Row& row) {
+    return row.item == Item::Resume || row.item == Item::ExitGame ||
+           row.item == Item::CheatsEmpty;
+}
+
+std::string Label(const Row& row) {
+    switch (row.item) {
     case Item::ScreenLayout:
         return "Screen Layout";
     case Item::GyroSensitivityX:
@@ -57,6 +171,12 @@ const char* Label(Item item) {
         return "Pointer Mode";
     case Item::FpsCounter:
         return "FPS Counter";
+    case Item::CustomTextures:
+        return "Custom Textures";
+    case Item::Cheat:
+        return CheatName(row.cheat_index);
+    case Item::CheatsEmpty:
+        return "No cheats loaded";
     case Item::Resume:
         return "Resume Game";
     case Item::ExitGame:
@@ -65,8 +185,8 @@ const char* Label(Item item) {
     return "";
 }
 
-std::string Value(Item item) {
-    switch (item) {
+std::string Value(const Row& row) {
+    switch (row.item) {
     case Item::ScreenLayout:
         return CurrentScreenLayoutName();
     case Item::GyroSensitivityX:
@@ -79,14 +199,18 @@ std::string Value(Item item) {
         return IsPointerModeActive() ? "On" : "Off";
     case Item::FpsCounter:
         return Settings::values.show_fps.GetValue() ? "On" : "Off";
+    case Item::CustomTextures:
+        return Settings::values.custom_textures.GetValue() ? "On" : "Off";
+    case Item::Cheat:
+        return CheatEnabled(row.cheat_index) ? "On" : "Off";
     default:
         return "";
     }
 }
 
 // Left/right on a value row. `dir` is -1 or +1.
-void Adjust(Item item, int dir) {
-    switch (item) {
+void Adjust(const Row& row, int dir) {
+    switch (row.item) {
     case Item::ScreenLayout:
         StepScreenLayout(dir);
         break;
@@ -105,14 +229,20 @@ void Adjust(Item item, int dir) {
     case Item::FpsCounter:
         Settings::values.show_fps = dir > 0;
         break;
+    case Item::CustomTextures:
+        Settings::values.custom_textures = dir > 0;
+        break;
+    case Item::Cheat:
+        ToggleCheat(row.cheat_index);
+        break;
     default:
         break;
     }
 }
 
 // Pressing 'a' on a row advances the list by one.
-void Activate(Item item) {
-    switch (item) {
+void Activate(const Row& row) {
+    switch (row.item) {
     case Item::PointerSource:
         SetPointerSource(GetPointerSource() == PointerSource::Gyro ? PointerSource::Stick
                                                                    : PointerSource::Gyro);
@@ -123,8 +253,14 @@ void Activate(Item item) {
     case Item::FpsCounter:
         Settings::values.show_fps = !Settings::values.show_fps.GetValue();
         break;
+    case Item::CustomTextures:
+        Settings::values.custom_textures = !Settings::values.custom_textures.GetValue();
+        break;
+    case Item::Cheat:
+        ToggleCheat(row.cheat_index);
+        break;
     default:
-        Adjust(item, 1);
+        Adjust(row, 1);
         break;
     }
 }
@@ -132,12 +268,24 @@ void Activate(Item item) {
 void Repaint() {
     VideoCore::OverlayMenuState state;
     state.visible = s_open.load(std::memory_order_relaxed);
-    state.title = "Quick Menu";
     state.selected = s_selected;
-    state.hint = "A Change   B Back   +/- Close";
-    state.items.reserve(kItems.size());
-    for (const Item item : kItems) {
-        state.items.push_back({Label(item), Value(item), IsAction(item)});
+    if (s_tab == Tab::Settings) {
+        state.title = "Quick Menu - Settings";
+        state.hint = "A Change   L/R Tab   +/- Close";
+    } else {
+        const int pages = CheatPageCount();
+        state.title = "Quick Menu - Cheats";
+        if (pages > 1) {
+            state.title += " (Page " + std::to_string(s_cheat_page + 1) + "/" +
+                           std::to_string(pages) + ")";
+            state.hint = "A Toggle   L/R Tab   ZL/ZR Page   +/- Close";
+        } else {
+            state.hint = "A Toggle   L/R Tab   +/- Close";
+        }
+    }
+    state.items.reserve(s_rows.size());
+    for (const Row& row : s_rows) {
+        state.items.push_back({Label(row), Value(row), IsAction(row)});
     }
     VideoCore::SetOverlayMenuState(state);
 }
@@ -149,7 +297,10 @@ bool IsQuickMenuOpen() {
 }
 
 void OpenQuickMenu() {
+    s_tab = Tab::Settings;
     s_selected = 0;
+    s_cheat_page = 0;
+    RebuildRows();
     s_open.store(true, std::memory_order_relaxed);
     Repaint();
 }
@@ -161,6 +312,7 @@ void CloseQuickMenu() {
     VideoCore::SetOverlayMenuState(state);
     // Persist the settings the player changed.
     if (was_open) {
+        PersistCheats();
         SaveConfig();
     }
 }
@@ -178,13 +330,32 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
         return QuickMenuAction::None;
     }
 
-    const int count = static_cast<int>(kItems.size());
-    bool changed = false;
-
     if (nav.cancel) {
         CloseQuickMenu();
         return QuickMenuAction::Close;
     }
+
+    bool changed = false;
+
+    // L/R jump between the Settings and Cheats tabs.
+    if (nav.tab_prev || nav.tab_next) {
+        s_tab = s_tab == Tab::Settings ? Tab::Cheats : Tab::Settings;
+        s_selected = 0;
+        RebuildRows();
+        changed = true;
+    }
+
+    // ZL/ZR page through the cheat list.
+    if (s_tab == Tab::Cheats && (nav.page_prev || nav.page_next)) {
+        const int pages = CheatPageCount();
+        const int dir = nav.page_next ? 1 : -1;
+        s_cheat_page = (s_cheat_page + dir + pages) % pages;
+        s_selected = 0;
+        RebuildRows();
+        changed = true;
+    }
+
+    const int count = static_cast<int>(s_rows.size());
     if (nav.up) {
         s_selected = (s_selected - 1 + count) % count;
         changed = true;
@@ -194,25 +365,25 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
         changed = true;
     }
 
-    const Item item = kItems[s_selected];
-    if (nav.left && !IsAction(item)) {
-        Adjust(item, -1);
+    const Row& row = s_rows[s_selected];
+    if (nav.left && !IsAction(row)) {
+        Adjust(row, -1);
         changed = true;
     }
-    if (nav.right && !IsAction(item)) {
-        Adjust(item, 1);
+    if (nav.right && !IsAction(row)) {
+        Adjust(row, 1);
         changed = true;
     }
     if (nav.confirm) {
-        if (item == Item::Resume) {
+        if (row.item == Item::Resume) {
             CloseQuickMenu();
             return QuickMenuAction::Close;
         }
-        if (item == Item::ExitGame) {
+        if (row.item == Item::ExitGame) {
             CloseQuickMenu();
             return QuickMenuAction::ExitGame;
         }
-        Activate(item);
+        Activate(row);
         changed = true;
     }
 

@@ -572,14 +572,16 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
+        {"Preload Custom Textures", s.preload_textures ? "On" : "Off"},
+        {"Dump Textures", s.dump_textures ? "On" : "Off"},
         {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
         {"Disable Pipeline Fast Path", s.disable_pipeline_fast_path ? "On" : "Off"},
         {"Remap Controls", ">"},
     };
 }
-constexpr int kNumSettings = 17;
-// The R3 layout row opens a picker.
-constexpr int kLayoutCycleRow = 14;
+constexpr int kNumSettings = 19;
+// These rows open a modal picker instead of cycling a value in place.
+constexpr int kLayoutCycleRow = 16;
 constexpr int kRemapControlsRow = kNumSettings - 1;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
@@ -626,7 +628,13 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
     case 13:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
+    case 14:
+        s.preload_textures = dir > 0;
+        break;
     case 15:
+        s.dump_textures = dir > 0;
+        break;
+    case 17:
         s.disable_pipeline_fast_path = dir > 0;
         break;
     default:

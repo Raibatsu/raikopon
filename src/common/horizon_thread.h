@@ -16,4 +16,7 @@ bool PinCurrentThread(std::uint32_t core_id);
 // allowed to run on.
 bool PinCurrentThreadPreferred(std::initializer_list<std::uint32_t> preferred);
 
+// Returns the total memory pool available to the process in bytes.
+std::uint64_t GetTotalMemorySize();
+
 } // namespace Common::Horizon

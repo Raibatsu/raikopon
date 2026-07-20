@@ -46,6 +46,14 @@ bool PinCurrentThreadPreferred(std::initializer_list<std::uint32_t> preferred) {
     return false;
 }
 
+std::uint64_t GetTotalMemorySize() {
+    u64 size{};
+    if (R_FAILED(svcGetInfo(&size, InfoType_TotalMemorySize, CUR_PROCESS_HANDLE, 0))) {
+        return 0;
+    }
+    return size;
+}
+
 #else
 
 bool PinCurrentThread(std::uint32_t) {
@@ -54,6 +62,10 @@ bool PinCurrentThread(std::uint32_t) {
 
 bool PinCurrentThreadPreferred(std::initializer_list<std::uint32_t>) {
     return false;
+}
+
+std::uint64_t GetTotalMemorySize() {
+    return 0;
 }
 
 #endif

@@ -471,6 +471,8 @@ MenuSettings GetMenuSettings() {
         .use_hw_shader = v.use_hw_shader.GetValue(),
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetValue(),
         .show_fps = v.show_fps.GetValue(),
+        .preload_textures = v.preload_textures.GetValue(),
+        .dump_textures = v.dump_textures.GetValue(),
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue()),
         .is_new_3ds = v.is_new_3ds.GetValue(),
         .use_cpu_jit = v.use_cpu_jit.GetValue(),
@@ -494,6 +496,8 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_hw_shader = s.use_hw_shader;
     v.disable_pipeline_fast_path = s.disable_pipeline_fast_path;
     v.show_fps = s.show_fps;
+    v.preload_textures = s.preload_textures;
+    v.dump_textures = s.dump_textures;
     v.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage, 5, 400);
     v.is_new_3ds = s.is_new_3ds;
     v.use_cpu_jit = s.use_cpu_jit;
