@@ -220,10 +220,10 @@ void RunGame(PadState& pad, const std::string& rom) {
         }
         SwitchFrontend::StopRom();
         if (SwitchFrontend::LoadFailed()) {
-            SwitchFrontend::SetMenuNotice("Couldn't launch — check keys / ROM");
+            SwitchFrontend::SetLaunchErrorPopup("Your ROM is unsupported or broken.");
         }
     } else {
-        SwitchFrontend::SetMenuNotice("Couldn't launch — ROM not loadable");
+        SwitchFrontend::SetLaunchErrorPopup("Your ROM is unsupported or broken.");
     }
 
     // Make sure a lingering overlay never survives into the next game or the library menu.

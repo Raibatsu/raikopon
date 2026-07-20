@@ -103,8 +103,25 @@ std::pair<std::optional<Kernel::MemoryMode>, ResultStatus> AppLoader_NCCH::LoadK
 
     // Provide the memory mode from the exheader.
     auto& ncch_caps = overlay_ncch->exheader_header.arm11_system_local_caps;
-    auto mode = static_cast<Kernel::MemoryMode>(ncch_caps.system_mode.Value());
-    return std::make_pair(mode, ResultStatus::Success);
+    const u8 raw_mode = ncch_caps.system_mode.Value();
+    switch (raw_mode) {
+    case static_cast<u8>(Kernel::MemoryMode::Prod):
+    case static_cast<u8>(Kernel::MemoryMode::Dev1):
+    case static_cast<u8>(Kernel::MemoryMode::Dev2):
+    case static_cast<u8>(Kernel::MemoryMode::Dev3):
+    case static_cast<u8>(Kernel::MemoryMode::Dev4):
+    case static_cast<u8>(Kernel::MemoryMode::NewProd):
+    case static_cast<u8>(Kernel::MemoryMode::NewDev1):
+        return std::make_pair(static_cast<Kernel::MemoryMode>(raw_mode), ResultStatus::Success);
+    default:
+        // An out-of-range value here (e.g. the reserved value 1, or anything the 4-bit
+        // exheader field can hold beyond the 8 named modes) used to be cast unchecked and
+        // handed to KernelSystem::MemoryInit, whose memory_region_sizes lookup either landed
+        // on the always-empty reserved slot or read out of bounds, both of which crashed via
+        // ASSERT/UB instead of failing the load cleanly.
+        LOG_ERROR(Loader, "Invalid exheader system_mode {} - ROM is likely corrupt", raw_mode);
+        return std::make_pair(std::nullopt, ResultStatus::ErrorInvalidFormat);
+    }
 }
 
 std::pair<std::optional<Kernel::New3dsHwCapabilities>, ResultStatus>
