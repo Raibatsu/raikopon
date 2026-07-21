@@ -41,6 +41,16 @@ struct FramebufferLayout {
     bool additional_screen_is_bottom = false;
     Common::Rectangle<u32> additional_screen;
     CardboardSettings cardboard;
+    // When upright (!is_rotated), the screens are rotated clockwise instead of anti-clockwise.
+    bool is_upright_flipped = false;
+
+    DisplayOrientation GetOrientation() const {
+        if (is_rotated) {
+            return DisplayOrientation::Landscape;
+        }
+        return is_upright_flipped ? DisplayOrientation::PortraitFlipped
+                                  : DisplayOrientation::Portrait;
+    }
 
     /**
      * Returns the ratio of pixel size of the top screen, compared to the native size of the 3DS

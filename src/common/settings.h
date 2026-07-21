@@ -564,6 +564,7 @@ struct Values {
     SwitchableSetting<LayoutOption> layout_option{LayoutOption::Default, Keys::layout_option};
     SwitchableSetting<bool> swap_screen{false, Keys::swap_screen};
     SwitchableSetting<bool> upright_screen{false, Keys::upright_screen};
+    SwitchableSetting<bool> upright_screen_flipped{false, Keys::upright_screen_flipped};
     SwitchableSetting<SecondaryDisplayLayout> secondary_display_layout{
         SecondaryDisplayLayout::OppositeScreenOnly, Keys::secondary_display_layout};
     SwitchableSetting<std::vector<LayoutOption>> layouts_to_cycle{

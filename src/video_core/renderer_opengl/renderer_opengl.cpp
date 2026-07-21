@@ -745,8 +745,7 @@ void RendererOpenGL::DrawTopScreen(const Layout::FramebufferLayout& layout,
     const float top_screen_width = static_cast<float>(top_screen.GetWidth());
     const float top_screen_height = static_cast<float>(top_screen.GetHeight());
 
-    const auto orientation = layout.is_rotated ? Layout::DisplayOrientation::Landscape
-                                               : Layout::DisplayOrientation::Portrait;
+    const auto orientation = layout.GetOrientation();
     switch (layout.render_3d_mode) {
     case Settings::StereoRenderOption::Off: {
         const int eye = static_cast<int>(Settings::values.mono_render_option.GetValue());
@@ -803,8 +802,7 @@ void RendererOpenGL::DrawBottomScreen(const Layout::FramebufferLayout& layout,
     const float bottom_screen_width = static_cast<float>(bottom_screen.GetWidth());
     const float bottom_screen_height = static_cast<float>(bottom_screen.GetHeight());
 
-    const auto orientation = layout.is_rotated ? Layout::DisplayOrientation::Landscape
-                                               : Layout::DisplayOrientation::Portrait;
+    const auto orientation = layout.GetOrientation();
 
     switch (layout.render_3d_mode) {
     case Settings::StereoRenderOption::Off: {
