@@ -90,6 +90,7 @@ layout_cycle_mask =
 # Controller remapping, editable from Settings > Controller Mapping.
 # Each control stores the physical Switch button that drives it, by index:
 #   0:A 1:B 2:X 3:Y 4:Up 5:Down 6:Left 7:Right 8:L 9:R 10:+ 11:- 12:ZL 13:ZR 14:L3 15:R3
+#   16 leaves the control unbound.
 # map_toggle_pointer/map_cycle_layout/map_touch_tap are the emulator actions.
 map_a =
 map_b =
