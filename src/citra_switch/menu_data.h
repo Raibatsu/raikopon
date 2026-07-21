@@ -84,6 +84,10 @@ struct MenuSettings {
     bool use_vsync{};
     bool async_shader_compilation{};
     bool use_disk_shader_cache{};
+    bool use_hw_shader{};         // Off falls the whole pipeline back to the CPU shader engine.
+    int texture_filter{};         // Upscaling filter, 0 = None .. 5 = MMPX.
+    bool filter_mode{};           // Linear (on) or nearest-neighbour (off) screen sampling.
+    bool use_integer_scaling{};   // Scale the screen by whole-number factors only.
     bool show_fps{};              // On-screen framerate counter.
     bool disable_right_eye_render{};
     bool preload_textures{};      // Load the whole custom texture pack up front.

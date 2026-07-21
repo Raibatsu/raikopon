@@ -468,6 +468,10 @@ MenuSettings GetMenuSettings() {
         .use_vsync = v.use_vsync.GetValue(),
         .async_shader_compilation = v.async_shader_compilation.GetValue(),
         .use_disk_shader_cache = v.use_disk_shader_cache.GetValue(),
+        .use_hw_shader = v.use_hw_shader.GetValue(),
+        .texture_filter = static_cast<int>(v.texture_filter.GetValue()),
+        .filter_mode = v.filter_mode.GetValue(),
+        .use_integer_scaling = v.use_integer_scaling.GetValue(),
         .show_fps = v.show_fps.GetValue(),
         .disable_right_eye_render = v.disable_right_eye_render.GetValue(),
         .preload_textures = v.preload_textures.GetValue(),
@@ -492,6 +496,10 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_vsync = s.use_vsync;
     v.async_shader_compilation = s.async_shader_compilation;
     v.use_disk_shader_cache = s.use_disk_shader_cache;
+    v.use_hw_shader = s.use_hw_shader;
+    v.texture_filter = static_cast<Settings::TextureFilter>(std::clamp(s.texture_filter, 0, 5));
+    v.filter_mode = s.filter_mode;
+    v.use_integer_scaling = s.use_integer_scaling;
     v.show_fps = s.show_fps;
     v.disable_right_eye_render = s.disable_right_eye_render;
     v.preload_textures = s.preload_textures;

@@ -29,6 +29,18 @@ use_vsync =
 async_shader_compilation =
 # Persist compiled shaders to the SD card to cut post first-run stutter (1, default).
 use_disk_shader_cache =
+# Run PICA vertex shaders on the GPU (1, default) instead of the CPU shader engine.
+# Turning this off costs a lot of performance, but can work around shader stutter or
+# rendering bugs in some games. Not recommended to use at all.
+use_hw_shader =
+# Texture upscaling filter. 0: none (default), 1: Anime4K, 2: Bicubic, 3: ScaleForce,
+# 4: xBRZ, 5: MMPX. Anything other than none costs GPU time.
+texture_filter =
+# Sample the 3DS screens bilinearly (1, default) rather than nearest-neighbour.
+filter_mode =
+# Only scale the screens by whole-number factors, trading screen area for even pixels
+# (0, default).
+use_integer_scaling =
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
 # Compile PICA vertex shaders to native code instead of interpreting them (1, default).

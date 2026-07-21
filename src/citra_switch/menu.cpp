@@ -530,6 +530,23 @@ const char* BackendName(int api) {
     }
 }
 
+const char* TextureFilterName(int filter) {
+    switch (filter) {
+    case 1:
+        return "Anime4K";
+    case 2:
+        return "Bicubic";
+    case 3:
+        return "ScaleForce";
+    case 4:
+        return "xBRZ";
+    case 5:
+        return "MMPX";
+    default:
+        return "None";
+    }
+}
+
 std::string ResolutionText(int factor) {
     if (factor == 0) {
         return "Auto (window)";
@@ -557,12 +574,43 @@ std::string LayoutCycleSummary(std::uint32_t mask) {
     return std::to_string(enabled) + " of " + std::to_string(total);
 }
 
+// Row order on the Settings page. BuildSettingRows and CycleSetting must agree on it.
+enum SettingRowIdx {
+    SettingRowResolution,
+    SettingRowVSync,
+    SettingRowAsyncShaders,
+    SettingRowDiskShaderCache,
+    SettingRowHwShader,
+    SettingRowTextureFilter,
+    SettingRowLinearFiltering,
+    SettingRowIntegerScaling,
+    SettingRowShowFps,
+    SettingRowDisableRightEye,
+    SettingRowCpuClock,
+    SettingRowNew3ds,
+    SettingRowCpuJit,
+    SettingRowRegion,
+    SettingRowLanguage,
+    SettingRowPointerSource,
+    SettingRowGyroX,
+    SettingRowGyroY,
+    SettingRowPreloadTextures,
+    SettingRowDumpTextures,
+    SettingRowLayoutCycle,
+    SettingRowControllerMap,
+    SettingRowCount,
+};
+
 std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
     return {
         {"Internal Resolution", ResolutionText(s.resolution_factor)},
         {"VSync", s.use_vsync ? "On" : "Off"},
         {"Async Shader Compilation", s.async_shader_compilation ? "On" : "Off"},
         {"Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off"},
+        {"Hardware Shader", s.use_hw_shader ? "On" : "Off"},
+        {"Texture Filter", TextureFilterName(s.texture_filter)},
+        {"Linear Filtering", s.filter_mode ? "On" : "Off"},
+        {"Integer Scaling", s.use_integer_scaling ? "On" : "Off"},
         {"Show FPS Counter", s.show_fps ? "On" : "Off"},
         {"Disable Right Eye Render", s.disable_right_eye_render ? "On" : "Off"},
         {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
@@ -579,59 +627,71 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Controller Mapping", "Configure"},
     };
 }
-constexpr int kNumSettings = 18;
+constexpr int kNumSettings = SettingRowCount;
 // These rows open a modal picker instead of cycling a value in place.
-constexpr int kLayoutCycleRow = 16;
-constexpr int kControllerMapRow = 17;
+constexpr int kLayoutCycleRow = SettingRowLayoutCycle;
+constexpr int kControllerMapRow = SettingRowControllerMap;
 
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
-    case 0:
+    case SettingRowResolution:
         s.resolution_factor = std::clamp(s.resolution_factor + dir, 0, 4);
         break;
-    case 1:
+    case SettingRowVSync:
         s.use_vsync = dir > 0;
         break;
-    case 2:
+    case SettingRowAsyncShaders:
         s.async_shader_compilation = dir > 0;
         break;
-    case 3:
+    case SettingRowDiskShaderCache:
         s.use_disk_shader_cache = dir > 0;
         break;
-    case 4:
+    case SettingRowHwShader:
+        s.use_hw_shader = dir > 0;
+        break;
+    case SettingRowTextureFilter:
+        s.texture_filter = std::clamp(s.texture_filter + dir, 0, 5);
+        break;
+    case SettingRowLinearFiltering:
+        s.filter_mode = dir > 0;
+        break;
+    case SettingRowIntegerScaling:
+        s.use_integer_scaling = dir > 0;
+        break;
+    case SettingRowShowFps:
         s.show_fps = dir > 0;
         break;
-    case 5:
+    case SettingRowDisableRightEye:
         s.disable_right_eye_render = dir > 0;
         break;
-    case 6:
+    case SettingRowCpuClock:
         s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
         break;
-    case 7:
+    case SettingRowNew3ds:
         s.is_new_3ds = dir > 0;
         break;
-    case 8:
+    case SettingRowCpuJit:
         s.use_cpu_jit = dir > 0;
         break;
-    case 9:
+    case SettingRowRegion:
         s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
-    case 10:
+    case SettingRowLanguage:
         s.language = std::clamp(s.language + dir, 0, 11);
         break;
-    case 11:
+    case SettingRowPointerSource:
         s.pointer_source = dir > 0 ? 1 : 0;
         break;
-    case 12:
+    case SettingRowGyroX:
         s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
         break;
-    case 13:
+    case SettingRowGyroY:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
-    case 14:
+    case SettingRowPreloadTextures:
         s.preload_textures = dir > 0;
         break;
-    case 15:
+    case SettingRowDumpTextures:
         s.dump_textures = dir > 0;
         break;
     default:
