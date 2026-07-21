@@ -13,6 +13,7 @@
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
 #include "common/file_util.h"
+#include "common/horizon_boost.h"
 #include "common/horizon_thread.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
@@ -132,24 +133,29 @@ void EmuThread(std::string path) {
     // Mesa's Switch driver cannot reliably present renderbuffers across shared contexts
     window->MakeCurrent();
 
-    const Core::System::ResultStatus load_result = system.Load(*window, path);
-    if (load_result != Core::System::ResultStatus::Success) {
-        LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
-                     static_cast<int>(load_result));
-        window->DoneCurrent();
-        s_stop = true;
-        return;
-    }
-
-    s_load_ok = true;
-
     u64 program_id = 0;
-    system.GetAppLoader().ReadProgramId(program_id);
-    system.GPU().ApplyPerProgramSettings(program_id);
+    {
+        const Common::Horizon::CpuBoostScope boost;
 
-    // Load any cached disk shaders
-    system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
-        s_stop, [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
+        const Core::System::ResultStatus load_result = system.Load(*window, path);
+        if (load_result != Core::System::ResultStatus::Success) {
+            LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
+                         static_cast<int>(load_result));
+            window->DoneCurrent();
+            s_stop = true;
+            return;
+        }
+
+        s_load_ok = true;
+
+        system.GetAppLoader().ReadProgramId(program_id);
+        system.GPU().ApplyPerProgramSettings(program_id);
+
+        // Load any cached disk shaders
+        system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
+            s_stop,
+            [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
+    }
 
     LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
     while (!s_stop) {
