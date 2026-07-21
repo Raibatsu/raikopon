@@ -135,6 +135,7 @@ if (ANDROID AND NOT ENABLE_LIBRETRO)
   )
 endif()
 
+# Compiled everywhere so shared code can pin threads (and boost) unconditionally.
 target_sources(citra_common PRIVATE
   horizon_boost.cpp
   horizon_boost.h
