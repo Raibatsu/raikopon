@@ -58,7 +58,7 @@ bool s_touch_active{};
 
 // The position is stored as a fraction of the bottom screen so it stays valid across layout
 // changes and can never leave the screen (it is clamped to [0, 1]).
-std::atomic<PointerSource> s_pointer_source{PointerSource::Stick};
+std::atomic<PointerSource> s_pointer_source{PointerSource::LeftStick};
 std::atomic<int> s_gyro_sensitivity_x{100};
 std::atomic<int> s_gyro_sensitivity_y{100};
 std::atomic<bool> s_pointer_mode{false};
@@ -221,14 +221,14 @@ std::tuple<float, float> NormalizeStick(std::int32_t raw_x, std::int32_t raw_y) 
     return {x / magnitude * scaled_magnitude, y / magnitude * scaled_magnitude};
 }
 
-// Moves the pointer this frame from either the (already-normalized) left stick or the gyro,
+// Moves the pointer this frame from either the (already-normalized) driving stick or the gyro,
 // then clamps it to the bottom screen.
-void AdvancePointer(const InputState& state, float dt, float left_x, float left_y) {
+void AdvancePointer(const InputState& state, float dt, float stick_x, float stick_y) {
     float dfx = 0.0f;
     float dfy = 0.0f;
-    if (s_pointer_source.load(std::memory_order_relaxed) == PointerSource::Stick) {
-        dfx = left_x * kStickPointerSpeed * dt;
-        dfy = -left_y * kStickPointerSpeed * dt; // stick up is +y, but the screen's top is frac 0.
+    if (s_pointer_source.load(std::memory_order_relaxed) != PointerSource::Gyro) {
+        dfx = stick_x * kStickPointerSpeed * dt;
+        dfy = -stick_y * kStickPointerSpeed * dt; // stick up is +y, but the screen's top is frac 0.
     } else if (state.motion.active) {
         const float yaw = state.motion.gyro_y;   // vertical rotation
         const float pitch = state.motion.gyro_x; // horizontal rotation
@@ -424,8 +424,9 @@ void UpdateInput(const InputState& state) {
     const auto [left_x, left_y] = NormalizeStick(state.left_x, state.left_y);
     const auto [right_x, right_y] = NormalizeStick(state.right_x, state.right_y);
     const bool pointer_mode = s_pointer_mode.load(std::memory_order_relaxed);
-    const bool stick_pointer =
-        pointer_mode && s_pointer_source.load(std::memory_order_relaxed) == PointerSource::Stick;
+    const PointerSource pointer_source = s_pointer_source.load(std::memory_order_relaxed);
+    const bool left_pointer = pointer_mode && pointer_source == PointerSource::LeftStick;
+    const bool right_pointer = pointer_mode && pointer_source == PointerSource::RightStick;
 
     // In pointer mode the tap button taps the touchscreen instead of reaching the guest.
     const std::uint64_t tap_mask =
@@ -435,13 +436,15 @@ void UpdateInput(const InputState& state) {
     const std::uint64_t buttons = pointer_mode ? state.buttons & ~tap_mask : state.buttons;
     s_buttons.store(buttons, std::memory_order_relaxed);
 
-    // The left stick drives the pointer while stick-pointer mode is on, so free it from the pad.
-    s_stick_x[Settings::NativeAnalog::CirclePad].store(stick_pointer ? 0.0f : left_x,
+    // Whichever stick drives the pointer is freed from the pad while it does so.
+    s_stick_x[Settings::NativeAnalog::CirclePad].store(left_pointer ? 0.0f : left_x,
                                                        std::memory_order_relaxed);
-    s_stick_y[Settings::NativeAnalog::CirclePad].store(stick_pointer ? 0.0f : left_y,
+    s_stick_y[Settings::NativeAnalog::CirclePad].store(left_pointer ? 0.0f : left_y,
                                                        std::memory_order_relaxed);
-    s_stick_x[Settings::NativeAnalog::CStick].store(right_x, std::memory_order_relaxed);
-    s_stick_y[Settings::NativeAnalog::CStick].store(right_y, std::memory_order_relaxed);
+    s_stick_x[Settings::NativeAnalog::CStick].store(right_pointer ? 0.0f : right_x,
+                                                    std::memory_order_relaxed);
+    s_stick_y[Settings::NativeAnalog::CStick].store(right_pointer ? 0.0f : right_y,
+                                                    std::memory_order_relaxed);
 
     if (state.motion.active) {
         StoreMotion(
@@ -454,7 +457,8 @@ void UpdateInput(const InputState& state) {
 
     const float dt = PointerDeltaSeconds();
     if (pointer_mode) {
-        AdvancePointer(state, dt, left_x, left_y);
+        AdvancePointer(state, dt, right_pointer ? right_x : left_x,
+                       right_pointer ? right_y : left_y);
     }
 
     EmuWindow_Switch* window = GetEmuWindow();
@@ -497,7 +501,24 @@ PointerSource GetPointerSource() {
 }
 
 void SetPointerSource(PointerSource source) {
+    if (source >= PointerSource::Count) {
+        source = PointerSource::LeftStick;
+    }
     s_pointer_source.store(source, std::memory_order_relaxed);
+}
+
+const char* PointerSourceName(PointerSource source) {
+    switch (source) {
+    case PointerSource::LeftStick:
+        return "Left Stick";
+    case PointerSource::Gyro:
+        return "Gyro";
+    case PointerSource::RightStick:
+        return "Right Stick";
+    case PointerSource::Count:
+        break;
+    }
+    return "";
 }
 
 int GetGyroSensitivityX() {

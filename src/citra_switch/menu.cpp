@@ -618,7 +618,8 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
         {"Console Region", RegionName(s.region_value)},
         {"System Language", LanguageName(s.language)},
-        {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
+        {"Touch Pointer Source",
+         PointerSourceName(static_cast<PointerSource>(s.pointer_source))},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
         {"Preload Custom Textures", s.preload_textures ? "On" : "Off"},
@@ -680,7 +681,7 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
         s.language = std::clamp(s.language + dir, 0, 11);
         break;
     case SettingRowPointerSource:
-        s.pointer_source = dir > 0 ? 1 : 0;
+        s.pointer_source = std::clamp(s.pointer_source + dir, 0, NumPointerSources - 1);
         break;
     case SettingRowGyroX:
         s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
