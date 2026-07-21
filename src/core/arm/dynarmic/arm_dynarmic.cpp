@@ -17,10 +17,7 @@
 #ifdef ENABLE_GDBSTUB
 #include "core/gdbstub/gdbstub.h"
 #endif
-#include "core/hle/kernel/kernel.h"
-#include "core/hle/kernel/process.h"
 #include "core/hle/kernel/svc.h"
-#include "core/hle/kernel/vm_manager.h"
 #include "core/memory.h"
 
 #ifndef SIGILL
@@ -54,22 +51,6 @@ public:
     }
     std::uint64_t MemoryRead64(VAddr vaddr) override {
         return memory.Read64(vaddr);
-    }
-
-    bool IsReadOnlyMemory(VAddr vaddr) override {
-        const auto process = parent.system.Kernel().GetCurrentProcess();
-        if (!process) {
-            return false;
-        }
-        const auto& vm_manager = process->vm_manager;
-        const auto vma = vm_manager.FindVMA(vaddr);
-        if (vma == vm_manager.vma_map.end() ||
-            vma->second.type != Kernel::VMAType::BackingMemory) {
-            return false;
-        }
-        const auto perms = static_cast<u8>(vma->second.permissions);
-        return (perms & static_cast<u8>(Kernel::VMAPermission::Read)) != 0 &&
-               (perms & static_cast<u8>(Kernel::VMAPermission::Write)) == 0;
     }
 
     void MemoryWrite8(VAddr vaddr, std::uint8_t value) override {
@@ -330,7 +311,17 @@ void ARM_Dynarmic::ClearInstructionCache() {
 }
 
 void ARM_Dynarmic::InvalidateCacheRange(u32 start_address, std::size_t length) {
-    jit->InvalidateCacheRange(start_address, length);
+    // Every page table this core has ever run under gets its own cached Jit (see
+    // SetPageTable() below), and only one of them is "active" (`jit`) at a time. A guest
+    // address range can hold different code across the lifetime of the emulator (e.g. a CRO
+    // unloads and a different module gets loaded into the same range) — if only the active
+    // jit were invalidated here, any *other* cached jit for this same core (from a page table
+    // this core visited before, e.g. another process/applet) would keep a stale translation
+    // for that address indefinitely, since nothing else ever revisits it. Loop all of them,
+    // matching ClearInstructionCache() just above.
+    for (const auto& j : jits) {
+        j.second->InvalidateCacheRange(start_address, length);
+    }
 }
 
 void ARM_Dynarmic::ClearExclusiveState() {
