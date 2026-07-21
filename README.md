@@ -1,14 +1,14 @@
-<h1 align="center">Dekopon</h1>
+<h1 align="center">Raikopon</h1>
 
 <p align="center">
-  <img src="docs/dekopon_square.webp" alt="Dekopon logo" width="220">
+  <img src="src/citra_switch/icon.jpg" alt="Raikopon logo" width="220">
 </p>
 
-<p align="center"><sub>Logo by <a href="https://stickymangorice.com/">StickyMangoRice</a></sub></p>
+<p align="center"><sub>Logo by Noihs</sub></p>
 
-<b>Dekopon</b> is an open-source 3DS emulator for the Nintendo Switch based on Azahar.
+<b>Raikopon</b> is an open-source 3DS emulator for the Nintendo Switch based on Dekopon, which is an emulator for Azahar.
 
-Many many thanks to the Azahar team for creating such an amazing project in the first place.
+Many many thanks to the Azahar team, PalindromicBreadLoaf & dantiicu for creating such an amazing project in the first place.
 
 # Project status
 
@@ -119,7 +119,7 @@ cmake -S . -B build/switch \
 cmake --build build/switch --target citra_switch_nro -j$(nproc)
 ```
 
-The output nro should be located in build/switch/src/citra_switch/dekopon.nro
+The output nro should be located in build/switch/src/citra_switch/raikopon.nro
 
 # How can I contribute?
 
