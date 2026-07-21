@@ -26,10 +26,13 @@ enum class InputButton : std::uint8_t {
     ZR,
     L3,
     R3,
+    None,
 };
 
 // The number of physical buttons the user can bind a control to.
 inline constexpr int NumPhysicalButtons = static_cast<int>(InputButton::R3) + 1;
+
+inline constexpr int NumBindingChoices = NumPhysicalButtons + 1;
 
 // A control the player can remap.
 enum class MappableControl : std::uint8_t {
@@ -55,8 +58,10 @@ enum class MappableControl : std::uint8_t {
 
 inline constexpr int NumMappableControls = static_cast<int>(MappableControl::Count);
 
+// An unbound control gets an empty mask.
 constexpr std::uint64_t ButtonMask(InputButton button) {
-    return std::uint64_t{1} << static_cast<std::uint8_t>(button);
+    return button == InputButton::None ? 0
+                                       : std::uint64_t{1} << static_cast<std::uint8_t>(button);
 }
 
 // A six-axis sample nicely borrowed (read stolen) from libnx.

@@ -1522,7 +1522,7 @@ private:
     // Cycles the physical Switch button bound to `control` by `dir`.
     void StepRemapMapping(MappableControl control, int dir) {
         const int cur = static_cast<int>(GetMapping(control));
-        const int next = (cur + dir + NumPhysicalButtons) % NumPhysicalButtons;
+        const int next = (cur + dir + NumBindingChoices) % NumBindingChoices;
         SetMapping(control, static_cast<InputButton>(next));
     }
 
@@ -1541,6 +1541,9 @@ private:
         }
         if ((nav & DirRight) || (down & HidNpadButton_A)) {
             StepRemapMapping(control, +1);
+        }
+        if (down & HidNpadButton_X) {
+            SetMapping(control, InputButton::None);
         }
         if (down & HidNpadButton_Y) {
             SetMapping(control, DefaultMapping(control));
@@ -2233,6 +2236,7 @@ private:
         const int hy = y + h - 38;
         hx += DrawHint(c, hx, hy, "<>", "Change") + 22;
         hx += DrawHint(c, hx, hy, "A", "Next") + 22;
+        hx += DrawHint(c, hx, hy, "X", "Unbind") + 22;
         hx += DrawHint(c, hx, hy, "Y", "Default") + 22;
         DrawHint(c, hx, hy, "B", "Back");
     }

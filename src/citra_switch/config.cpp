@@ -184,7 +184,7 @@ private:
             const int def = static_cast<int>(SwitchFrontend::DefaultMapping(control));
             const int raw =
                 config->GetInteger("Controls", SwitchFrontend::ControlConfigKey(control), def);
-            const int clamped = std::clamp(raw, 0, SwitchFrontend::NumPhysicalButtons - 1);
+            const int clamped = std::clamp(raw, 0, SwitchFrontend::NumBindingChoices - 1);
             SwitchFrontend::SetMapping(control,
                                        static_cast<SwitchFrontend::InputButton>(clamped));
         }

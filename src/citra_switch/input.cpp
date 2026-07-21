@@ -152,7 +152,7 @@ class SwitchButtonFactory final : public Input::Factory<Input::ButtonDevice> {
 public:
     std::unique_ptr<Input::ButtonDevice> Create(const Common::ParamPackage& params) override {
         const int button =
-            std::clamp(params.Get("button", 0), 0, static_cast<int>(InputButton::R3));
+            std::clamp(params.Get("button", 0), 0, static_cast<int>(InputButton::None));
         return std::make_unique<SwitchButton>(static_cast<InputButton>(button));
     }
 };
@@ -275,8 +275,9 @@ InputButton DefaultMapping(MappableControl control) {
 void ApplyButtonMappings() {
     auto& profile = Settings::values.current_input_profile;
     for (int i = 0; i < static_cast<int>(kControlToNative.size()); ++i) {
+        const InputButton button = GetMapping(static_cast<MappableControl>(i));
         profile.buttons[kControlToNative[i]] =
-            ButtonParam(GetMapping(static_cast<MappableControl>(i)));
+            button == InputButton::None ? "engine:null" : ButtonParam(button);
     }
 }
 
@@ -356,6 +357,8 @@ const char* PhysicalButtonName(InputButton button) {
         return "L3 (Left Stick)";
     case InputButton::R3:
         return "R3 (Right Stick)";
+    case InputButton::None:
+        return "Unbound";
     }
     return "";
 }
