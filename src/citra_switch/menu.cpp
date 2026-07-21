@@ -25,6 +25,7 @@
 #include "citra_switch/menu.h"
 #include "citra_switch/menu_data.h"
 #include "citra_switch/rail_icons.h"
+#include "common/horizon_boost.h"
 
 namespace SwitchFrontend {
 namespace {
@@ -1298,6 +1299,7 @@ private:
         install_done = false;
         install_active = true;
         install_thread = std::thread([this, path = cia.path] {
+            const Common::Horizon::CpuBoostScope boost;
             install_result = InstallCia(path, [this](std::size_t written, std::size_t total) {
                 install_written = written;
                 install_total = total;
