@@ -1,7 +1,7 @@
 <h1 align="center">Raikopon</h1>
 
 <p align="center">
-  <img src="src/citra_switch/icon.jpg" alt="Raikopon logo" width="220">
+  <img src="docs/raikopon_icon.jpg" alt="Raikopon logo" width="220">
 </p>
 
 <p align="center"><sub>Logo by Noihs</sub></p>
