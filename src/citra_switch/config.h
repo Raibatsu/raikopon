@@ -61,6 +61,9 @@ void CycleScreenLayout();
 // Steps the screen layout by `delta` presets and applies it live.
 void StepScreenLayout(int delta);
 
+// Swaps which 3DS screen occupies which slot of the current arrangement.
+void ToggleSwapScreens();
+
 // The name of the currently selected screen layout preset.
 const char* CurrentScreenLayoutName();
 
