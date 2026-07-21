@@ -81,6 +81,9 @@ gyro_sensitivity_y =
 # Bitmask of screen-layout presets the R3 button cycles through (bit 0 = the first preset).
 # Defaults to every preset enabled. The quick menu always offers every layout.
 layout_cycle_mask =
+# Core Clock percentage used while a movie-library CRO is loaded, e.g. Pokémon cutscenes
+# (25, default). Editable from the quick menu. 10-100.
+movie_throttle_clock_percentage =
 
 [Controls]
 # Controller remapping, editable from Settings > Remap Controls.

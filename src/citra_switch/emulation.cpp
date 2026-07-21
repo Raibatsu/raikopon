@@ -2,6 +2,7 @@
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -45,6 +46,42 @@ std::condition_variable s_pause_cv;
 // True while EmuThread should stop calling RunLoop() and block instead.
 std::atomic<bool> s_paused{false};
 bool s_auto_muted = false;
+
+constexpr s32 kMovieThrottleClockMin = 10;
+constexpr s32 kMovieThrottleClockMax = 100;
+// Percentage the Core Clock is throttled to while a movie-library CRO reports playback is
+// active (see RegisterMovieCpuThrottle). Adjustable from the quick menu — see
+// Get/SetMovieThrottleClockPercentage below.
+std::atomic<s32> s_movie_throttle_clock_percentage{25};
+// The player's own Core Clock setting, captured when a video starts so it can be restored
+// exactly (rather than hardcoding 100%) once the video ends.
+s32 s_saved_cpu_clock_percentage = 100;
+
+// MVD (the 3DS's real video-decode service) is unimplemented — see
+// core/hle/service/mvd/mvd_std.cpp — and at least some titles' movie sequences never call it at
+// all, so this instead reacts to core/hle/service/ldr_ro/ldr_ro.cpp loading/unloading a CRO named
+// "MovieLib".
+// Directly drives the same "Core Clock" Settings-page value the player can already set by hand
+// (menu.cpp's "CPU Clock" row), so it reads correctly if checked mid-playback, then restores
+// whatever it was set to before.
+void RegisterMovieCpuThrottle(Core::System& system) {
+    system.RegisterMoviePlaybackStateChanged([&system](bool playing) {
+        if (playing) {
+            const s32 throttle_percentage =
+                s_movie_throttle_clock_percentage.load(std::memory_order_relaxed);
+            s_saved_cpu_clock_percentage = Settings::values.cpu_clock_percentage.GetValue();
+            Settings::values.cpu_clock_percentage = throttle_percentage;
+            system.ApplySettings();
+            LOG_INFO(Frontend, "Movie playback started: throttling Core Clock to {}%",
+                     throttle_percentage);
+        } else {
+            Settings::values.cpu_clock_percentage = s_saved_cpu_clock_percentage;
+            system.ApplySettings();
+            LOG_INFO(Frontend, "Movie playback ended: restoring Core Clock to {}%",
+                     s_saved_cpu_clock_percentage);
+        }
+    });
+}
 
 // The screen arrangements R3 cycles through.
 struct ScreenLayoutPreset {
@@ -247,6 +284,7 @@ bool BootRom(const std::string& rom_arg) {
     // Hand text input to Horizon's swkbd.
     Frontend::RegisterDefaultApplets(system);
     RegisterKeyboard(system);
+    RegisterMovieCpuThrottle(system);
 
     // Transfer ownership of the window context from the main thread to the emulation thread.
     auto* window = GetEmuWindow();
@@ -413,6 +451,16 @@ void SetLayoutCycleMask(std::uint32_t mask) {
     s_layout_cycle_mask.store(mask & all, std::memory_order_relaxed);
 }
 
+s32 GetMovieThrottleClockPercentage() {
+    return s_movie_throttle_clock_percentage.load(std::memory_order_relaxed);
+}
+
+void SetMovieThrottleClockPercentage(s32 percentage) {
+    s_movie_throttle_clock_percentage.store(
+        std::clamp(percentage, kMovieThrottleClockMin, kMovieThrottleClockMax),
+        std::memory_order_relaxed);
+}
+
 bool LoadFailed() {
     return !s_load_ok;
 }
@@ -430,6 +478,10 @@ void StopRom() {
         window->MakeCurrent();
     }
     auto& system = Core::System::GetInstance();
+    // In case the game was exited mid-video: SetMoviePlaying() no-ops if called with the same
+    // value it already holds, so if this is left set, a video starting right at the next boot
+    // (before any matching CRO-unload call) wouldn't trigger the throttle callback at all.
+    system.SetMoviePlaying(false);
     if (system.IsPoweredOn()) {
         system.Shutdown();
     }

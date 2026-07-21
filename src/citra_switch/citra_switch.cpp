@@ -126,6 +126,26 @@ u64 PollInput(PadState& pad, SwitchFrontend::InputState& state) {
     return held;
 }
 
+struct QuickMenuRepeater {
+    int held_frames[2]{}; // 0 = left, 1 = right
+
+    std::uint32_t Step(bool left, bool right) {
+        const bool active[2] = {left, right};
+        std::uint32_t fired = 0;
+        for (int d = 0; d < 2; ++d) {
+            if (!active[d]) {
+                held_frames[d] = 0;
+                continue;
+            }
+            const int f = held_frames[d]++;
+            if (f == 0 || (f >= 24 && (f - 24) % 5 == 0)) {
+                fired |= 1u << d;
+            }
+        }
+        return fired;
+    }
+};
+
 void RunGame(PadState& pad, const std::string& rom) {
     if (!SwitchFrontend::CreateWindow(nwindowGetDefault())) {
         std::printf("EmuWindow no worky.\n");
@@ -139,6 +159,7 @@ void RunGame(PadState& pad, const std::string& rom) {
     if (SwitchFrontend::BootRom(rom)) {
         u64 prev_held = 0;
         std::uint64_t prev_input = 0;
+        QuickMenuRepeater quick_menu_repeater;
         while (appletMainLoop()) {
             // Blocks while the system keyboard is up. The emulation thread is waiting on it, so
             // nothing is being drawn meanwhile.
@@ -173,11 +194,16 @@ void RunGame(PadState& pad, const std::string& rom) {
                                             : state);
 
             if (menu_open && !chord_edge) {
+                // Left/right auto-repeat while held (unlike the other quick-menu directions),
+                // so value rows like the Movie CPU Throttle slider can be scrubbed quickly.
+                const std::uint32_t lr_repeat = quick_menu_repeater.Step(
+                    (held & (HidNpadButton_Left | HidNpadButton_StickLLeft)) != 0,
+                    (held & (HidNpadButton_Right | HidNpadButton_StickLRight)) != 0);
                 const SwitchFrontend::QuickMenuNav nav{
                     .up = (pressed & (HidNpadButton_Up | HidNpadButton_StickLUp)) != 0,
                     .down = (pressed & (HidNpadButton_Down | HidNpadButton_StickLDown)) != 0,
-                    .left = (pressed & (HidNpadButton_Left | HidNpadButton_StickLLeft)) != 0,
-                    .right = (pressed & (HidNpadButton_Right | HidNpadButton_StickLRight)) != 0,
+                    .left = (lr_repeat & 1u) != 0,
+                    .right = (lr_repeat & 2u) != 0,
                     .confirm = (pressed & HidNpadButton_A) != 0,
                     .cancel = (pressed & HidNpadButton_B) != 0,
                     .tab_prev = (pressed & HidNpadButton_L) != 0,

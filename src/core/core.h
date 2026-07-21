@@ -407,6 +407,25 @@ public:
         info_led_color_changed = func;
     }
 
+    // Called by the RO (CRO/CRR loader) service when a CRO whose module name matches a known
+    // movie-playback library (see core/hle/service/ldr_ro/ldr_ro.cpp) loads/unloads. This is a
+    // heuristic, not a real "video is playing" signal — MVD (the actual 3DS video-decode service)
+    // is unimplemented, and some titles' movie sequences apparently never call it at all, so this
+    // instead reacts to the guest loading/unloading its own movie-player code module.
+    void SetMoviePlaying(bool playing) {
+        if (playing == movie_playing) {
+            return;
+        }
+        movie_playing = playing;
+        if (movie_playback_state_changed) {
+            movie_playback_state_changed(playing);
+        }
+    }
+
+    void RegisterMoviePlaybackStateChanged(const std::function<void(bool)>& func) {
+        movie_playback_state_changed = func;
+    }
+
     void SetDebugNextProcessFlag() {
         debug_next_process = true;
     }
@@ -529,6 +548,9 @@ private:
 
     Common::Vec3<u8> info_led_color;
     std::function<void()> info_led_color_changed;
+
+    bool movie_playing = false;
+    std::function<void(bool)> movie_playback_state_changed;
 
     bool debug_next_process;
 

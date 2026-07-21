@@ -76,6 +76,11 @@ const char* GetScreenLayoutName(int index);
 std::uint32_t GetLayoutCycleMask();
 void SetLayoutCycleMask(std::uint32_t mask);
 
+// Percentage the Core Clock is throttled to while a movie-library CRO is loaded (see
+// core/hle/service/ldr_ro/ldr_ro.cpp). Adjustable from the quick menu; clamped to [10, 100].
+std::int32_t GetMovieThrottleClockPercentage();
+void SetMovieThrottleClockPercentage(std::int32_t percentage);
+
 // True if the most recent BootRom never reached a successful system.Load.
 bool LoadFailed();
 

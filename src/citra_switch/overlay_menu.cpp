@@ -36,6 +36,7 @@ enum class Item {
     CustomTextures,
     TextureFilter,
     RightEyeRender,
+    MovieThrottleClock,
     AddCheat,
     Cheat,
     CheatsEmpty,
@@ -56,6 +57,11 @@ enum class Tab {
 
 // Percentage step for the gyro sensitivity rows.
 constexpr int kGyroStep = 10;
+
+// Percentage step for the movie CPU throttle row. 1 (rather than a coarser step like the
+// Settings page's "CPU Clock" row) so it behaves like a freely adjustable slider, especially
+// combined with the quick menu's hold-to-repeat on left/right (see citra_switch.cpp).
+constexpr int kMovieThrottleStep = 1;
 
 const char* TextureFilterName(int filter) {
     switch (filter) {
@@ -266,6 +272,7 @@ void RebuildRows() {
         s_rows.push_back({Item::CustomTextures});
         s_rows.push_back({Item::TextureFilter});
         s_rows.push_back({Item::RightEyeRender});
+        s_rows.push_back({Item::MovieThrottleClock});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
     } else {
@@ -309,6 +316,8 @@ std::string Label(const Row& row) {
         return "Texture Filter";
     case Item::RightEyeRender:
         return "Disable Right Eye";
+    case Item::MovieThrottleClock:
+        return "Movie CPU Throttle";
     case Item::AddCheat:
         return "+ Add Cheat";
     case Item::Cheat:
@@ -343,6 +352,8 @@ std::string Value(const Row& row) {
         return TextureFilterName(static_cast<int>(Settings::values.texture_filter.GetValue()));
     case Item::RightEyeRender:
         return Settings::values.disable_right_eye_render.GetValue() ? "On" : "Off";
+    case Item::MovieThrottleClock:
+        return std::to_string(GetMovieThrottleClockPercentage()) + "%";
     case Item::Cheat:
         return CheatEnabled(row.cheat_index) ? "On" : "Off";
     default:
@@ -382,6 +393,9 @@ void Adjust(const Row& row, int dir) {
     }
     case Item::RightEyeRender:
         Settings::values.disable_right_eye_render = dir > 0;
+        break;
+    case Item::MovieThrottleClock:
+        SetMovieThrottleClockPercentage(GetMovieThrottleClockPercentage() + dir * kMovieThrottleStep);
         break;
     case Item::Cheat:
         ToggleCheat(row.cheat_index);
