@@ -25,6 +25,7 @@ namespace {
 // also carries the cheat's index into the engine's list.
 enum class Item {
     ScreenLayout,
+    SwapScreens,
     GyroSensitivityX,
     GyroSensitivityY,
     PointerSource,
@@ -130,6 +131,7 @@ void RebuildRows() {
     s_rows.clear();
     if (s_tab == Tab::Settings) {
         s_rows.push_back({Item::ScreenLayout});
+        s_rows.push_back({Item::SwapScreens});
         s_rows.push_back({Item::GyroSensitivityX});
         s_rows.push_back({Item::GyroSensitivityY});
         s_rows.push_back({Item::PointerSource});
@@ -155,14 +157,16 @@ void RebuildRows() {
 }
 
 bool IsAction(const Row& row) {
-    return row.item == Item::Resume || row.item == Item::ExitGame ||
-           row.item == Item::CheatsEmpty;
+    return row.item == Item::SwapScreens || row.item == Item::Resume ||
+           row.item == Item::ExitGame || row.item == Item::CheatsEmpty;
 }
 
 std::string Label(const Row& row) {
     switch (row.item) {
     case Item::ScreenLayout:
         return "Screen Layout";
+    case Item::SwapScreens:
+        return "Swap Screens";
     case Item::GyroSensitivityX:
         return "Gyro Sens. X";
     case Item::GyroSensitivityY:
@@ -252,6 +256,9 @@ void Adjust(const Row& row, int dir) {
 // Pressing 'a' on a row advances the list by one.
 void Activate(const Row& row) {
     switch (row.item) {
+    case Item::SwapScreens:
+        ToggleSwapScreens();
+        break;
     case Item::PointerSource:
         SetPointerSource(GetPointerSource() == PointerSource::Gyro ? PointerSource::Stick
                                                                    : PointerSource::Gyro);

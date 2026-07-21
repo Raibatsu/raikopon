@@ -192,6 +192,10 @@ void RunGame(PadState& pad, const std::string& rom) {
                 if ((input_pressed & ButtonMask(GetMapping(MappableControl::TogglePointer))) != 0) {
                     SwitchFrontend::TogglePointerMode();
                 }
+                // The button bound to Swap Screens (unbound by default) flips the two screens.
+                if ((input_pressed & ButtonMask(GetMapping(MappableControl::SwapScreens))) != 0) {
+                    SwitchFrontend::ToggleSwapScreens();
+                }
             }
 
             prev_held = held;

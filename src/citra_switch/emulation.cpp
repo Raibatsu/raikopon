@@ -83,6 +83,23 @@ void ApplyCurrentLayout() {
     LOG_INFO(Frontend, "Screen layout: {}", preset.name);
 }
 
+// Points s_layout_index at whichever preset matches the live settings, so the name the menus
+// report stays truthful after a swap lands on another preset's arrangement.
+void SyncLayoutIndex() {
+    const auto& v = Settings::values;
+    for (std::size_t i = 0; i < s_layout_presets.size(); ++i) {
+        const ScreenLayoutPreset& preset = s_layout_presets[i];
+        if (preset.layout == v.layout_option.GetValue() &&
+            preset.swap_screen == v.swap_screen.GetValue() &&
+            preset.upright_screen == v.upright_screen.GetValue() &&
+            preset.upright_flipped == v.upright_screen_flipped.GetValue() &&
+            preset.small_screen_position == v.small_screen_position.GetValue()) {
+            s_layout_index = i;
+            return;
+        }
+    }
+}
+
 /// Returns true if `path` is a 3DS title.
 bool IsLoadableRom(const std::string& path) {
     auto loader = Loader::GetLoader(path);
@@ -256,6 +273,29 @@ void CycleScreenLayout() {
             return;
         }
     }
+}
+
+void ToggleSwapScreens() {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+
+    // The single-screen layouts ignore swap_screen since there's only one screen.
+    switch (Settings::values.layout_option.GetValue()) {
+    case Settings::LayoutOption::TopScreenOnly:
+        Settings::values.layout_option = Settings::LayoutOption::BottomScreenOnly;
+        break;
+    case Settings::LayoutOption::BottomScreenOnly:
+        Settings::values.layout_option = Settings::LayoutOption::TopScreenOnly;
+        break;
+    default:
+        Settings::values.swap_screen = !Settings::values.swap_screen.GetValue();
+        break;
+    }
+
+    SyncLayoutIndex();
+    system.GPU().Renderer().UpdateCurrentFramebufferLayout();
 }
 
 const char* CurrentScreenLayoutName() {

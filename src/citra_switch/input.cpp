@@ -89,6 +89,8 @@ constexpr std::array<InputButton, NumMappableControls> kDefaultMapping{{
     InputButton::L3, // TogglePointer
     InputButton::R3, // CycleLayout
     InputButton::ZR, // TouchTap
+    // The player can set this one since I don't know what to map it to.
+    InputButton::None, // SwapScreens
 }};
 
 // Seeds the mappings with their defaults at static-init time, before the config is loaded.
@@ -317,6 +319,8 @@ const char* ControlName(MappableControl control) {
         return "Cycle Screen Layout";
     case MappableControl::TouchTap:
         return "Touch Tap (pointer mode)";
+    case MappableControl::SwapScreens:
+        return "Swap Screens";
     case MappableControl::Count:
         break;
     }
@@ -399,6 +403,8 @@ const char* ControlConfigKey(MappableControl control) {
         return "map_cycle_layout";
     case MappableControl::TouchTap:
         return "map_touch_tap";
+    case MappableControl::SwapScreens:
+        return "map_swap_screens";
     case MappableControl::Count:
         break;
     }
