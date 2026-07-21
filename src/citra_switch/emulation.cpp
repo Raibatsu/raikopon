@@ -39,27 +39,30 @@ struct ScreenLayoutPreset {
     Settings::LayoutOption layout;
     bool swap_screen;
     bool upright_screen;
+    bool upright_flipped;
     Settings::SmallScreenPosition small_screen_position;
     const char* name;
 };
 
-constexpr std::array<ScreenLayoutPreset, 8> s_layout_presets{{
-    {Settings::LayoutOption::Default, false, false, Settings::SmallScreenPosition::BottomRight,
-     "Vertical stack"},
-    {Settings::LayoutOption::SideScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
-     "Side by side"},
-    {Settings::LayoutOption::LargeScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
-     "Large top, small bottom"},
-    {Settings::LayoutOption::LargeScreen, true, false, Settings::SmallScreenPosition::MiddleRight,
-     "Large bottom, small top"},
-    {Settings::LayoutOption::TopScreenOnly, false, false,
+constexpr std::array<ScreenLayoutPreset, 9> s_layout_presets{{
+    {Settings::LayoutOption::Default, false, false, false,
+     Settings::SmallScreenPosition::BottomRight, "Vertical stack"},
+    {Settings::LayoutOption::SideScreen, false, false, false,
+     Settings::SmallScreenPosition::MiddleRight, "Side by side"},
+    {Settings::LayoutOption::LargeScreen, false, false, false,
+     Settings::SmallScreenPosition::MiddleRight, "Large top, small bottom"},
+    {Settings::LayoutOption::LargeScreen, true, false, false,
+     Settings::SmallScreenPosition::MiddleRight, "Large bottom, small top"},
+    {Settings::LayoutOption::TopScreenOnly, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Top screen only"},
-    {Settings::LayoutOption::BottomScreenOnly, false, false,
+    {Settings::LayoutOption::BottomScreenOnly, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Bottom screen only"},
-    {Settings::LayoutOption::Default, false, true, Settings::SmallScreenPosition::BottomRight,
-     "Vertical stack (rotate console)"},
-    {Settings::LayoutOption::HybridScreen, false, false,
+    {Settings::LayoutOption::Default, false, true, false,
+     Settings::SmallScreenPosition::BottomRight, "Vertical stack (rotate console)"},
+    {Settings::LayoutOption::HybridScreen, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Hybrid screen"},
+    {Settings::LayoutOption::Default, false, true, true,
+     Settings::SmallScreenPosition::BottomRight, "Vertical stack (rotate console other way)"},
 }};
 
 // Kept consistent with Settings so the first press advances past the boot default.
@@ -74,6 +77,7 @@ void ApplyCurrentLayout() {
     Settings::values.layout_option = preset.layout;
     Settings::values.swap_screen = preset.swap_screen;
     Settings::values.upright_screen = preset.upright_screen;
+    Settings::values.upright_screen_flipped = preset.upright_flipped;
     Settings::values.small_screen_position = preset.small_screen_position;
     Core::System::GetInstance().GPU().Renderer().UpdateCurrentFramebufferLayout();
     LOG_INFO(Frontend, "Screen layout: {}", preset.name);
