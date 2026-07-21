@@ -179,6 +179,9 @@ private:
         SwitchFrontend::SetLayoutCycleMask(static_cast<std::uint32_t>(
             config->GetInteger("Switch", "layout_cycle_mask", all_layouts)));
 
+        SwitchFrontend::SetMovieThrottleClockPercentage(
+            config->GetInteger("Switch", "movie_throttle_clock_percentage", 25));
+
         // Each control stores the index of the physical Switch button it drives.
         for (int i = 0; i < SwitchFrontend::NumMappableControls; ++i) {
             const auto control = static_cast<SwitchFrontend::MappableControl>(i);
@@ -242,6 +245,8 @@ private:
         ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
         ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
         ss << "layout_cycle_mask = " << SwitchFrontend::GetLayoutCycleMask() << '\n';
+        ss << "movie_throttle_clock_percentage = "
+           << SwitchFrontend::GetMovieThrottleClockPercentage() << '\n';
         ss << "launch_count = " << launch_count << "\n\n";
 
         ss << "[Controls]\n";

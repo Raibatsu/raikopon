@@ -357,6 +357,14 @@ private:
     bool spacial_dithering_enabled = false;
     bool is_busy_conversion = false;
 
+    // Sustained bursts of conversions are treated as "a movie is probably playing," alongside the
+    // "MovieLib" CRO-name heuristic in ldr_ro.cpp — some titles route cutscene playback entirely
+    // through Y2R without ever loading a distinctly-named CRO. Not persisted, same as the movie
+    // detection state in core.h this feeds into.
+    Core::TimingEventType* movie_detect_stop_event;
+    s64 movie_detect_last_call_tick = 0;
+    int movie_detect_burst_count = 0;
+
     template <class Archive>
     void serialize(Archive& ar, const unsigned int);
     friend class boost::serialization::access;

@@ -9,6 +9,7 @@
 #include "common/logging/log.h"
 #include "common/scope_exit.h"
 #include "core/core.h"
+#include "core/core_timing.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/kernel/event.h"
 #include "core/hle/kernel/process.h"
@@ -523,6 +524,30 @@ void Y2R_U::StartConversion(Kernel::HLERequestContext& ctx) {
 
     HW::Y2R::PerformConversion(system.Memory(), conversion);
 
+    // Movie-playback detection: a title decoding video through its own software decoder plus Y2R
+    // (rather than the unimplemented MVD hardware service) calls StartConversion repeatedly in
+    // quick succession for as long as playback lasts. Treat kMovieDetectBurstThreshold or more
+    // calls, each within kMovieDetectGapTicks of the last, as "a movie is probably playing" —
+    // alongside the "MovieLib" CRO-name heuristic in ldr_ro.cpp, which some titles never trigger
+    constexpr s64 kMovieDetectGapTicks = msToCycles(300);
+    constexpr int kMovieDetectBurstThreshold = 3;
+    constexpr s64 kMovieDetectStopDelayTicks = msToCycles(500);
+
+    const s64 movie_detect_now = system.CoreTiming().GetTicks();
+    if (movie_detect_last_call_tick != 0 &&
+        (movie_detect_now - movie_detect_last_call_tick) <= kMovieDetectGapTicks) {
+        ++movie_detect_burst_count;
+    } else {
+        movie_detect_burst_count = 1;
+    }
+    movie_detect_last_call_tick = movie_detect_now;
+
+    if (movie_detect_burst_count >= kMovieDetectBurstThreshold) {
+        system.SetMoviePlaying(true);
+    }
+    system.CoreTiming().UnscheduleEvent(movie_detect_stop_event, 0);
+    system.CoreTiming().ScheduleEvent(kMovieDetectStopDelayTicks, movie_detect_stop_event);
+
     if (is_busy_conversion) {
         system.CoreTiming().RemoveEvent(completion_signal_event);
     }
@@ -720,6 +745,12 @@ Y2R_U::Y2R_U(Core::System& system) : ServiceFramework("y2r:u", 1), system(system
         system.CoreTiming().RegisterEvent("Y2R Completion Signal Event", [this](uintptr_t, s64) {
             completion_event->Signal();
             is_busy_conversion = false;
+        });
+
+    movie_detect_stop_event = system.CoreTiming().RegisterEvent(
+        "Y2R Movie Detect Stop Event", [this](uintptr_t, s64) {
+            movie_detect_burst_count = 0;
+            this->system.SetMoviePlaying(false);
         });
 }
 
