@@ -136,6 +136,10 @@ private:
         ReadSetting("Renderer", Settings::values.use_vsync);
         ReadSetting("Renderer", Settings::values.async_shader_compilation);
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
+        ReadSetting("Renderer", Settings::values.use_hw_shader);
+        ReadSetting("Renderer", Settings::values.texture_filter);
+        ReadSetting("Renderer", Settings::values.filter_mode);
+        ReadSetting("Renderer", Settings::values.use_integer_scaling);
         ReadSetting("Renderer", Settings::values.show_fps);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
         ReadSetting("Renderer", Settings::values.disable_right_eye_render);
@@ -207,7 +211,13 @@ private:
            << (v.async_shader_compilation.GetValue() ? "true" : "false") << '\n';
         ss << "use_disk_shader_cache = " << (v.use_disk_shader_cache.GetValue() ? "true" : "false")
            << '\n';
+        ss << "use_hw_shader = " << (v.use_hw_shader.GetValue() ? "true" : "false") << '\n';
+        ss << "texture_filter = " << static_cast<int>(v.texture_filter.GetValue()) << '\n';
+        ss << "filter_mode = " << (v.filter_mode.GetValue() ? "true" : "false") << '\n';
+        ss << "use_integer_scaling = " << (v.use_integer_scaling.GetValue() ? "true" : "false")
+           << '\n';
         ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << '\n';
+        ss << "use_shader_jit = " << (v.use_shader_jit.GetValue() ? "true" : "false") << '\n';
         ss << "disable_right_eye_render = "
            << (v.disable_right_eye_render.GetValue() ? "true" : "false") << "\n\n";
 
