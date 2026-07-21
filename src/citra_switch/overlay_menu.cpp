@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <string>
 #include <vector>
@@ -14,6 +15,7 @@
 #include "core/cheats/cheat_base.h"
 #include "core/cheats/cheats.h"
 #include "core/core.h"
+#include "core/core_timing.h"
 #include "core/loader/loader.h"
 #include "video_core/overlay.h"
 
@@ -26,13 +28,14 @@ namespace {
 enum class Item {
     ScreenLayout,
     SwapScreens,
-    GyroSensitivityX,
-    GyroSensitivityY,
-    PointerSource,
-    PointerMode,
     FpsCounter,
     CustomTextures,
     DisableRightEyeRender,
+    PointerSource,
+    PointerMode,
+    GyroSensitivityX,
+    GyroSensitivityY,
+    CpuClock,
     Cheat,
     CheatsEmpty,
     Resume,
@@ -44,24 +47,51 @@ struct Row {
     int cheat_index = -1;
 };
 
-// The overlay is split into tabs with L/R used to cycle between them.
-enum class Tab {
-    Settings,
+// The overlay is split into pages with L/R used to cycle between them.
+enum class Page {
+    Display,
+    Input,
+    System,
     Cheats,
 };
+
+constexpr std::array<Page, 4> kPages = {Page::Display, Page::Input, Page::System, Page::Cheats};
+
+const char* PageName(Page page) {
+    switch (page) {
+    case Page::Display:
+        return "Display";
+    case Page::Input:
+        return "Input";
+    case Page::System:
+        return "System";
+    case Page::Cheats:
+        return "Cheats";
+    }
+    return "";
+}
 
 // Percentage step for the gyro sensitivity rows.
 constexpr int kGyroStep = 10;
 
-// Cheats past this many spill onto further pages so the panel never overflows the screen.
+// Percentage step and range for the emulated CPU clock.
+constexpr int kClockStep = 25;
+constexpr int kClockMin = 25;
+constexpr int kClockMax = 400;
+
+// Cheats past this many spill onto further sub-pages.
 constexpr int kCheatsPerPage = 8;
 
 std::atomic<bool> s_open{false};
-Tab s_tab = Tab::Settings;
+int s_page = 0;
 int s_selected = 0;
 int s_cheat_page = 0;
 std::vector<Row> s_rows;
 bool s_cheats_dirty = false;
+
+Page CurrentPage() {
+    return kPages[static_cast<std::size_t>(s_page)];
+}
 
 Cheats::CheatEngine* GetCheatEngine() {
     auto& system = Core::System::GetInstance();
@@ -126,22 +156,29 @@ void PersistCheats() {
     s_cheats_dirty = false;
 }
 
-// Rebuilds the visible rows for the active tab and page and keeps the cursor in range.
+// Rebuilds the visible rows for the active page and keeps the cursor in range.
 void RebuildRows() {
     s_rows.clear();
-    if (s_tab == Tab::Settings) {
+    switch (CurrentPage()) {
+    case Page::Display:
         s_rows.push_back({Item::ScreenLayout});
         s_rows.push_back({Item::SwapScreens});
-        s_rows.push_back({Item::GyroSensitivityX});
-        s_rows.push_back({Item::GyroSensitivityY});
-        s_rows.push_back({Item::PointerSource});
-        s_rows.push_back({Item::PointerMode});
         s_rows.push_back({Item::FpsCounter});
         s_rows.push_back({Item::CustomTextures});
         s_rows.push_back({Item::DisableRightEyeRender});
+        break;
+    case Page::Input:
+        s_rows.push_back({Item::PointerSource});
+        s_rows.push_back({Item::PointerMode});
+        s_rows.push_back({Item::GyroSensitivityX});
+        s_rows.push_back({Item::GyroSensitivityY});
+        break;
+    case Page::System:
+        s_rows.push_back({Item::CpuClock});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
-    } else {
+        break;
+    case Page::Cheats: {
         const int count = CheatCount();
         s_cheat_page = std::clamp(s_cheat_page, 0, CheatPageCount() - 1);
         const int first = s_cheat_page * kCheatsPerPage;
@@ -152,8 +189,21 @@ void RebuildRows() {
         if (s_rows.empty()) {
             s_rows.push_back({Item::CheatsEmpty});
         }
+        break;
+    }
     }
     s_selected = std::clamp(s_selected, 0, static_cast<int>(s_rows.size()) - 1);
+}
+
+// The running timers keep their own copy of the clock scale, so a change has to be pushed into
+// core timing to take effect without a reboot.
+void SetCpuClock(int percent) {
+    percent = std::clamp(percent, kClockMin, kClockMax);
+    Settings::values.cpu_clock_percentage = percent;
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        system.CoreTiming().UpdateClockSpeed(static_cast<u32>(percent));
+    }
 }
 
 bool IsAction(const Row& row) {
@@ -181,6 +231,8 @@ std::string Label(const Row& row) {
         return "Custom Textures";
     case Item::DisableRightEyeRender:
         return "No Right Eye";
+    case Item::CpuClock:
+        return "CPU Clock";
     case Item::Cheat:
         return CheatName(row.cheat_index);
     case Item::CheatsEmpty:
@@ -211,6 +263,8 @@ std::string Value(const Row& row) {
         return Settings::values.custom_textures.GetValue() ? "On" : "Off";
     case Item::DisableRightEyeRender:
         return Settings::values.disable_right_eye_render.GetValue() ? "On" : "Off";
+    case Item::CpuClock:
+        return std::to_string(Settings::values.cpu_clock_percentage.GetValue()) + "%";
     case Item::Cheat:
         return CheatEnabled(row.cheat_index) ? "On" : "Off";
     default:
@@ -244,6 +298,9 @@ void Adjust(const Row& row, int dir) {
         break;
     case Item::DisableRightEyeRender:
         Settings::values.disable_right_eye_render = dir > 0;
+        break;
+    case Item::CpuClock:
+        SetCpuClock(Settings::values.cpu_clock_percentage.GetValue() + dir * kClockStep);
         break;
     case Item::Cheat:
         ToggleCheat(row.cheat_index);
@@ -289,19 +346,19 @@ void Repaint() {
     VideoCore::OverlayMenuState state;
     state.visible = s_open.load(std::memory_order_relaxed);
     state.selected = s_selected;
-    if (s_tab == Tab::Settings) {
-        state.title = "Quick Menu - Settings";
-        state.hint = "A Change   L/R Tab   +/- Close";
-    } else {
-        const int pages = CheatPageCount();
-        state.title = "Quick Menu - Cheats";
-        if (pages > 1) {
-            state.title += " (Page " + std::to_string(s_cheat_page + 1) + "/" +
-                           std::to_string(pages) + ")";
-            state.hint = "A Toggle   L/R Tab   ZL/ZR Page   +/- Close";
+    state.title = std::string("Quick Menu - ") + PageName(CurrentPage()) + " (" +
+                  std::to_string(s_page + 1) + "/" + std::to_string(kPages.size()) + ")";
+    if (CurrentPage() == Page::Cheats) {
+        const int cheat_pages = CheatPageCount();
+        if (cheat_pages > 1) {
+            state.title += "  List " + std::to_string(s_cheat_page + 1) + "/" +
+                           std::to_string(cheat_pages);
+            state.hint = "A Toggle   L/R Page   ZL/ZR List   +/- Close";
         } else {
-            state.hint = "A Toggle   L/R Tab   +/- Close";
+            state.hint = "A Toggle   L/R Page   +/- Close";
         }
+    } else {
+        state.hint = "A Change   L/R Page   +/- Close";
     }
     state.items.reserve(s_rows.size());
     for (const Row& row : s_rows) {
@@ -317,7 +374,7 @@ bool IsQuickMenuOpen() {
 }
 
 void OpenQuickMenu() {
-    s_tab = Tab::Settings;
+    s_page = 0;
     s_selected = 0;
     s_cheat_page = 0;
     RebuildRows();
@@ -357,16 +414,17 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
 
     bool changed = false;
 
-    // L/R jump between the Settings and Cheats tabs.
-    if (nav.tab_prev || nav.tab_next) {
-        s_tab = s_tab == Tab::Settings ? Tab::Cheats : Tab::Settings;
+    // L/R cycle through the menu's pages.
+    if (nav.tab_prev != nav.tab_next) {
+        const int count = static_cast<int>(kPages.size());
+        s_page = (s_page + (nav.tab_next ? 1 : -1) + count) % count;
         s_selected = 0;
         RebuildRows();
         changed = true;
     }
 
     // ZL/ZR page through the cheat list.
-    if (s_tab == Tab::Cheats && (nav.page_prev || nav.page_next)) {
+    if (CurrentPage() == Page::Cheats && (nav.page_prev || nav.page_next)) {
         const int pages = CheatPageCount();
         const int dir = nav.page_next ? 1 : -1;
         s_cheat_page = (s_cheat_page + dir + pages) % pages;
