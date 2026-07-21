@@ -66,7 +66,7 @@ set(RAIKOPON_NRO_NAME "raikopon")
 
 nx_generate_nacp(OUTPUT ${RAIKOPON_NRO_NAME}.nacp
     NAME "Raikopon"
-    AUTHOR "Azahar Team \& PalindromicBreadLoaf"
+    AUTHOR "Azahar Team \& PalindromicBreadLoaf \& Raibatsu"
     VERSION "1.1.0"
 )
 
