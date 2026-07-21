@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <string>
 #include <utility>
@@ -127,18 +128,35 @@ u64 PollInput(PadState& pad, SwitchFrontend::InputState& state) {
 }
 
 struct QuickMenuRepeater {
-    int held_frames[2]{}; // 0 = left, 1 = right
+    static constexpr auto kInitialDelay = std::chrono::milliseconds(400);
+    static constexpr auto kRepeatInterval = std::chrono::milliseconds(83);
+
+    struct HoldState {
+        bool held = false;
+        std::chrono::steady_clock::time_point held_since{};
+        std::chrono::steady_clock::time_point last_fire{};
+    };
+    HoldState state[2]{}; // 0 = left, 1 = right
 
     std::uint32_t Step(bool left, bool right) {
-        const bool active[2] = {left, right};
+        const bool wanted[2] = {left, right};
+        const auto now = std::chrono::steady_clock::now();
         std::uint32_t fired = 0;
         for (int d = 0; d < 2; ++d) {
-            if (!active[d]) {
-                held_frames[d] = 0;
+            HoldState& s = state[d];
+            if (!wanted[d]) {
+                s.held = false;
                 continue;
             }
-            const int f = held_frames[d]++;
-            if (f == 0 || (f >= 24 && (f - 24) % 5 == 0)) {
+            if (!s.held) {
+                s.held = true;
+                s.held_since = now;
+                s.last_fire = now;
+                fired |= 1u << d;
+                continue;
+            }
+            if (now - s.held_since >= kInitialDelay && now - s.last_fire >= kRepeatInterval) {
+                s.last_fire = now;
                 fired |= 1u << d;
             }
         }

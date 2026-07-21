@@ -626,38 +626,11 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
     case 0:
         s.resolution_factor = std::clamp(s.resolution_factor + dir, 0, 4);
         break;
-    case 1:
-        s.use_vsync = dir > 0;
-        break;
-    case 2:
-        s.async_shader_compilation = dir > 0;
-        break;
-    case 3:
-        s.use_disk_shader_cache = dir > 0;
-        break;
-    case 4:
-        s.use_hw_shader = dir > 0;
-        break;
     case 5:
         s.texture_filter = std::clamp(s.texture_filter + dir, 0, 5);
         break;
-    case 6:
-        s.filter_mode = dir > 0;
-        break;
-    case 7:
-        s.use_integer_scaling = dir > 0;
-        break;
-    case 8:
-        s.show_fps = dir > 0;
-        break;
     case 9:
         s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
-        break;
-    case 10:
-        s.is_new_3ds = dir > 0;
-        break;
-    case 11:
-        s.use_cpu_jit = dir > 0;
         break;
     case 12:
         s.region_value = std::clamp(s.region_value + dir, -1, 6);
@@ -665,26 +638,85 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
     case 13:
         s.language = std::clamp(s.language + dir, 0, 11);
         break;
-    case 14:
-        s.pointer_source = dir > 0 ? 1 : 0;
-        break;
     case 15:
         s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
         break;
     case 16:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
+    default:
+        break;
+    }
+}
+
+// True for rows with only two states, toggled directly by an A press rather than armed for
+// joystick adjustment.
+// lo and behold - my masterpiece, individual case-based switch that manually counts everything. Sorry, im running on 2 braincells rn, its 3 am. this sucks.
+bool IsBooleanSetting(int idx) {
+    switch (idx) {
+    case 1:  // VSync
+    case 2:  // Async Shader Compilation
+    case 3:  // Disk Shader Cache
+    case 4:  // Hardware Shader
+    case 6:  // Linear Filtering
+    case 7:  // Integer Scaling
+    case 8:  // Show FPS Counter
+    case 10: // New 3DS Mode
+    case 11: // CPU JIT (dynarmic)
+    case 14: // Touch Pointer Source
+    case 17: // Preload Custom Textures
+    case 18: // Dump Textures
+    case 20: // Disable Pipeline Fast Path
+    case 21: // Disable Right Eye Rendering
+        return true;
+    default:
+        return false;
+    }
+}
+
+void ToggleSetting(MenuSettings& s, int idx) {
+    switch (idx) {
+    case 1:
+        s.use_vsync = !s.use_vsync;
+        break;
+    case 2:
+        s.async_shader_compilation = !s.async_shader_compilation;
+        break;
+    case 3:
+        s.use_disk_shader_cache = !s.use_disk_shader_cache;
+        break;
+    case 4:
+        s.use_hw_shader = !s.use_hw_shader;
+        break;
+    case 6:
+        s.filter_mode = !s.filter_mode;
+        break;
+    case 7:
+        s.use_integer_scaling = !s.use_integer_scaling;
+        break;
+    case 8:
+        s.show_fps = !s.show_fps;
+        break;
+    case 10:
+        s.is_new_3ds = !s.is_new_3ds;
+        break;
+    case 11:
+        s.use_cpu_jit = !s.use_cpu_jit;
+        break;
+    case 14:
+        s.pointer_source = s.pointer_source ? 0 : 1;
+        break;
     case 17:
-        s.preload_textures = dir > 0;
+        s.preload_textures = !s.preload_textures;
         break;
     case 18:
-        s.dump_textures = dir > 0;
+        s.dump_textures = !s.dump_textures;
         break;
     case 20:
-        s.disable_pipeline_fast_path = dir > 0;
+        s.disable_pipeline_fast_path = !s.disable_pipeline_fast_path;
         break;
     case 21:
-        s.disable_right_eye_render = dir > 0;
+        s.disable_right_eye_render = !s.disable_right_eye_render;
         break;
     default:
         break;
@@ -1137,6 +1169,7 @@ private:
     int scroll_row = 0;
     int settings_sel = 0;
     int settings_scroll = 0;
+    bool settings_armed = false;
     int paths_sel = 0;
     std::string search;
     MenuSettings settings{};
@@ -1189,6 +1222,7 @@ private:
     void SetTab(Tab next) {
         if (tab == Tab::Settings && next != Tab::Settings) {
             FlushSettings();
+            settings_armed = false;
         }
         if (tab == Tab::Paths && next != Tab::Paths) {
             // The library on screen came from the old directory so it must be re-read.
@@ -1486,6 +1520,25 @@ private:
     }
 
     bool HandleSettings(u64 down, u32 nav) {
+        if (settings_armed) {
+            bool changed = false;
+            if (nav & DirLeft) {
+                CycleSetting(settings, settings_sel, -1);
+                changed = true;
+            }
+            if (nav & DirRight) {
+                CycleSetting(settings, settings_sel, +1);
+                changed = true;
+            }
+            if (changed) {
+                settings_dirty = true;
+            }
+            if (down & (HidNpadButton_A | HidNpadButton_B)) {
+                settings_armed = false;
+            }
+            return false;
+        }
+
         if (nav & DirUp) {
             settings_sel = std::max(0, settings_sel - 1);
         }
@@ -1513,18 +1566,14 @@ private:
             }
             return false;
         }
-        bool changed = false;
-        if (nav & DirLeft) {
-            CycleSetting(settings, settings_sel, -1);
-            changed = true;
-        }
-        if ((nav & DirRight) || (down & HidNpadButton_A)) {
-            CycleSetting(settings, settings_sel, +1);
-            changed = true;
-        }
         // Edit the local snapshot only and use FlushSettings() later to apply to config.ini.
-        if (changed) {
-            settings_dirty = true;
+        if (down & HidNpadButton_A) {
+            if (IsBooleanSetting(settings_sel)) {
+                ToggleSetting(settings, settings_sel);
+                settings_dirty = true;
+            } else {
+                settings_armed = true;
+            }
         }
         if (down & HidNpadButton_B) {
             EnterRail();
@@ -1673,14 +1722,24 @@ private:
             const int row = settings_scroll + (ty - kSettingsTop) / (kRowH + 8);
             const int rows_bottom = kSettingsTop + kSettingsRows * (kRowH + 8);
             if (ty >= kSettingsTop && ty < rows_bottom && row < kNumSettings) {
-                settings_sel = row;
-                if (row == kLayoutCycleRow) {
+                if (row != settings_sel) {
+                    // First tap on a row just selects it, mirroring joystick navigation — same
+                    // "one tap to select, another to modify" rule as the gamepad path below.
+                    settings_sel = row;
+                    settings_armed = false;
+                } else if (row == kLayoutCycleRow) {
                     OpenLayoutPicker();
                 } else if (row == kRemapControlsRow) {
                     RemapControls();
-                } else {
+                } else if (settings_armed) {
+                    // Already armed: tapping either half adjusts it, same as joystick left/right.
                     CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
                     settings_dirty = true;
+                } else if (IsBooleanSetting(settings_sel)) {
+                    ToggleSetting(settings, settings_sel);
+                    settings_dirty = true;
+                } else {
+                    settings_armed = true;
                 }
             }
         } else {
@@ -2248,8 +2307,16 @@ private:
             }
             g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), rows[i].label, 22, kColText);
             const int vw = g_font.Measure(rows[i].value, 22);
+            const bool armed_here = on && settings_armed && content_focus;
+            if (armed_here) {
+                // A filled chip behind the value marks it as "live" — joystick left/right will
+                // actually change it while this shows, unlike plain selection.
+                c.FillRoundRect(x + w - 34 - vw, y + 10, vw + 20, kRowH - 20, 8, kColAccent);
+            }
             g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), rows[i].value, 22,
-                        on && content_focus ? kColAccent : kColTextDim);
+                        armed_here             ? kColSurface
+                        : on && content_focus  ? kColAccent
+                                                : kColTextDim);
         }
         DrawListScrollbar(c, kScreenW - 10, kSettingsTop, kSettingsRows, kRowH + 8, count,
                           settings_scroll);
@@ -2265,13 +2332,19 @@ private:
         } else {
             int hx = kContentX + 24;
             const int hy = kContentBottom + (kHintH - 26) / 2;
-            if (settings_sel == kLayoutCycleRow) {
-                hx += DrawHint(c, hx, hy, "A", "Configure") + 22;
+            if (settings_armed) {
+                hx += DrawHint(c, hx, hy, "<>", "Adjust") + 22;
+                hx += DrawHint(c, hx, hy, "A / B", "Done") + 22;
             } else {
-                hx += DrawHint(c, hx, hy, "<>", "Change") + 22;
-                hx += DrawHint(c, hx, hy, "A", "Next") + 22;
+                if (settings_sel == kLayoutCycleRow || settings_sel == kRemapControlsRow) {
+                    hx += DrawHint(c, hx, hy, "A", "Configure") + 22;
+                } else if (IsBooleanSetting(settings_sel)) {
+                    hx += DrawHint(c, hx, hy, "A", "Toggle") + 22;
+                } else {
+                    hx += DrawHint(c, hx, hy, "A", "Select") + 22;
+                }
+                hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             }
-            hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             DrawHint(c, hx, hy, "+ -", "Exit");
         }
     }
