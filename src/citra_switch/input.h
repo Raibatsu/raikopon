@@ -88,11 +88,16 @@ struct InputState {
     MotionState motion{};
 };
 
-// What drives the on-screen touch pointer while pointer mode is on.
+// What drives the on-screen touch pointer while pointer mode is on. The values are written to
+// config.ini, so only append to this list.
 enum class PointerSource : std::uint8_t {
-    Stick,
+    LeftStick,
     Gyro,
+    RightStick,
+    Count,
 };
+
+inline constexpr int NumPointerSources = static_cast<int>(PointerSource::Count);
 
 // The bottom-screen pointer position as a fraction of the bottom screen, for the crosshair.
 struct PointerCursor {
@@ -135,6 +140,9 @@ void ShutdownInput();
 // The configured pointer driver.
 PointerSource GetPointerSource();
 void SetPointerSource(PointerSource source);
+
+// Display name of a pointer driver.
+const char* PointerSourceName(PointerSource source);
 
 // Per-axis gyro pointer sensitivity as a percentage of the default speed (100 = default).
 int GetGyroSensitivityX();

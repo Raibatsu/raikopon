@@ -508,7 +508,8 @@ void SetMenuSettings(const MenuSettings& s) {
     v.is_new_3ds = s.is_new_3ds;
     v.use_cpu_jit = s.use_cpu_jit;
     v.region_value = std::clamp(s.region_value, -1, 6);
-    SetPointerSource(s.pointer_source == 1 ? PointerSource::Gyro : PointerSource::Stick);
+    SetPointerSource(static_cast<PointerSource>(
+        std::clamp(s.pointer_source, 0, NumPointerSources - 1)));
     SetGyroSensitivity(s.gyro_sensitivity_x, s.gyro_sensitivity_y);
     SetLayoutCycleMask(s.layout_cycle_mask);
     SaveConfig();

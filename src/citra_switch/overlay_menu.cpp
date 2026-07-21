@@ -254,7 +254,7 @@ std::string Value(const Row& row) {
     case Item::GyroSensitivityY:
         return std::to_string(GetGyroSensitivityY()) + "%";
     case Item::PointerSource:
-        return GetPointerSource() == PointerSource::Gyro ? "Gyro" : "Left Stick";
+        return PointerSourceName(GetPointerSource());
     case Item::PointerMode:
         return IsPointerModeActive() ? "On" : "Off";
     case Item::FpsCounter:
@@ -285,7 +285,8 @@ void Adjust(const Row& row, int dir) {
         SetGyroSensitivity(GetGyroSensitivityX(), GetGyroSensitivityY() + dir * kGyroStep);
         break;
     case Item::PointerSource:
-        SetPointerSource(dir > 0 ? PointerSource::Gyro : PointerSource::Stick);
+        SetPointerSource(static_cast<PointerSource>(std::clamp(
+            static_cast<int>(GetPointerSource()) + dir, 0, NumPointerSources - 1)));
         break;
     case Item::PointerMode:
         SetPointerMode(dir > 0);
@@ -317,8 +318,8 @@ void Activate(const Row& row) {
         ToggleSwapScreens();
         break;
     case Item::PointerSource:
-        SetPointerSource(GetPointerSource() == PointerSource::Gyro ? PointerSource::Stick
-                                                                   : PointerSource::Gyro);
+        SetPointerSource(static_cast<PointerSource>(
+            (static_cast<int>(GetPointerSource()) + 1) % NumPointerSources));
         break;
     case Item::PointerMode:
         TogglePointerMode();

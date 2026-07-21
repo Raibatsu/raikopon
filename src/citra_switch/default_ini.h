@@ -77,7 +77,7 @@ log_filter =
 roms_dir =
 # Descend into the ROM directory's subfolders when scanning (1, default).
 scan_recursive =
-# What drives the touch pointer. 0: left stick (default), 1: gyro.
+# What drives the touch pointer. 0: left stick (default), 1: gyro, 2: right stick.
 pointer_source =
 # Gyro pointer sensitivity per axis, as a percentage of the default speed (100, default). 10-500.
 gyro_sensitivity_x =
