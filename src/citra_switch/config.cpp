@@ -168,9 +168,9 @@ private:
         }
         s_paths.scan_recursive = config->GetBoolean("Switch", "scan_recursive", true);
 
-        SwitchFrontend::SetPointerSource(config->GetInteger("Switch", "pointer_source", 0) == 1
-                                             ? SwitchFrontend::PointerSource::Gyro
-                                             : SwitchFrontend::PointerSource::Stick);
+        SwitchFrontend::SetPointerSource(static_cast<SwitchFrontend::PointerSource>(
+            std::clamp<long>(config->GetInteger("Switch", "pointer_source", 0), 0,
+                             SwitchFrontend::NumPointerSources - 1)));
         SwitchFrontend::SetGyroSensitivity(
             config->GetInteger("Switch", "gyro_sensitivity_x", 100),
             config->GetInteger("Switch", "gyro_sensitivity_y", 100));
@@ -188,7 +188,7 @@ private:
             const int def = static_cast<int>(SwitchFrontend::DefaultMapping(control));
             const int raw =
                 config->GetInteger("Controls", SwitchFrontend::ControlConfigKey(control), def);
-            const int clamped = std::clamp(raw, 0, SwitchFrontend::NumPhysicalButtons - 1);
+            const int clamped = std::clamp(raw, 0, SwitchFrontend::NumBindingChoices - 1);
             SwitchFrontend::SetMapping(control,
                                        static_cast<SwitchFrontend::InputButton>(clamped));
         }

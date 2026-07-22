@@ -30,4 +30,23 @@ struct Progress {
 // The current batch's progress, or nullopt if there's nothing in flight right now.
 std::optional<Progress> GetProgress();
 
+// Raises the CPU clock (and drops the GPU clock) while at least one caller holds the boost.
+// Reference-counted, so it nests safely with concurrent shader compiles and other boost holders
+// (ROM load, CIA install). No-op off Switch.
+void AcquireCpuBoost();
+void ReleaseCpuBoost();
+
+// RAII wrapper around Acquire/ReleaseCpuBoost for scope-bound holders.
+class ScopedCpuBoost {
+public:
+    ScopedCpuBoost() {
+        AcquireCpuBoost();
+    }
+    ~ScopedCpuBoost() {
+        ReleaseCpuBoost();
+    }
+    ScopedCpuBoost(const ScopedCpuBoost&) = delete;
+    ScopedCpuBoost& operator=(const ScopedCpuBoost&) = delete;
+};
+
 } // namespace Common::ShaderCompileStats

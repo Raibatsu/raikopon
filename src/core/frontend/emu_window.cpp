@@ -184,7 +184,11 @@ bool EmuWindow::TouchPressed(unsigned framebuffer_x, unsigned framebuffer_y) {
 
     if (!framebuffer_layout.is_rotated) {
         std::swap(touch_state->touch_x, touch_state->touch_y);
-        touch_state->touch_x = 1.f - touch_state->touch_x;
+        if (framebuffer_layout.is_upright_flipped) {
+            touch_state->touch_y = 1.f - touch_state->touch_y;
+        } else {
+            touch_state->touch_x = 1.f - touch_state->touch_x;
+        }
     }
 
     touch_state->touch_pressed = true;
