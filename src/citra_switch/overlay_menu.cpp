@@ -310,7 +310,8 @@ void RebuildRows() {
         s_rows.push_back({Item::GyroSensitivityY});
         break;
     case Page::System:
-        s_rows.push_back({Item::CpuClock});
+        // CPU Clock hidden for now — see Item::CpuClock's other cases (Label/Value/Adjust)
+        // for the still-working plumbing if this comes back.
         s_rows.push_back({Item::MovieThrottleClock});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
