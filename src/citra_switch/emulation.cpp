@@ -21,6 +21,7 @@
 #include "common/horizon_thread.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
+#include "common/shader_compile_stats.h"
 #include "core/core.h"
 #include "core/frontend/applets/default_applets.h"
 #include "core/loader/loader.h"
@@ -88,27 +89,30 @@ struct ScreenLayoutPreset {
     Settings::LayoutOption layout;
     bool swap_screen;
     bool upright_screen;
+    bool upright_flipped;
     Settings::SmallScreenPosition small_screen_position;
     const char* name;
 };
 
-constexpr std::array<ScreenLayoutPreset, 8> s_layout_presets{{
-    {Settings::LayoutOption::Default, false, false, Settings::SmallScreenPosition::BottomRight,
-     "Vertical stack"},
-    {Settings::LayoutOption::SideScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
-     "Side by side"},
-    {Settings::LayoutOption::LargeScreen, false, false, Settings::SmallScreenPosition::MiddleRight,
-     "Large top, small bottom"},
-    {Settings::LayoutOption::LargeScreen, true, false, Settings::SmallScreenPosition::MiddleRight,
-     "Large bottom, small top"},
-    {Settings::LayoutOption::TopScreenOnly, false, false,
+constexpr std::array<ScreenLayoutPreset, 9> s_layout_presets{{
+    {Settings::LayoutOption::Default, false, false, false,
+     Settings::SmallScreenPosition::BottomRight, "Vertical stack"},
+    {Settings::LayoutOption::SideScreen, false, false, false,
+     Settings::SmallScreenPosition::MiddleRight, "Side by side"},
+    {Settings::LayoutOption::LargeScreen, false, false, false,
+     Settings::SmallScreenPosition::MiddleRight, "Large top, small bottom"},
+    {Settings::LayoutOption::LargeScreen, true, false, false,
+     Settings::SmallScreenPosition::MiddleRight, "Large bottom, small top"},
+    {Settings::LayoutOption::TopScreenOnly, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Top screen only"},
-    {Settings::LayoutOption::BottomScreenOnly, false, false,
+    {Settings::LayoutOption::BottomScreenOnly, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Bottom screen only"},
-    {Settings::LayoutOption::Default, false, true, Settings::SmallScreenPosition::BottomRight,
-     "Vertical stack (rotate console)"},
-    {Settings::LayoutOption::HybridScreen, false, false,
+    {Settings::LayoutOption::Default, false, true, false,
+     Settings::SmallScreenPosition::BottomRight, "Vertical stack (rotate console)"},
+    {Settings::LayoutOption::HybridScreen, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Hybrid screen"},
+    {Settings::LayoutOption::Default, false, true, true,
+     Settings::SmallScreenPosition::BottomRight, "Vertical stack (rotate console other way)"},
 }};
 
 // Kept consistent with Settings so the first press advances past the boot default.
@@ -123,9 +127,27 @@ void ApplyCurrentLayout() {
     Settings::values.layout_option = preset.layout;
     Settings::values.swap_screen = preset.swap_screen;
     Settings::values.upright_screen = preset.upright_screen;
+    Settings::values.upright_screen_flipped = preset.upright_flipped;
     Settings::values.small_screen_position = preset.small_screen_position;
     Core::System::GetInstance().GPU().Renderer().UpdateCurrentFramebufferLayout();
     LOG_INFO(Frontend, "Screen layout: {}", preset.name);
+}
+
+// Points s_layout_index at whichever preset matches the live settings, so the name the menus
+// report stays truthful after a swap lands on another preset's arrangement.
+void SyncLayoutIndex() {
+    const auto& v = Settings::values;
+    for (std::size_t i = 0; i < s_layout_presets.size(); ++i) {
+        const ScreenLayoutPreset& preset = s_layout_presets[i];
+        if (preset.layout == v.layout_option.GetValue() &&
+            preset.swap_screen == v.swap_screen.GetValue() &&
+            preset.upright_screen == v.upright_screen.GetValue() &&
+            preset.upright_flipped == v.upright_screen_flipped.GetValue() &&
+            preset.small_screen_position == v.small_screen_position.GetValue()) {
+            s_layout_index = i;
+            return;
+        }
+    }
 }
 
 /// Returns true if `path` is a 3DS title.
@@ -187,26 +209,30 @@ void EmuThread(std::string path) {
     // Mesa's Switch driver cannot reliably present renderbuffers across shared contexts
     window->MakeCurrent();
 
+    u64 program_id = 0;
     try {
-        const Core::System::ResultStatus load_result = system.Load(*window, path);
-        if (load_result != Core::System::ResultStatus::Success) {
-            LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
-                         static_cast<int>(load_result));
-            window->DoneCurrent();
-            s_stop = true;
-            return;
+        {
+            const Common::ShaderCompileStats::ScopedCpuBoost boost;
+
+            const Core::System::ResultStatus load_result = system.Load(*window, path);
+            if (load_result != Core::System::ResultStatus::Success) {
+                LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
+                             static_cast<int>(load_result));
+                window->DoneCurrent();
+                s_stop = true;
+                return;
+            }
+
+            s_load_ok = true;
+
+            system.GetAppLoader().ReadProgramId(program_id);
+            system.GPU().ApplyPerProgramSettings(program_id);
+
+            // Load any cached disk shaders
+            system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
+                s_stop,
+                [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
         }
-
-        s_load_ok = true;
-
-        u64 program_id = 0;
-        system.GetAppLoader().ReadProgramId(program_id);
-        system.GPU().ApplyPerProgramSettings(program_id);
-
-        // Load any cached disk shaders
-        system.GPU().Renderer().Rasterizer()->LoadDefaultDiskResources(
-            s_stop,
-            [](VideoCore::LoadCallbackStage, std::size_t, std::size_t, const std::string&) {});
 
         LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
         while (!s_stop) {
@@ -424,6 +450,9 @@ void MirrorScreenSides() {
         LOG_INFO(Frontend, "Swapped screen sides");
     }
 
+    // Keeps R3's cycle position (and its reported preset name) truthful after a mirror lands on
+    // a different preset's arrangement — a no-op if the new state doesn't match any preset.
+    SyncLayoutIndex();
     system.GPU().Renderer().UpdateCurrentFramebufferLayout();
 }
 

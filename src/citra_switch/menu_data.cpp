@@ -14,6 +14,7 @@
 #include "citra_switch/input.h"
 #include "citra_switch/menu_data.h"
 #include "common/file_util.h"
+#include "common/shader_compile_stats.h"
 #include "common/string_util.h"
 #include "common/settings.h"
 #include "common/zstd_compression.h"
@@ -375,6 +376,7 @@ std::vector<CiaEntry> ListCiaFiles(const std::string& directory) {
 
 InstallResult InstallCia(const std::string& path,
                          const std::function<void(std::size_t, std::size_t)>& progress) {
+    const Common::ShaderCompileStats::ScopedCpuBoost boost;
     const Service::AM::InstallStatus status = Service::AM::InstallCIA(
         path, [&progress](std::size_t written, std::size_t total) {
             if (progress) {
@@ -511,7 +513,8 @@ void SetMenuSettings(const MenuSettings& s) {
     v.is_new_3ds = s.is_new_3ds;
     v.use_cpu_jit = s.use_cpu_jit;
     v.region_value = std::clamp(s.region_value, -1, 6);
-    SetPointerSource(s.pointer_source == 1 ? PointerSource::Gyro : PointerSource::Stick);
+    SetPointerSource(static_cast<PointerSource>(
+        std::clamp(s.pointer_source, 0, NumPointerSources - 1)));
     SetGyroSensitivity(s.gyro_sensitivity_x, s.gyro_sensitivity_y);
     SetLayoutCycleMask(s.layout_cycle_mask);
     SaveConfig();

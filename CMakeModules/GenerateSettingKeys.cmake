@@ -55,6 +55,7 @@ foreach(KEY IN ITEMS
     "layout_option"
     "swap_screen"
     "upright_screen"
+    "upright_screen_flipped"
     "secondary_display_layout"
     "large_screen_proportion"
     "screen_gap"

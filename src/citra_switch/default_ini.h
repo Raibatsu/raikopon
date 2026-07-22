@@ -73,7 +73,7 @@ log_filter =
 roms_dir =
 # Descend into the ROM directory's subfolders when scanning (1, default).
 scan_recursive =
-# What drives the touch pointer. 0: left stick (default), 1: gyro.
+# What drives the touch pointer. 0: left stick (default), 1: gyro, 2: right stick.
 pointer_source =
 # Gyro pointer sensitivity per axis, as a percentage of the default speed (100, default). 10-500.
 gyro_sensitivity_x =
@@ -89,6 +89,7 @@ movie_throttle_clock_percentage =
 # Controller remapping, editable from Settings > Remap Controls.
 # Each control stores the physical Switch button that drives it, by index:
 #   0:A 1:B 2:X 3:Y 4:Up 5:Down 6:Left 7:Right 8:L 9:R 10:+ 11:- 12:ZL 13:ZR 14:L3 15:R3
+#   16 leaves the control unbound.
 # map_toggle_pointer/map_cycle_layout/map_touch_tap are the emulator actions.
 map_a =
 map_b =

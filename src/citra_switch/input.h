@@ -27,10 +27,13 @@ enum class InputButton : std::uint8_t {
     ZR,
     L3,
     R3,
+    None,
 };
 
 // The number of physical buttons the user can bind a control to.
 inline constexpr int NumPhysicalButtons = static_cast<int>(InputButton::R3) + 1;
+
+inline constexpr int NumBindingChoices = NumPhysicalButtons + 1;
 
 // A control the player can remap.
 enum class MappableControl : std::uint8_t {
@@ -56,8 +59,10 @@ enum class MappableControl : std::uint8_t {
 
 inline constexpr int NumMappableControls = static_cast<int>(MappableControl::Count);
 
+// An unbound control gets an empty mask.
 constexpr std::uint64_t ButtonMask(InputButton button) {
-    return std::uint64_t{1} << static_cast<std::uint8_t>(button);
+    return button == InputButton::None ? 0
+                                       : std::uint64_t{1} << static_cast<std::uint8_t>(button);
 }
 
 // A six-axis sample nicely borrowed (read stolen) from libnx.
@@ -83,11 +88,16 @@ struct InputState {
     MotionState motion{};
 };
 
-// What drives the on-screen touch pointer while pointer mode is on.
+// What drives the on-screen touch pointer while pointer mode is on. The values are written to
+// config.ini, so only append to this list.
 enum class PointerSource : std::uint8_t {
-    Stick,
+    LeftStick,
     Gyro,
+    RightStick,
+    Count,
 };
+
+inline constexpr int NumPointerSources = static_cast<int>(PointerSource::Count);
 
 // The bottom-screen pointer position as a fraction of the bottom screen, for the crosshair.
 struct PointerCursor {
@@ -130,6 +140,9 @@ void ShutdownInput();
 // The configured pointer driver.
 PointerSource GetPointerSource();
 void SetPointerSource(PointerSource source);
+
+// Display name of a pointer driver.
+const char* PointerSourceName(PointerSource source);
 
 // Per-axis gyro pointer sensitivity as a percentage of the default speed (100 = default).
 int GetGyroSensitivityX();

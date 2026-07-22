@@ -643,37 +643,31 @@ FramebufferLayout GetCardboardSettings(const FramebufferLayout& layout) {
 }
 
 FramebufferLayout reverseLayout(FramebufferLayout layout) {
+    const bool flipped = Settings::values.upright_screen_flipped.GetValue();
     std::swap(layout.height, layout.width);
-    u32 oldLeft, oldRight, oldTop, oldBottom;
 
-    oldLeft = layout.top_screen.left;
-    oldRight = layout.top_screen.right;
-    oldTop = layout.top_screen.top;
-    oldBottom = layout.top_screen.bottom;
-    layout.top_screen.left = oldTop;
-    layout.top_screen.right = oldBottom;
-    layout.top_screen.top = layout.height - oldRight;
-    layout.top_screen.bottom = layout.height - oldLeft;
+    const auto rotate = [&layout, flipped](Common::Rectangle<u32>& rect) {
+        const Common::Rectangle<u32> old = rect;
+        if (flipped) {
+            rect.left = layout.width - old.bottom;
+            rect.right = layout.width - old.top;
+            rect.top = old.left;
+            rect.bottom = old.right;
+        } else {
+            rect.left = old.top;
+            rect.right = old.bottom;
+            rect.top = layout.height - old.right;
+            rect.bottom = layout.height - old.left;
+        }
+    };
 
-    oldLeft = layout.bottom_screen.left;
-    oldRight = layout.bottom_screen.right;
-    oldTop = layout.bottom_screen.top;
-    oldBottom = layout.bottom_screen.bottom;
-    layout.bottom_screen.left = oldTop;
-    layout.bottom_screen.right = oldBottom;
-    layout.bottom_screen.top = layout.height - oldRight;
-    layout.bottom_screen.bottom = layout.height - oldLeft;
-
+    rotate(layout.top_screen);
+    rotate(layout.bottom_screen);
     if (layout.additional_screen_enabled) {
-        oldLeft = layout.additional_screen.left;
-        oldRight = layout.additional_screen.right;
-        oldTop = layout.additional_screen.top;
-        oldBottom = layout.additional_screen.bottom;
-        layout.additional_screen.left = oldTop;
-        layout.additional_screen.right = oldBottom;
-        layout.additional_screen.top = layout.height - oldRight;
-        layout.additional_screen.bottom = layout.height - oldLeft;
+        rotate(layout.additional_screen);
     }
+
+    layout.is_upright_flipped = flipped;
     return layout;
 }
 
