@@ -589,6 +589,34 @@ std::string LayoutCycleSummary(std::uint32_t mask) {
     return std::to_string(enabled) + " of " + std::to_string(total);
 }
 
+// Row order on the Settings page. BuildSettingRows and CycleSetting must agree on it.
+enum SettingRowIdx {
+    SettingRowResolution,
+    SettingRowVSync,
+    SettingRowAsyncShaders,
+    SettingRowDiskShaderCache,
+    SettingRowHwShader,
+    SettingRowTextureFilter,
+    SettingRowLinearFiltering,
+    SettingRowIntegerScaling,
+    SettingRowShowFps,
+    SettingRowDisableRightEye,
+    SettingRowCpuClock,
+    SettingRowNew3ds,
+    SettingRowCpuJit,
+    SettingRowRegion,
+    SettingRowLanguage,
+    SettingRowPointerSource,
+    SettingRowGyroX,
+    SettingRowGyroY,
+    SettingRowPreloadTextures,
+    SettingRowDumpTextures,
+    SettingRowLayoutCycle,
+    SettingRowDisablePipelineFastPath,
+    SettingRowControllerMap,
+    SettingRowCount,
+};
+
 std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
     return {
         {"Internal Resolution", ResolutionText(s.resolution_factor)},
@@ -600,48 +628,54 @@ std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
         {"Linear Filtering", s.filter_mode ? "On" : "Off"},
         {"Integer Scaling", s.use_integer_scaling ? "On" : "Off"},
         {"Show FPS Counter", s.show_fps ? "On" : "Off"},
+        {"Disable Right Eye Render", s.disable_right_eye_render ? "On" : "Off"},
         {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
         {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
         {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
         {"Console Region", RegionName(s.region_value)},
         {"System Language", LanguageName(s.language)},
-        {"Touch Pointer Source", s.pointer_source == 1 ? "Gyro" : "Left Stick"},
+        {"Touch Pointer Source",
+         PointerSourceName(static_cast<PointerSource>(s.pointer_source))},
         {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
         {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
         {"Preload Custom Textures", s.preload_textures ? "On" : "Off"},
         {"Dump Textures", s.dump_textures ? "On" : "Off"},
         {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
         {"Disable Pipeline Fast Path", s.disable_pipeline_fast_path ? "On" : "Off"},
-        {"Disable Right Eye Rendering", s.disable_right_eye_render ? "On" : "Off"},
         {"Remap Controls", ">"},
     };
 }
-constexpr int kNumSettings = 23;
+constexpr int kNumSettings = SettingRowCount;
 // These rows open a modal picker instead of cycling a value in place.
-constexpr int kLayoutCycleRow = 19;
-constexpr int kRemapControlsRow = kNumSettings - 1;
+constexpr int kLayoutCycleRow = SettingRowLayoutCycle;
+constexpr int kControllerMapRow = SettingRowControllerMap;
 
+// Rows that cycle a value in place via the joystick once armed. Boolean rows are handled by
+// IsBooleanSetting/ToggleSetting below instead (flipped directly by an A press).
 void CycleSetting(MenuSettings& s, int idx, int dir) {
     switch (idx) {
-    case 0:
+    case SettingRowResolution:
         s.resolution_factor = std::clamp(s.resolution_factor + dir, 0, 4);
         break;
-    case 5:
+    case SettingRowTextureFilter:
         s.texture_filter = std::clamp(s.texture_filter + dir, 0, 5);
         break;
-    case 9:
+    case SettingRowCpuClock:
         s.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage + dir * 25, 25, 400);
         break;
-    case 12:
+    case SettingRowRegion:
         s.region_value = std::clamp(s.region_value + dir, -1, 6);
         break;
-    case 13:
+    case SettingRowLanguage:
         s.language = std::clamp(s.language + dir, 0, 11);
         break;
-    case 15:
+    case SettingRowPointerSource:
+        s.pointer_source = std::clamp(s.pointer_source + dir, 0, NumPointerSources - 1);
+        break;
+    case SettingRowGyroX:
         s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
         break;
-    case 16:
+    case SettingRowGyroY:
         s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
         break;
     default:
@@ -651,23 +685,21 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
 
 // True for rows with only two states, toggled directly by an A press rather than armed for
 // joystick adjustment.
-// lo and behold - my masterpiece, individual case-based switch that manually counts everything. Sorry, im running on 2 braincells rn, its 3 am. this sucks.
 bool IsBooleanSetting(int idx) {
     switch (idx) {
-    case 1:  // VSync
-    case 2:  // Async Shader Compilation
-    case 3:  // Disk Shader Cache
-    case 4:  // Hardware Shader
-    case 6:  // Linear Filtering
-    case 7:  // Integer Scaling
-    case 8:  // Show FPS Counter
-    case 10: // New 3DS Mode
-    case 11: // CPU JIT (dynarmic)
-    case 14: // Touch Pointer Source
-    case 17: // Preload Custom Textures
-    case 18: // Dump Textures
-    case 20: // Disable Pipeline Fast Path
-    case 21: // Disable Right Eye Rendering
+    case SettingRowVSync:
+    case SettingRowAsyncShaders:
+    case SettingRowDiskShaderCache:
+    case SettingRowHwShader:
+    case SettingRowLinearFiltering:
+    case SettingRowIntegerScaling:
+    case SettingRowShowFps:
+    case SettingRowDisableRightEye:
+    case SettingRowNew3ds:
+    case SettingRowCpuJit:
+    case SettingRowPreloadTextures:
+    case SettingRowDumpTextures:
+    case SettingRowDisablePipelineFastPath:
         return true;
     default:
         return false;
@@ -676,47 +708,44 @@ bool IsBooleanSetting(int idx) {
 
 void ToggleSetting(MenuSettings& s, int idx) {
     switch (idx) {
-    case 1:
+    case SettingRowVSync:
         s.use_vsync = !s.use_vsync;
         break;
-    case 2:
+    case SettingRowAsyncShaders:
         s.async_shader_compilation = !s.async_shader_compilation;
         break;
-    case 3:
+    case SettingRowDiskShaderCache:
         s.use_disk_shader_cache = !s.use_disk_shader_cache;
         break;
-    case 4:
+    case SettingRowHwShader:
         s.use_hw_shader = !s.use_hw_shader;
         break;
-    case 6:
+    case SettingRowLinearFiltering:
         s.filter_mode = !s.filter_mode;
         break;
-    case 7:
+    case SettingRowIntegerScaling:
         s.use_integer_scaling = !s.use_integer_scaling;
         break;
-    case 8:
+    case SettingRowShowFps:
         s.show_fps = !s.show_fps;
         break;
-    case 10:
+    case SettingRowDisableRightEye:
+        s.disable_right_eye_render = !s.disable_right_eye_render;
+        break;
+    case SettingRowNew3ds:
         s.is_new_3ds = !s.is_new_3ds;
         break;
-    case 11:
+    case SettingRowCpuJit:
         s.use_cpu_jit = !s.use_cpu_jit;
         break;
-    case 14:
-        s.pointer_source = s.pointer_source ? 0 : 1;
-        break;
-    case 17:
+    case SettingRowPreloadTextures:
         s.preload_textures = !s.preload_textures;
         break;
-    case 18:
+    case SettingRowDumpTextures:
         s.dump_textures = !s.dump_textures;
         break;
-    case 20:
+    case SettingRowDisablePipelineFastPath:
         s.disable_pipeline_fast_path = !s.disable_pipeline_fast_path;
-        break;
-    case 21:
-        s.disable_right_eye_render = !s.disable_right_eye_render;
         break;
     default:
         break;
@@ -796,18 +825,55 @@ void DrawListScrollbar(Canvas& c, int track_x, int top, int visible_rows, int ro
     c.FillRoundRect(track_x, thumb_y, 4, thumb_h, 2, kColAccent);
 }
 
-// Draws a small button chip
-int DrawHint(Canvas& canvas, int x, int y, const char* button, const char* label) {
+// The rounded pill by itself, with no trailing label — reused by DrawHint below and by any
+// sentence that wants a button badge inline with prose (see DrawFlavorSentence).
+int DrawButtonChip(Canvas& canvas, int x, int y, const char* button) {
     constexpr int chip_h = 26;
     const int letter_w = g_font.Measure(button, 18);
     const int chip_w = std::max(chip_h, letter_w + 16);
     canvas.FillRoundRect(x, y, chip_w, chip_h, chip_h / 2, kColBadge);
     g_font.Draw(canvas, x + (chip_w - letter_w) / 2, CenterBaseline(y, chip_h, 18), button, 18,
                 kColText);
+    return chip_w;
+}
+
+// Draws a small button chip followed by its text label.
+int DrawHint(Canvas& canvas, int x, int y, const char* button, const char* label) {
+    constexpr int chip_h = 26;
+    const int chip_w = DrawButtonChip(canvas, x, y, button);
     const int label_x = x + chip_w + 8;
     const int label_w = g_font.Draw(canvas, label_x, CenterBaseline(y, chip_h, 18), label, 18,
                                     kColTextDim);
     return chip_w + 8 + label_w;
+}
+
+// One piece of a chip-and-prose sentence: either plain text, or a button badge (when `chip` is
+// non-null, `text` is ignored).
+struct FlavorPart {
+    const char* text = nullptr;
+    const char* chip = nullptr;
+};
+
+// Draws a sequence of text/chip parts left-to-right at a shared baseline, e.g. {"Press "},
+// {.chip="A"}, {" to toggle."} — used for the Settings footer's flavor text so button names
+// read as the same rounded badges the hint bar uses, rather than plain words. `baseline_y` is a
+// text baseline (matching how the rest of the footer is positioned), not a chip top, so the chip
+// letter and the surrounding prose line up exactly.
+void DrawFlavorSentence(Canvas& canvas, int x, int baseline_y, u32 text_color,
+                        std::initializer_list<FlavorPart> parts) {
+    constexpr int chip_h = 26;
+    constexpr int font_size = 18;
+    // Inverse of CenterBaseline(top, h, size): the chip top that makes its own text land on
+    // baseline_y, same as the plain-text parts drawn directly at baseline_y.
+    const int chip_top = baseline_y - (chip_h + static_cast<int>(font_size * 0.7f)) / 2;
+    int cx = x;
+    for (const FlavorPart& part : parts) {
+        if (part.chip != nullptr) {
+            cx += DrawButtonChip(canvas, cx, chip_top, part.chip) + 6;
+        } else {
+            cx += g_font.Draw(canvas, cx, baseline_y, part.text, font_size, text_color);
+        }
+    }
 }
 
 // Indexed by Tab, so the order has to match the enum.
@@ -1411,6 +1477,7 @@ private:
         install_done = false;
         install_active = true;
         install_thread = std::thread([this, path = cia.path] {
+            // InstallCia() itself holds the CPU boost for the duration of the write.
             install_result = InstallCia(path, [this](std::size_t written, std::size_t total) {
                 install_written = written;
                 install_total = total;
@@ -1557,7 +1624,7 @@ private:
             }
             return false;
         }
-        if (settings_sel == kRemapControlsRow) {
+        if (settings_sel == kControllerMapRow) {
             if ((nav & DirRight) || (down & HidNpadButton_A)) {
                 RemapControls();
             }
@@ -1729,7 +1796,7 @@ private:
                     settings_armed = false;
                 } else if (row == kLayoutCycleRow) {
                     OpenLayoutPicker();
-                } else if (row == kRemapControlsRow) {
+                } else if (row == kControllerMapRow) {
                     RemapControls();
                 } else if (settings_armed) {
                     // Already armed: tapping either half adjusts it, same as joystick left/right.
@@ -2285,7 +2352,7 @@ private:
     }
 
     static constexpr int kRowH = 41;
-    static constexpr int kSettingsFooterH = 84;
+    static constexpr int kSettingsFooterH = 100;
     static constexpr int kSettingsTop = kContentTop + 16;
     static constexpr int kSettingsRows =
         (kContentBottom - kSettingsFooterH - kSettingsTop) / (kRowH + 8);
@@ -2300,19 +2367,20 @@ private:
         for (int i = settings_scroll; i < std::min(count, settings_scroll + kSettingsRows); ++i) {
             const int y = kSettingsTop + (i - settings_scroll) * (kRowH + 8);
             const bool on = i == settings_sel;
-            if (on) {
+            const bool armed_here = on && settings_armed && content_focus;
+            if (armed_here) {
+                // Highlight the whole row, not just the value, while armed — makes it
+                // unambiguous that joystick left/right is now live for this row.
+                c.FillRoundRect(x, y, w, kRowH, 10, kColAccent);
+                c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2, kColSurface);
+            } else if (on) {
                 c.FillRoundRect(x, y, w, kRowH, 10, content_focus ? kColSurfaceHi : kColSurface);
                 c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2,
                                 content_focus ? kColAccent : kColBadge);
             }
-            g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), rows[i].label, 22, kColText);
+            g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), rows[i].label, 22,
+                        armed_here ? kColSurface : kColText);
             const int vw = g_font.Measure(rows[i].value, 22);
-            const bool armed_here = on && settings_armed && content_focus;
-            if (armed_here) {
-                // A filled chip behind the value marks it as "live" — joystick left/right will
-                // actually change it while this shows, unlike plain selection.
-                c.FillRoundRect(x + w - 34 - vw, y + 10, vw + 20, kRowH - 20, 8, kColAccent);
-            }
             g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), rows[i].value, 22,
                         armed_here             ? kColSurface
                         : on && content_focus  ? kColAccent
@@ -2326,6 +2394,33 @@ private:
         g_font.Draw(c, x + 20, footer_y + 16, backend, 18, kColTextDim);
         g_font.Draw(c, x + 20, footer_y + 42, "Changes apply the next time you launch a game.", 18,
                     kColTextDim);
+        // Flavor text explaining the current select-then-adjust interaction, since there's
+        // nothing else on screen to tell a first-time player the stick doesn't just work.
+        // Button names render as the same rounded chips the hint bar uses, via DrawFlavorSentence.
+        if (settings_armed) {
+            DrawFlavorSentence(c, x + 20, footer_y + 66, kColAccent,
+                               {{.text = "Adjusting this value — use "},
+                                {.chip = "<>"},
+                                {.text = " to change it, "},
+                                {.chip = "A"},
+                                {.text = " or "},
+                                {.chip = "B"},
+                                {.text = " when done."}});
+        } else if (settings_sel != kLayoutCycleRow && settings_sel != kControllerMapRow) {
+            if (IsBooleanSetting(settings_sel)) {
+                DrawFlavorSentence(c, x + 20, footer_y + 66, kColTextDim,
+                                   {{.text = "Press "},
+                                    {.chip = "A"},
+                                    {.text = " to toggle. The stick only moves the selection."}});
+            } else {
+                DrawFlavorSentence(c, x + 20, footer_y + 66, kColTextDim,
+                                   {{.text = "Press "},
+                                    {.chip = "A"},
+                                    {.text = " to select this value, then use "},
+                                    {.chip = "<>"},
+                                    {.text = " to change it."}});
+            }
+        }
 
         if (focus == Focus::Rail) {
             DrawRailHints(c);
@@ -2336,7 +2431,7 @@ private:
                 hx += DrawHint(c, hx, hy, "<>", "Adjust") + 22;
                 hx += DrawHint(c, hx, hy, "A / B", "Done") + 22;
             } else {
-                if (settings_sel == kLayoutCycleRow || settings_sel == kRemapControlsRow) {
+                if (settings_sel == kLayoutCycleRow || settings_sel == kControllerMapRow) {
                     hx += DrawHint(c, hx, hy, "A", "Configure") + 22;
                 } else if (IsBooleanSetting(settings_sel)) {
                     hx += DrawHint(c, hx, hy, "A", "Toggle") + 22;
