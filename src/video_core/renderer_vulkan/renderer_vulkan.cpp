@@ -1250,8 +1250,7 @@ void RendererVulkan::DrawTopScreen(const Layout::FramebufferLayout& layout,
     const float top_screen_width = static_cast<float>(top_screen.GetWidth());
     const float top_screen_height = static_cast<float>(top_screen.GetHeight());
 
-    const auto orientation = layout.is_rotated ? Layout::DisplayOrientation::Landscape
-                                               : Layout::DisplayOrientation::Portrait;
+    const auto orientation = layout.GetOrientation();
     switch (layout.render_3d_mode) {
     case Settings::StereoRenderOption::Off: {
         const int eye = static_cast<int>(Settings::values.mono_render_option.GetValue());
@@ -1306,8 +1305,7 @@ void RendererVulkan::DrawBottomScreen(const Layout::FramebufferLayout& layout,
     const float bottom_screen_width = static_cast<float>(bottom_screen.GetWidth());
     const float bottom_screen_height = static_cast<float>(bottom_screen.GetHeight());
 
-    const auto orientation = layout.is_rotated ? Layout::DisplayOrientation::Landscape
-                                               : Layout::DisplayOrientation::Portrait;
+    const auto orientation = layout.GetOrientation();
 
     switch (layout.render_3d_mode) {
     case Settings::StereoRenderOption::Off: {
@@ -1863,6 +1861,9 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
     constexpr std::array<float, 4> c_panel = {0.10f, 0.11f, 0.14f, 0.96f};
     constexpr std::array<float, 4> c_accent = {0.30f, 0.34f, 0.45f, 0.9f};
     constexpr std::array<float, 4> c_highlight = {0.20f, 0.45f, 0.85f, 0.9f};
+    // Warm accent for the armed row — joystick left/right is "live" for it, unlike plain
+    // selection (matches the Settings screen's armed-row treatment).
+    constexpr std::array<float, 4> c_armed = {0.98f, 0.67f, 0.29f, 0.9f};
     constexpr std::array<float, 4> c_title = {1.0f, 1.0f, 1.0f, 1.0f};
     constexpr std::array<float, 4> c_row = {0.82f, 0.85f, 0.92f, 1.0f};
     constexpr std::array<float, 4> c_sel = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -1914,7 +1915,7 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
         const float inset = std::round(row_h * 0.08f);
         builder.AddRect(panel_x0 + pad * 0.5f, top + inset, panel_x1 - pad * 0.5f,
                         top + row_h - inset);
-        emit(c_highlight, s);
+        emit(state.armed ? c_armed : c_highlight, s);
     }
 
     // Title.

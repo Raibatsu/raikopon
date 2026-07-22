@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <string>
 #include <vector>
@@ -17,6 +18,7 @@
 #include "core/cheats/cheats.h"
 #include "core/cheats/gateway_cheat.h"
 #include "core/core.h"
+#include "core/core_timing.h"
 #include "core/loader/loader.h"
 #include "video_core/overlay.h"
 
@@ -28,14 +30,15 @@ namespace {
 // also carries the cheat's index into the engine's list.
 enum class Item {
     ScreenLayout,
-    GyroSensitivityX,
-    GyroSensitivityY,
-    PointerSource,
-    PointerMode,
     FpsCounter,
     CustomTextures,
     TextureFilter,
     RightEyeRender,
+    PointerSource,
+    PointerMode,
+    GyroSensitivityX,
+    GyroSensitivityY,
+    CpuClock,
     MovieThrottleClock,
     AddCheat,
     Cheat,
@@ -49,19 +52,42 @@ struct Row {
     int cheat_index = -1;
 };
 
-// The overlay is split into tabs with L/R used to cycle between them.
-enum class Tab {
-    Settings,
+// The overlay is split into pages with L/R used to cycle between them.
+enum class Page {
+    Display,
+    Input,
+    System,
     Cheats,
 };
+
+constexpr std::array<Page, 4> kPages = {Page::Display, Page::Input, Page::System, Page::Cheats};
+
+const char* PageName(Page page) {
+    switch (page) {
+    case Page::Display:
+        return "Display";
+    case Page::Input:
+        return "Input";
+    case Page::System:
+        return "System";
+    case Page::Cheats:
+        return "Cheats";
+    }
+    return "";
+}
 
 // Percentage step for the gyro sensitivity rows.
 constexpr int kGyroStep = 10;
 
 // Percentage step for the movie CPU throttle row. 1 (rather than a coarser step like the
-// Settings page's "CPU Clock" row) so it behaves like a freely adjustable slider, especially
+// System page's "CPU Clock" row) so it behaves like a freely adjustable slider, especially
 // combined with the quick menu's hold-to-repeat on left/right (see citra_switch.cpp).
 constexpr int kMovieThrottleStep = 1;
+
+// Percentage step and range for the emulated CPU clock.
+constexpr int kClockStep = 25;
+constexpr int kClockMin = 25;
+constexpr int kClockMax = 400;
 
 const char* TextureFilterName(int filter) {
     switch (filter) {
@@ -82,15 +108,23 @@ const char* TextureFilterName(int filter) {
     }
 }
 
-// Cheats past this many spill onto further pages so the panel never overflows the screen.
+// Cheats past this many spill onto further sub-pages.
 constexpr int kCheatsPerPage = 8;
 
 std::atomic<bool> s_open{false};
-Tab s_tab = Tab::Settings;
+int s_page = 0;
 int s_selected = 0;
 int s_cheat_page = 0;
 std::vector<Row> s_rows;
 bool s_cheats_dirty = false;
+// True while the selected row is armed: joystick left/right adjusts it instead of moving the
+// cursor. Mirrors the Settings screen's arm/select model (see menu.cpp) so a stick that isn't
+// perfectly centered can't silently nudge a value while the player is just scrolling.
+bool s_armed = false;
+
+Page CurrentPage() {
+    return kPages[static_cast<std::size_t>(s_page)];
+}
 
 Cheats::CheatEngine* GetCheatEngine() {
     auto& system = Core::System::GetInstance();
@@ -155,7 +189,7 @@ void PersistCheats() {
     s_cheats_dirty = false;
 }
 
-// Rebuilds the visible rows for the active tab and page and keeps the cursor in range.
+// Rebuilds the visible rows for the active page and keeps the cursor in range.
 // Forward-declared so EditCheatFlow/DeleteCheatFlow (which need to land the cursor on the
 // affected cheat) can call it.
 void RebuildRows();
@@ -259,23 +293,29 @@ void DeleteCheatFlow(int index) {
     SelectCheat(index);
 }
 
-// Rebuilds the visible rows for the active tab and page and keeps the cursor in range.
 void RebuildRows() {
     s_rows.clear();
-    if (s_tab == Tab::Settings) {
+    switch (CurrentPage()) {
+    case Page::Display:
         s_rows.push_back({Item::ScreenLayout});
-        s_rows.push_back({Item::GyroSensitivityX});
-        s_rows.push_back({Item::GyroSensitivityY});
-        s_rows.push_back({Item::PointerSource});
-        s_rows.push_back({Item::PointerMode});
         s_rows.push_back({Item::FpsCounter});
         s_rows.push_back({Item::CustomTextures});
         s_rows.push_back({Item::TextureFilter});
         s_rows.push_back({Item::RightEyeRender});
+        break;
+    case Page::Input:
+        s_rows.push_back({Item::PointerSource});
+        s_rows.push_back({Item::PointerMode});
+        s_rows.push_back({Item::GyroSensitivityX});
+        s_rows.push_back({Item::GyroSensitivityY});
+        break;
+    case Page::System:
+        s_rows.push_back({Item::CpuClock});
         s_rows.push_back({Item::MovieThrottleClock});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
-    } else {
+        break;
+    case Page::Cheats: {
         s_rows.push_back({Item::AddCheat});
         const int count = CheatCount();
         s_cheat_page = std::clamp(s_cheat_page, 0, CheatPageCount() - 1);
@@ -287,13 +327,41 @@ void RebuildRows() {
         if (count == 0) {
             s_rows.push_back({Item::CheatsEmpty});
         }
+        break;
+    }
     }
     s_selected = std::clamp(s_selected, 0, static_cast<int>(s_rows.size()) - 1);
+}
+
+// The running timers keep their own copy of the clock scale, so a change has to be pushed into
+// core timing to take effect without a reboot.
+void SetCpuClock(int percent) {
+    percent = std::clamp(percent, kClockMin, kClockMax);
+    Settings::values.cpu_clock_percentage = percent;
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        system.CoreTiming().UpdateClockSpeed(static_cast<u32>(percent));
+    }
 }
 
 bool IsAction(const Row& row) {
     return row.item == Item::Resume || row.item == Item::ExitGame ||
            row.item == Item::CheatsEmpty || row.item == Item::AddCheat;
+}
+
+// True for rows with only two states, toggled directly by an A press rather than armed for
+// joystick adjustment (see s_armed).
+bool IsBooleanItem(Item item) {
+    switch (item) {
+    case Item::FpsCounter:
+    case Item::CustomTextures:
+    case Item::RightEyeRender:
+    case Item::PointerMode:
+    case Item::Cheat:
+        return true;
+    default:
+        return false;
+    }
 }
 
 std::string Label(const Row& row) {
@@ -316,6 +384,8 @@ std::string Label(const Row& row) {
         return "Texture Filter";
     case Item::RightEyeRender:
         return "Disable Right Eye";
+    case Item::CpuClock:
+        return "CPU Clock";
     case Item::MovieThrottleClock:
         return "Movie CPU Throttle";
     case Item::AddCheat:
@@ -341,7 +411,7 @@ std::string Value(const Row& row) {
     case Item::GyroSensitivityY:
         return std::to_string(GetGyroSensitivityY()) + "%";
     case Item::PointerSource:
-        return GetPointerSource() == PointerSource::Gyro ? "Gyro" : "Left Stick";
+        return PointerSourceName(GetPointerSource());
     case Item::PointerMode:
         return IsPointerModeActive() ? "On" : "Off";
     case Item::FpsCounter:
@@ -352,6 +422,8 @@ std::string Value(const Row& row) {
         return TextureFilterName(static_cast<int>(Settings::values.texture_filter.GetValue()));
     case Item::RightEyeRender:
         return Settings::values.disable_right_eye_render.GetValue() ? "On" : "Off";
+    case Item::CpuClock:
+        return std::to_string(Settings::values.cpu_clock_percentage.GetValue()) + "%";
     case Item::MovieThrottleClock:
         return std::to_string(GetMovieThrottleClockPercentage()) + "%";
     case Item::Cheat:
@@ -361,7 +433,8 @@ std::string Value(const Row& row) {
     }
 }
 
-// Left/right on a value row. `dir` is -1 or +1.
+// Left/right on an armed value row. `dir` is -1 or +1. Only reachable for rows IsBooleanItem
+// returns false for — booleans flip directly on an A press instead (see Activate).
 void Adjust(const Row& row, int dir) {
     switch (row.item) {
     case Item::ScreenLayout:
@@ -374,16 +447,8 @@ void Adjust(const Row& row, int dir) {
         SetGyroSensitivity(GetGyroSensitivityX(), GetGyroSensitivityY() + dir * kGyroStep);
         break;
     case Item::PointerSource:
-        SetPointerSource(dir > 0 ? PointerSource::Gyro : PointerSource::Stick);
-        break;
-    case Item::PointerMode:
-        SetPointerMode(dir > 0);
-        break;
-    case Item::FpsCounter:
-        Settings::values.show_fps = dir > 0;
-        break;
-    case Item::CustomTextures:
-        Settings::values.custom_textures = dir > 0;
+        SetPointerSource(static_cast<PointerSource>(std::clamp(
+            static_cast<int>(GetPointerSource()) + dir, 0, NumPointerSources - 1)));
         break;
     case Item::TextureFilter: {
         const int current = static_cast<int>(Settings::values.texture_filter.GetValue());
@@ -391,27 +456,21 @@ void Adjust(const Row& row, int dir) {
             static_cast<Settings::TextureFilter>(std::clamp(current + dir, 0, 5));
         break;
     }
-    case Item::RightEyeRender:
-        Settings::values.disable_right_eye_render = dir > 0;
+    case Item::CpuClock:
+        SetCpuClock(Settings::values.cpu_clock_percentage.GetValue() + dir * kClockStep);
         break;
     case Item::MovieThrottleClock:
         SetMovieThrottleClockPercentage(GetMovieThrottleClockPercentage() + dir * kMovieThrottleStep);
-        break;
-    case Item::Cheat:
-        ToggleCheat(row.cheat_index);
         break;
     default:
         break;
     }
 }
 
-// Pressing 'a' on a row advances the list by one.
+// Pressing 'A' on an action or boolean row (see IsAction/IsBooleanItem). Value rows arm instead
+// of calling this — see UpdateQuickMenu.
 void Activate(const Row& row) {
     switch (row.item) {
-    case Item::PointerSource:
-        SetPointerSource(GetPointerSource() == PointerSource::Gyro ? PointerSource::Stick
-                                                                   : PointerSource::Gyro);
-        break;
     case Item::PointerMode:
         TogglePointerMode();
         break;
@@ -432,7 +491,6 @@ void Activate(const Row& row) {
         ToggleCheat(row.cheat_index);
         break;
     default:
-        Adjust(row, 1);
         break;
     }
 }
@@ -441,12 +499,13 @@ void Repaint() {
     VideoCore::OverlayMenuState state;
     state.visible = s_open.load(std::memory_order_relaxed);
     state.selected = s_selected;
-    if (s_tab == Tab::Settings) {
-        state.title = "Quick Menu - Settings";
-        state.hint = "A Change   L/R Tab   +/- Close";
-    } else {
-        const int pages = CheatPageCount();
-        state.title = "Quick Menu - Cheats";
+    state.armed = s_armed;
+    state.title = std::string("Quick Menu - ") + PageName(CurrentPage()) + " (" +
+                  std::to_string(s_page + 1) + "/" + std::to_string(kPages.size()) + ")";
+    if (s_armed) {
+        state.hint = "<> Adjust   A / B Done";
+    } else if (CurrentPage() == Page::Cheats) {
+        const int cheat_pages = CheatPageCount();
         std::string hint = "A Toggle";
         const bool on_cheat_row = s_selected >= 0 &&
                                   s_selected < static_cast<int>(s_rows.size()) &&
@@ -454,14 +513,20 @@ void Repaint() {
         if (on_cheat_row) {
             hint += "   X Edit   Y Delete";
         }
-        hint += "   L/R Tab";
-        if (pages > 1) {
-            state.title += " (Page " + std::to_string(s_cheat_page + 1) + "/" +
-                           std::to_string(pages) + ")";
-            hint += "   ZL/ZR Page";
+        hint += "   L/R Page";
+        if (cheat_pages > 1) {
+            state.title += "  List " + std::to_string(s_cheat_page + 1) + "/" +
+                           std::to_string(cheat_pages);
+            hint += "   ZL/ZR List";
         }
         hint += "   +/- Close";
         state.hint = hint;
+    } else {
+        const bool row_valid = s_selected >= 0 && s_selected < static_cast<int>(s_rows.size());
+        const bool a_toggles =
+            row_valid && (IsAction(s_rows[s_selected]) || IsBooleanItem(s_rows[s_selected].item));
+        state.hint =
+            std::string("A ") + (a_toggles ? "Toggle" : "Select") + "   L/R Page   +/- Close";
     }
     state.items.reserve(s_rows.size());
     for (const Row& row : s_rows) {
@@ -477,9 +542,10 @@ bool IsQuickMenuOpen() {
 }
 
 void OpenQuickMenu() {
-    s_tab = Tab::Settings;
+    s_page = 0;
     s_selected = 0;
     s_cheat_page = 0;
+    s_armed = false;
     RebuildRows();
     s_open.store(true, std::memory_order_relaxed);
     PauseEmulation();
@@ -512,6 +578,29 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
         return QuickMenuAction::None;
     }
 
+    // While armed, the stick only adjusts the selected row — no page/cursor navigation, and
+    // A or B un-arms instead of closing the menu. Mirrors menu.cpp's HandleSettings.
+    if (s_armed) {
+        bool changed = false;
+        const Row& row = s_rows[s_selected];
+        if (nav.left) {
+            Adjust(row, -1);
+            changed = true;
+        }
+        if (nav.right) {
+            Adjust(row, 1);
+            changed = true;
+        }
+        if (nav.confirm || nav.cancel) {
+            s_armed = false;
+            changed = true;
+        }
+        if (changed) {
+            Repaint();
+        }
+        return QuickMenuAction::None;
+    }
+
     if (nav.cancel) {
         CloseQuickMenu();
         return QuickMenuAction::Close;
@@ -519,16 +608,17 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
 
     bool changed = false;
 
-    // L/R jump between the Settings and Cheats tabs.
-    if (nav.tab_prev || nav.tab_next) {
-        s_tab = s_tab == Tab::Settings ? Tab::Cheats : Tab::Settings;
+    // L/R cycle through the menu's pages.
+    if (nav.tab_prev != nav.tab_next) {
+        const int count = static_cast<int>(kPages.size());
+        s_page = (s_page + (nav.tab_next ? 1 : -1) + count) % count;
         s_selected = 0;
         RebuildRows();
         changed = true;
     }
 
     // ZL/ZR page through the cheat list.
-    if (s_tab == Tab::Cheats && (nav.page_prev || nav.page_next)) {
+    if (CurrentPage() == Page::Cheats && (nav.page_prev || nav.page_next)) {
         const int pages = CheatPageCount();
         const int dir = nav.page_next ? 1 : -1;
         s_cheat_page = (s_cheat_page + dir + pages) % pages;
@@ -551,14 +641,6 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
     // s_rows (invalidating any reference into it) before this function reads `row` again for
     // the modify/delete check.
     const Row row = s_rows[s_selected];
-    if (nav.left && !IsAction(row)) {
-        Adjust(row, -1);
-        changed = true;
-    }
-    if (nav.right && !IsAction(row)) {
-        Adjust(row, 1);
-        changed = true;
-    }
     if (nav.confirm) {
         if (row.item == Item::Resume) {
             CloseQuickMenu();
@@ -568,7 +650,13 @@ QuickMenuAction UpdateQuickMenu(const QuickMenuNav& nav) {
             CloseQuickMenu();
             return QuickMenuAction::ExitGame;
         }
-        Activate(row);
+        if (IsAction(row) || IsBooleanItem(row.item)) {
+            Activate(row);
+        } else {
+            // Value row: arm it instead of changing anything yet — joystick left/right takes
+            // over next frame while armed.
+            s_armed = true;
+        }
         changed = true;
     }
     if (row.item == Item::Cheat) {

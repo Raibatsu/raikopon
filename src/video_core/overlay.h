@@ -24,6 +24,7 @@ struct OverlayMenuState {
     std::string title;
     std::vector<OverlayMenuItem> items;
     int selected{};
+    bool armed{}; // True while the selected row is armed for joystick left/right adjustment.
     std::string hint; // Footer help text.
 };
 
