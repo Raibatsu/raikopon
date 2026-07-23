@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include "common/hash.h"
 #include "common/thread_worker.h"
 #include "video_core/pica/regs_pipeline.h"
@@ -27,6 +28,13 @@ public:
     void WaitDone() noexcept {
         std::unique_lock lock{mutex};
         condvar.wait(lock, [this] { return is_done.load(std::memory_order::relaxed); });
+    }
+
+    template <typename Rep, typename Period>
+    [[nodiscard]] bool WaitDoneFor(const std::chrono::duration<Rep, Period>& timeout) noexcept {
+        std::unique_lock lock{mutex};
+        return condvar.wait_for(lock, timeout,
+                                [this] { return is_done.load(std::memory_order::relaxed); });
     }
 
     void MarkDone(bool done = true) noexcept {
@@ -296,6 +304,12 @@ struct PipelineInfo : Common::HashableStruct<StaticPipelineInfo> {
     [[nodiscard]] u16 GetFinalColorWriteMask(const Instance& instance);
 };
 
+enum class PipelineWaitMode {
+    Async,
+    Bounded,
+    Blocking,
+};
+
 struct Shader : public Common::AsyncHandle {
     explicit Shader(const Instance& instance);
     explicit Shader(const Instance& instance, vk::ShaderStageFlagBits stage, std::string code);
@@ -318,7 +332,7 @@ public:
                               Common::ThreadWorker* worker);
     ~GraphicsPipeline();
 
-    bool TryBuild(bool wait_built);
+    bool TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker* priority_worker = nullptr);
 
     bool Build(bool fail_on_compile_required = false);
 

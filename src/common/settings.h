@@ -536,6 +536,9 @@ struct Values {
     SwitchableSetting<bool> spirv_shader_gen{true, Keys::spirv_shader_gen};
     SwitchableSetting<bool> disable_spirv_optimizer{true, Keys::disable_spirv_optimizer};
     SwitchableSetting<bool> disable_pipeline_fast_path{false, Keys::disable_pipeline_fast_path};
+    SwitchableSetting<bool> skip_slow_draw{false, Keys::skip_slow_draw};
+    SwitchableSetting<bool> skip_texture_copy{false, Keys::skip_texture_copy};
+    SwitchableSetting<bool> skip_cpu_write{false, Keys::skip_cpu_write};
     SwitchableSetting<bool> async_shader_compilation{false, Keys::async_shader_compilation};
     SwitchableSetting<bool> async_presentation{true, Keys::async_presentation};
     SwitchableSetting<bool> use_hw_shader{true, Keys::use_hw_shader};

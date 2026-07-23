@@ -83,34 +83,69 @@ GraphicsPipeline::GraphicsPipeline(const Instance& instance_, RenderManager& ren
 
 GraphicsPipeline::~GraphicsPipeline() = default;
 
-bool GraphicsPipeline::TryBuild(bool wait_built) {
+bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker* priority_worker) {
+    constexpr std::chrono::microseconds kBoundedWaitBudget{1500};
+
     // The pipeline is currently being compiled. We can either wait for it
     // or skip the draw.
     if (is_pending) {
-        return wait_built;
+        switch (wait_mode) {
+        case PipelineWaitMode::Async:
+            return false;
+        case PipelineWaitMode::Bounded:
+            return WaitDoneFor(kBoundedWaitBudget);
+        case PipelineWaitMode::Blocking:
+            return true;
+        }
     }
 
     // If the shaders haven't been compiled yet, we cannot proceed.
-    const bool shaders_pending = std::any_of(
-        stages.begin(), stages.end(), [](Shader* shader) { return shader && !shader->IsDone(); });
-    if (!wait_built && shaders_pending) {
-        return false;
+    bool shaders_ready = std::all_of(
+        stages.begin(), stages.end(), [](Shader* shader) { return !shader || shader->IsDone(); });
+
+    if (!shaders_ready) {
+        if (wait_mode == PipelineWaitMode::Async) {
+            return false;
+        }
+        if (wait_mode == PipelineWaitMode::Bounded) {
+            shaders_ready = true;
+            for (Shader* shader : stages) {
+                if (shader && !shader->WaitDoneFor(kBoundedWaitBudget)) {
+                    shaders_ready = false;
+                    break;
+                }
+            }
+            if (!shaders_ready) {
+                return false;
+            }
+        }
     }
 
     // Ask the driver if it can give us the pipeline quickly.
-    if (!shaders_pending && !Settings::values.disable_pipeline_fast_path.GetValue() &&
+    if (shaders_ready && !Settings::values.disable_pipeline_fast_path.GetValue() &&
         instance.IsPipelineCreationCacheControlSupported() && Build(true)) {
         return true;
     }
 
     // Fallback to (a)synchronous compilation
+    Common::ThreadWorker* const target_worker =
+        (wait_mode == PipelineWaitMode::Bounded && priority_worker) ? priority_worker : worker;
     Common::ShaderCompileStats::BeginCompile();
-    worker->QueueWork([this] {
+    target_worker->QueueWork([this] {
         Build();
         Common::ShaderCompileStats::EndCompile();
     });
     is_pending = true;
-    return wait_built;
+
+    switch (wait_mode) {
+    case PipelineWaitMode::Async:
+        return false;
+    case PipelineWaitMode::Bounded:
+        return WaitDoneFor(kBoundedWaitBudget);
+    case PipelineWaitMode::Blocking:
+        return true;
+    }
+    return false;
 }
 
 bool GraphicsPipeline::Build(bool fail_on_compile_required) {
