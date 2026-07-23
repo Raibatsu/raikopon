@@ -138,6 +138,9 @@ private:
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
         ReadSetting("Renderer", Settings::values.use_hw_shader);
         ReadSetting("Renderer", Settings::values.disable_pipeline_fast_path);
+        ReadSetting("Renderer", Settings::values.skip_slow_draw);
+        ReadSetting("Renderer", Settings::values.skip_texture_copy);
+        ReadSetting("Renderer", Settings::values.skip_cpu_write);
         ReadSetting("Renderer", Settings::values.show_fps);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
         ReadSetting("Renderer", Settings::values.texture_filter);
@@ -218,6 +221,10 @@ private:
         ss << "use_hw_shader = " << (v.use_hw_shader.GetValue() ? "true" : "false") << '\n';
         ss << "disable_pipeline_fast_path = "
            << (v.disable_pipeline_fast_path.GetValue() ? "true" : "false") << '\n';
+        ss << "skip_slow_draw = " << (v.skip_slow_draw.GetValue() ? "true" : "false") << '\n';
+        ss << "skip_texture_copy = " << (v.skip_texture_copy.GetValue() ? "true" : "false")
+           << '\n';
+        ss << "skip_cpu_write = " << (v.skip_cpu_write.GetValue() ? "true" : "false") << '\n';
         ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << '\n';
         ss << "use_shader_jit = " << (v.use_shader_jit.GetValue() ? "true" : "false") << '\n';
         ss << "texture_filter = " << static_cast<int>(v.texture_filter.GetValue()) << '\n';

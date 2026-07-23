@@ -302,12 +302,14 @@ void RebuildRows() {
         s_rows.push_back({Item::CustomTextures});
         s_rows.push_back({Item::TextureFilter});
         s_rows.push_back({Item::RightEyeRender});
+        s_rows.push_back({Item::ExitGame});
         break;
     case Page::Input:
         s_rows.push_back({Item::PointerSource});
         s_rows.push_back({Item::PointerMode});
         s_rows.push_back({Item::GyroSensitivityX});
         s_rows.push_back({Item::GyroSensitivityY});
+        s_rows.push_back({Item::ExitGame});
         break;
     case Page::System:
         // CPU Clock hidden for now — see Item::CpuClock's other cases (Label/Value/Adjust)
@@ -328,6 +330,7 @@ void RebuildRows() {
         if (count == 0) {
             s_rows.push_back({Item::CheatsEmpty});
         }
+        s_rows.push_back({Item::ExitGame});
         break;
     }
     }
@@ -501,8 +504,12 @@ void Repaint() {
     state.visible = s_open.load(std::memory_order_relaxed);
     state.selected = s_selected;
     state.armed = s_armed;
-    state.title = std::string("Quick Menu - ") + PageName(CurrentPage()) + " (" +
-                  std::to_string(s_page + 1) + "/" + std::to_string(kPages.size()) + ")";
+    state.title = PageName(CurrentPage());
+    {
+        const int count = static_cast<int>(kPages.size());
+        state.prev_tab = PageName(kPages[static_cast<std::size_t>((s_page - 1 + count) % count)]);
+        state.next_tab = PageName(kPages[static_cast<std::size_t>((s_page + 1) % count)]);
+    }
     if (s_armed) {
         state.hint = "<> Adjust   A / B Done";
     } else if (CurrentPage() == Page::Cheats) {

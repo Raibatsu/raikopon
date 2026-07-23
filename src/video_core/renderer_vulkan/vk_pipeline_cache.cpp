@@ -98,6 +98,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
       // pipeline compiles land on different cores instead of both funneling onto the same one.
       pipeline_workers{num_worker_threads, "Pipeline workers", {}, {1, 0}},
       shader_workers{num_worker_threads, "Shader workers", {}, {0, 1}},
+      priority_workers{1, "Priority pipeline workers", {}, {0}},
       descriptor_heaps{
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), BUFFER_BINDINGS, 32},
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), TEXTURE_BINDINGS<1>},
@@ -158,6 +159,7 @@ void PipelineCache::BuildLayout() {
 PipelineCache::~PipelineCache() {
     pipeline_workers.WaitForRequests();
     shader_workers.WaitForRequests();
+    priority_workers.WaitForRequests();
     SaveDriverPipelineDiskCache();
 }
 
@@ -374,7 +376,7 @@ void PipelineCache::SwitchDiskCache(u64 title_id, const std::atomic_bool& stop_l
     }
 }
 
-bool PipelineCache::BindPipeline(PipelineInfo& info, bool wait_built) {
+bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode) {
     MICROPROFILE_SCOPE(Vulkan_Bind);
 
     for (u32 i = 0; i < MAX_SHADER_STAGES; i++) {
@@ -382,7 +384,7 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, bool wait_built) {
     }
 
     GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
-    if (!pipeline->IsDone() && !pipeline->TryBuild(wait_built)) {
+    if (!pipeline->IsDone() && !pipeline->TryBuild(wait_mode, &priority_workers)) {
         return false;
     }
 

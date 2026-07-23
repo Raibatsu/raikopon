@@ -530,19 +530,6 @@ const char* LanguageName(int language) {
     }
 }
 
-const char* BackendName(int api) {
-    switch (api) {
-    case 0:
-        return "Software";
-    case 1:
-        return "OpenGL";
-    case 2:
-        return "Vulkan";
-    default:
-        return "Unknown";
-    }
-}
-
 const char* TextureFilterName(int filter) {
     switch (filter) {
     case 0:
@@ -572,11 +559,6 @@ std::string ResolutionText(int factor) {
     return std::to_string(factor) + "x";
 }
 
-struct SettingRow {
-    const char* label;
-    std::string value;
-};
-
 // "N of M" summary of how many layouts R3 is set to cycle through.
 std::string LayoutCycleSummary(std::uint32_t mask) {
     const int total = GetScreenLayoutCount();
@@ -589,7 +571,15 @@ std::string LayoutCycleSummary(std::uint32_t mask) {
     return std::to_string(enabled) + " of " + std::to_string(total);
 }
 
-// Row order on the Settings page. BuildSettingRows and CycleSetting must agree on it.
+enum class SettingsTab { Graphics, Debug, Misc, Controls };
+constexpr std::array<std::pair<SettingsTab, const char*>, 4> kSettingsTabs{{
+    {SettingsTab::Graphics, "Graphics"},
+    {SettingsTab::Debug, "Debug"},
+    {SettingsTab::Misc, "Misc"},
+    {SettingsTab::Controls, "Controls"},
+}};
+constexpr int kNumSettingsTabs = static_cast<int>(kSettingsTabs.size());
+
 enum SettingRowIdx {
     SettingRowResolution,
     SettingRowVSync,
@@ -607,53 +597,115 @@ enum SettingRowIdx {
     SettingRowRegion,
     SettingRowLanguage,
     SettingRowPointerSource,
-    SettingRowGyroX,
-    SettingRowGyroY,
+    SettingRowGyroSensitivity,
     SettingRowPreloadTextures,
     SettingRowDumpTextures,
     SettingRowLayoutCycle,
     SettingRowDisablePipelineFastPath,
-    SettingRowControllerMap,
-    SettingRowCount,
+    SettingRowSkipSlowDraw,
+    SettingRowSkipTextureCopy,
+    SettingRowSkipCpuWrite,
 };
 
-std::vector<SettingRow> BuildSettingRows(const MenuSettings& s) {
-    return {
-        {"Internal Resolution", ResolutionText(s.resolution_factor)},
-        {"VSync", s.use_vsync ? "On" : "Off"},
-        {"Async Shader Compilation", s.async_shader_compilation ? "On" : "Off"},
-        {"Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off"},
-        {"Hardware Shader", s.use_hw_shader ? "On" : "Off"},
-        {"Texture Filter", TextureFilterName(s.texture_filter)},
-        {"Linear Filtering", s.filter_mode ? "On" : "Off"},
-        {"Integer Scaling", s.use_integer_scaling ? "On" : "Off"},
-        {"Show FPS Counter", s.show_fps ? "On" : "Off"},
-        {"Disable Right Eye Render", s.disable_right_eye_render ? "On" : "Off"},
-        {"CPU Clock", std::to_string(s.cpu_clock_percentage) + "%"},
-        {"New 3DS Mode", s.is_new_3ds ? "On" : "Off"},
-        {"CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off"},
-        {"Console Region", RegionName(s.region_value)},
-        {"System Language", LanguageName(s.language)},
-        {"Touch Pointer Source",
-         PointerSourceName(static_cast<PointerSource>(s.pointer_source))},
-        {"Gyro Sensitivity X", std::to_string(s.gyro_sensitivity_x) + "%"},
-        {"Gyro Sensitivity Y", std::to_string(s.gyro_sensitivity_y) + "%"},
-        {"Preload Custom Textures", s.preload_textures ? "On" : "Off"},
-        {"Dump Textures", s.dump_textures ? "On" : "Off"},
-        {"R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask)},
-        {"Disable Pipeline Fast Path", s.disable_pipeline_fast_path ? "On" : "Off"},
-        {"Remap Controls", ">"},
-    };
+struct SettingRow {
+    SettingRowIdx item;
+    const char* label;
+    std::string value;
+    const char* description;
+};
+
+std::string GyroSensitivityText(const MenuSettings& s) {
+    return "X " + std::to_string(s.gyro_sensitivity_x) + "%   Y " +
+           std::to_string(s.gyro_sensitivity_y) + "%";
 }
-constexpr int kNumSettings = SettingRowCount;
-// These rows open a modal picker instead of cycling a value in place.
-constexpr int kLayoutCycleRow = SettingRowLayoutCycle;
-constexpr int kControllerMapRow = SettingRowControllerMap;
+
+std::string GyroSensitivityArmedText(const MenuSettings& s, bool y_axis) {
+    const std::string x = "X " + std::to_string(s.gyro_sensitivity_x) + "%";
+    const std::string y = "Y " + std::to_string(s.gyro_sensitivity_y) + "%";
+    return y_axis ? (x + "   [" + y + "]") : ("[" + x + "]   " + y);
+}
+
+std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s) {
+    switch (tab) {
+    case SettingsTab::Graphics:
+        return {
+            {SettingRowResolution, "Internal Resolution", ResolutionText(s.resolution_factor),
+             "Change the resolution the game is played at. 1x is 400x240."},
+            {SettingRowVSync, "VSync", s.use_vsync ? "On" : "Off",
+             "Reduces screen tearing at the cost of increased input latency."},
+            {SettingRowTextureFilter, "Texture Filter", TextureFilterName(s.texture_filter),
+             "Add filters to your screen."},
+            {SettingRowLinearFiltering, "Linear Filtering", s.filter_mode ? "On" : "Off",
+             "Smooth out jagged edges at the cost of sharpness."},
+            {SettingRowIntegerScaling, "Integer Scaling", s.use_integer_scaling ? "On" : "Off",
+             "Scales the output 1:1 to the resolution of the game."},
+        };
+    case SettingsTab::Debug:
+        return {
+            {SettingRowAsyncShaders, "Async Shader Compilation",
+             s.async_shader_compilation ? "On" : "Off",
+             "Reduces the amount of time it takes to compile shaders."},
+            {SettingRowDiskShaderCache, "Disk Shader Cache", s.use_disk_shader_cache ? "On" : "Off",
+             "Drastically reduces stuttering in-game by keeping compiled shaders on disk."},
+            {SettingRowHwShader, "Hardware Shader", s.use_hw_shader ? "On" : "Off",
+             "Emulate shaders more efficiently on GPU."},
+            {SettingRowDisableRightEye, "Disable Right Eye Render",
+             s.disable_right_eye_render ? "On" : "Off",
+             "Disable this for huge speed boost. Only enable this if you have issues rendering "
+             "the game on the bottom screen."},
+            {SettingRowCpuClock, "CPU Clock", std::to_string(s.cpu_clock_percentage) + "%",
+             "Change the emulated CPU clock. Most games play well at 100%."},
+            {SettingRowCpuJit, "CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off",
+             "Do not disable this unless explicitly needed. Huge performance drops."},
+            {SettingRowPointerSource, "Touch Pointer Source",
+             PointerSourceName(static_cast<PointerSource>(s.pointer_source)),
+             "For those who don't want to use touch screen, use a virtual cursor."},
+            {SettingRowGyroSensitivity, "Gyro Sensitivity", GyroSensitivityText(s),
+             "Gyroscope Sensitivity."},
+            {SettingRowPreloadTextures, "Preload Custom Textures",
+             s.preload_textures ? "On" : "Off",
+             "Enable use of custom textures in-game. Place them in "
+             "/load/textures/<TITLE_ID>/."},
+            {SettingRowDumpTextures, "Dump Textures", s.dump_textures ? "On" : "Off",
+             "Disable this unless you're making your own texture pack. Heavy on IO calls."},
+            {SettingRowDisablePipelineFastPath, "Disable Pipeline Fast Path",
+             s.disable_pipeline_fast_path ? "On" : "Off",
+             "Debug option that helps speed up shader compilation."},
+            {SettingRowSkipSlowDraw, "Skip Slow Draw", s.skip_slow_draw ? "On" : "Off",
+             "Debug option that skips the CPU vertex/triangle fallback entirely."},
+            {SettingRowSkipTextureCopy, "Skip Texture Copy", s.skip_texture_copy ? "On" : "Off",
+             "Debug option that skips non-cached source surface."},
+            {SettingRowSkipCpuWrite, "Skip CPU Write", s.skip_cpu_write ? "On" : "Off",
+             "Debug option that skips flushing/removing cached GPU surfaces for CPU cycles."},
+        };
+    case SettingsTab::Misc:
+        return {
+            {SettingRowShowFps, "Show FPS Counter", s.show_fps ? "On" : "Off",
+             "Shows FPS on the top left of the screen."},
+            {SettingRowNew3ds, "New 3DS Mode", s.is_new_3ds ? "On" : "Off",
+             "Emulate New 3DS. Might cause performance drops but necessary to boot some games."},
+            {SettingRowRegion, "Console Region", RegionName(s.region_value),
+             "Change the region of the console."},
+            {SettingRowLanguage, "System Language", LanguageName(s.language),
+             "Change the language of games. Not supported in GUI for now."},
+            {SettingRowLayoutCycle, "R3 Screen Layouts", LayoutCycleSummary(s.layout_cycle_mask),
+             "Screen layouts to swap between when tapping screen-swap key."},
+        };
+    case SettingsTab::Controls:
+        return {};
+    }
+    return {};
+}
+
+void AdjustGyroAxis(MenuSettings& s, bool y_axis, int dir) {
+    int& v = y_axis ? s.gyro_sensitivity_y : s.gyro_sensitivity_x;
+    v = std::clamp(v + dir * 10, 10, 500);
+}
 
 // Rows that cycle a value in place via the joystick once armed. Boolean rows are handled by
 // IsBooleanSetting/ToggleSetting below instead (flipped directly by an A press).
-void CycleSetting(MenuSettings& s, int idx, int dir) {
-    switch (idx) {
+void CycleSetting(MenuSettings& s, SettingRowIdx item, int dir) {
+    switch (item) {
     case SettingRowResolution:
         s.resolution_factor = std::clamp(s.resolution_factor + dir, 0, 4);
         break;
@@ -672,12 +724,6 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
     case SettingRowPointerSource:
         s.pointer_source = std::clamp(s.pointer_source + dir, 0, NumPointerSources - 1);
         break;
-    case SettingRowGyroX:
-        s.gyro_sensitivity_x = std::clamp(s.gyro_sensitivity_x + dir * 10, 10, 500);
-        break;
-    case SettingRowGyroY:
-        s.gyro_sensitivity_y = std::clamp(s.gyro_sensitivity_y + dir * 10, 10, 500);
-        break;
     default:
         break;
     }
@@ -685,8 +731,8 @@ void CycleSetting(MenuSettings& s, int idx, int dir) {
 
 // True for rows with only two states, toggled directly by an A press rather than armed for
 // joystick adjustment.
-bool IsBooleanSetting(int idx) {
-    switch (idx) {
+bool IsBooleanSetting(SettingRowIdx item) {
+    switch (item) {
     case SettingRowVSync:
     case SettingRowAsyncShaders:
     case SettingRowDiskShaderCache:
@@ -700,14 +746,17 @@ bool IsBooleanSetting(int idx) {
     case SettingRowPreloadTextures:
     case SettingRowDumpTextures:
     case SettingRowDisablePipelineFastPath:
+    case SettingRowSkipSlowDraw:
+    case SettingRowSkipTextureCopy:
+    case SettingRowSkipCpuWrite:
         return true;
     default:
         return false;
     }
 }
 
-void ToggleSetting(MenuSettings& s, int idx) {
-    switch (idx) {
+void ToggleSetting(MenuSettings& s, SettingRowIdx item) {
+    switch (item) {
     case SettingRowVSync:
         s.use_vsync = !s.use_vsync;
         break;
@@ -746,6 +795,15 @@ void ToggleSetting(MenuSettings& s, int idx) {
         break;
     case SettingRowDisablePipelineFastPath:
         s.disable_pipeline_fast_path = !s.disable_pipeline_fast_path;
+        break;
+    case SettingRowSkipSlowDraw:
+        s.skip_slow_draw = !s.skip_slow_draw;
+        break;
+    case SettingRowSkipTextureCopy:
+        s.skip_texture_copy = !s.skip_texture_copy;
+        break;
+    case SettingRowSkipCpuWrite:
+        s.skip_cpu_write = !s.skip_cpu_write;
         break;
     default:
         break;
@@ -786,10 +844,6 @@ const char* PathRowLabel(int row) {
 constexpr int kBrowseTop = 108;
 constexpr int kBrowseRowH = 44;
 constexpr int kBrowseRows = (kContentBottom - kBrowseTop) / kBrowseRowH;
-
-constexpr int kRemapTop = 108;
-constexpr int kRemapRowH = 48;
-constexpr int kRemapRows = (kContentBottom - kRemapTop) / kRemapRowH;
 
 constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>,
                      SwitchFrontend::NumPhysicalButtons>
@@ -1135,6 +1189,13 @@ void DrawTitleDetails(Canvas& c, const GameEntry& game, const TitleDetails& deta
 
     ty += 4;
     g_font.Draw(c, x + 24, ty + 16, g_font.TruncateFront(game.path, 16, w - 48), 16, kColTextDim);
+
+    int hx = x + 24;
+    const int hy = y + h - 38;
+    hx += DrawHint(c, hx, hy, "+", "Close") + 22;
+    if (details.program_id != 0) {
+        DrawHint(c, hx, hy, "-", "Clear Shader Cache");
+    }
 }
 
 class Menu {
@@ -1176,8 +1237,20 @@ public:
             } else if (layout_picker_open) {
                 HandleLayoutPicker(down, nav);
             } else if (details_open) {
-                // Any of the buttons that could have opened the panel also closes it.
-                if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_Plus)) {
+                if ((down & HidNpadButton_Minus) && !(held & HidNpadButton_Plus) &&
+                    details.program_id != 0 && !filtered.empty()) {
+                    const GameEntry& game = games[filtered[selected]];
+                    if (ConfirmClearShaderCache(game)) {
+                        const int removed = ClearShaderCache(details.program_id);
+                        details_open = false;
+                        ShowPopup(removed > 0
+                                      ? "Cleared " + std::to_string(removed) +
+                                            (removed == 1 ? " file." : " files.")
+                                      : "No cached shaders found for this title.",
+                                  "Shader Cache", kColAccent);
+                    }
+                } else if (down & (HidNpadButton_A | HidNpadButton_B | HidNpadButton_Plus)) {
+                    // Any of the buttons that could have opened the panel also closes it.
                     details_open = false;
                 }
             } else if (focus == Focus::Rail) {
@@ -1236,6 +1309,8 @@ private:
     int settings_sel = 0;
     int settings_scroll = 0;
     bool settings_armed = false;
+    SettingsTab settings_tab = SettingsTab::Graphics;
+    bool gyro_edit_y = false;
     int paths_sel = 0;
     std::string search;
     MenuSettings settings{};
@@ -1247,6 +1322,11 @@ private:
     bool fb_ready = false;
     bool settings_dirty = false; // Edited settings not yet written to config.ini.
     bool paths_dirty = false;
+
+    int remap_sel = 0;
+    int remap_scroll = 0;
+    bool remap_capturing = false;
+    bool remap_dirty = false;
 
     // Library detail panel.
     bool details_open = false;
@@ -1288,6 +1368,7 @@ private:
     void SetTab(Tab next) {
         if (tab == Tab::Settings && next != Tab::Settings) {
             FlushSettings();
+            FlushRemap();
             settings_armed = false;
         }
         if (tab == Tab::Paths && next != Tab::Paths) {
@@ -1320,6 +1401,7 @@ private:
 
     void Flush() {
         FlushSettings();
+        FlushRemap();
         FlushPaths();
     }
 
@@ -1328,6 +1410,28 @@ private:
             SetMenuSettings(settings);
             settings_dirty = false;
         }
+    }
+
+    void FlushRemap() {
+        if (remap_dirty) {
+            SwitchFrontend::ApplyButtonMappings();
+            SwitchFrontend::SaveConfig();
+            remap_dirty = false;
+        }
+    }
+
+    void SwitchSettingsTab(int delta) {
+        FlushRemap();
+        const int idx = (static_cast<int>(settings_tab) + delta + kNumSettingsTabs) %
+                        kNumSettingsTabs;
+        settings_tab = static_cast<SettingsTab>(idx);
+        settings_sel = 0;
+        settings_scroll = 0;
+        settings_armed = false;
+        gyro_edit_y = false;
+        remap_sel = 0;
+        remap_scroll = 0;
+        remap_capturing = false;
     }
 
     void FlushPaths() {
@@ -1541,8 +1645,26 @@ private:
         return false;
     }
 
+    bool ConfirmClearShaderCache(const GameEntry& game) {
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            if (down & HidNpadButton_A) {
+                return true;
+            }
+            if (down & HidNpadButton_B) {
+                return false;
+            }
+            Draw();
+            DrawConfirmClearShaderCache(canvas, game);
+            Present();
+        }
+        return false;
+    }
+
     // Blocks on a single-button acknowledgement popup, e.g. after a failed launch.
-    void ShowPopup(const std::string& message) {
+    void ShowPopup(const std::string& message, const char* title = "Can't launch",
+                   u32 title_color = kColError) {
         while (appletMainLoop()) {
             padUpdate(pad_state);
             const u64 down = padGetButtonsDown(pad_state);
@@ -1550,7 +1672,7 @@ private:
                 return;
             }
             Draw();
-            DrawPopup(canvas, message);
+            DrawPopup(canvas, message, title, title_color);
             Present();
         }
     }
@@ -1587,15 +1709,49 @@ private:
     }
 
     bool HandleSettings(u64 down, u32 nav) {
+        if (settings_tab == SettingsTab::Controls) {
+            return HandleControlsTab(down, nav);
+        }
+
+        if (down & HidNpadButton_L) {
+            SwitchSettingsTab(-1);
+            return false;
+        }
+        if (down & HidNpadButton_R) {
+            SwitchSettingsTab(+1);
+            return false;
+        }
+
+        const auto rows = BuildSettingRows(settings_tab, settings);
+        const int count = static_cast<int>(rows.size());
+
         if (settings_armed) {
+            const SettingRowIdx current_item = rows[settings_sel].item;
             bool changed = false;
-            if (nav & DirLeft) {
-                CycleSetting(settings, settings_sel, -1);
-                changed = true;
-            }
-            if (nav & DirRight) {
-                CycleSetting(settings, settings_sel, +1);
-                changed = true;
+            if (current_item == SettingRowGyroSensitivity) {
+                if (nav & DirUp) {
+                    gyro_edit_y = false;
+                }
+                if (nav & DirDown) {
+                    gyro_edit_y = true;
+                }
+                if (nav & DirLeft) {
+                    AdjustGyroAxis(settings, gyro_edit_y, -1);
+                    changed = true;
+                }
+                if (nav & DirRight) {
+                    AdjustGyroAxis(settings, gyro_edit_y, +1);
+                    changed = true;
+                }
+            } else {
+                if (nav & DirLeft) {
+                    CycleSetting(settings, current_item, -1);
+                    changed = true;
+                }
+                if (nav & DirRight) {
+                    CycleSetting(settings, current_item, +1);
+                    changed = true;
+                }
             }
             if (changed) {
                 settings_dirty = true;
@@ -1610,12 +1766,14 @@ private:
             settings_sel = std::max(0, settings_sel - 1);
         }
         if (nav & DirDown) {
-            settings_sel = std::min(kNumSettings - 1, settings_sel + 1);
+            settings_sel = std::min(count - 1, settings_sel + 1);
         }
         settings_scroll =
             std::clamp(settings_scroll, std::max(0, settings_sel - kSettingsRows + 1),
-                       std::max(0, std::min(settings_sel, kNumSettings - kSettingsRows)));
-        if (settings_sel == kLayoutCycleRow) {
+                       std::max(0, std::min(settings_sel, count - kSettingsRows)));
+
+        const SettingRowIdx current_item = rows[settings_sel].item;
+        if (current_item == SettingRowLayoutCycle) {
             if ((down & HidNpadButton_A) || (nav & DirRight)) {
                 OpenLayoutPicker();
             }
@@ -1624,23 +1782,61 @@ private:
             }
             return false;
         }
-        if (settings_sel == kControllerMapRow) {
-            if ((nav & DirRight) || (down & HidNpadButton_A)) {
-                RemapControls();
-            }
-            if (down & HidNpadButton_B) {
-                EnterRail();
-            }
-            return false;
-        }
         // Edit the local snapshot only and use FlushSettings() later to apply to config.ini.
         if (down & HidNpadButton_A) {
-            if (IsBooleanSetting(settings_sel)) {
-                ToggleSetting(settings, settings_sel);
+            if (IsBooleanSetting(current_item)) {
+                ToggleSetting(settings, current_item);
                 settings_dirty = true;
             } else {
                 settings_armed = true;
+                gyro_edit_y = false;
             }
+        }
+        if (down & HidNpadButton_B) {
+            EnterRail();
+        }
+        return false;
+    }
+
+    bool HandleControlsTab(u64 down, u32 nav) {
+        if (remap_capturing) {
+            for (const auto& [hid_mask, phys] : kPhysicalButtonMap) {
+                if ((down & hid_mask) != 0) {
+                    SwitchFrontend::SetMapping(
+                        static_cast<SwitchFrontend::MappableControl>(remap_sel), phys);
+                    remap_capturing = false;
+                    remap_dirty = true;
+                    break;
+                }
+            }
+            return false;
+        }
+
+        if (down & HidNpadButton_L) {
+            SwitchSettingsTab(-1);
+            return false;
+        }
+        if (down & HidNpadButton_R) {
+            SwitchSettingsTab(+1);
+            return false;
+        }
+
+        const int count = SwitchFrontend::NumMappableControls;
+        if (nav & DirUp) {
+            remap_sel = std::max(0, remap_sel - 1);
+        }
+        if (nav & DirDown) {
+            remap_sel = std::min(count - 1, remap_sel + 1);
+        }
+        remap_scroll = std::clamp(remap_scroll, std::max(0, remap_sel - kSettingsRows + 1),
+                                  std::max(0, std::min(remap_sel, count - kSettingsRows)));
+        if (down & HidNpadButton_A) {
+            remap_capturing = true;
+        }
+        if (down & HidNpadButton_Y) {
+            const auto control = static_cast<SwitchFrontend::MappableControl>(remap_sel);
+            SwitchFrontend::SetMapping(control, SwitchFrontend::DefaultMapping(control));
+            remap_dirty = true;
         }
         if (down & HidNpadButton_B) {
             EnterRail();
@@ -1741,15 +1937,31 @@ private:
     void HandleTouch() {
         HidTouchScreenState ts{};
         if (hidGetTouchScreenStates(&ts, 1) == 0 || ts.count == 0) {
+            if (touch_was_down && touch_swipe_candidate) {
+                const int dx = touch_last_x - touch_start_x;
+                const int dy = touch_last_y - touch_start_y;
+                constexpr int kSwipeThreshold = 120;
+                constexpr int kSwipeMaxVertical = 80;
+                if (std::abs(dx) >= kSwipeThreshold && std::abs(dy) <= kSwipeMaxVertical) {
+                    SwitchSettingsTab(dx < 0 ? +1 : -1);
+                }
+            }
             touch_was_down = false;
+            touch_swipe_candidate = false;
             return;
         }
         const int tx = static_cast<int>(ts.touches[0].x);
         const int ty = static_cast<int>(ts.touches[0].y);
+        touch_last_x = tx;
+        touch_last_y = ty;
         if (touch_was_down) {
-            return; // Act on the initial contact only.
+            return;
         }
         touch_was_down = true;
+        touch_start_x = tx;
+        touch_start_y = ty;
+        touch_swipe_candidate =
+            tab == Tab::Settings && tx >= kRailW && !settings_armed && !remap_capturing;
 
         if (tx < kRailW) {
             if (const std::optional<Tab> hit = RailHitTest(ty)) {
@@ -1785,28 +1997,49 @@ private:
             if (ty >= kInstallTop && ty < kContentBottom && row < InstallRowCount()) {
                 install_sel = row;
             }
+        } else if (tab == Tab::Settings && ty >= kContentTop && ty < kContentTop + kTabBarH) {
+            if (!(settings_tab == SettingsTab::Controls && remap_capturing)) {
+                SwitchSettingsTab(tx < kContentX + kContentW / 2 ? -1 : +1);
+            }
+        } else if (tab == Tab::Settings && settings_tab == SettingsTab::Controls) {
+            const int row = remap_scroll + (ty - kSettingsTop) / (kRowH + 8);
+            const int rows_bottom = kSettingsTop + kSettingsRows * (kRowH + 8);
+            const int count = SwitchFrontend::NumMappableControls;
+            if (!remap_capturing && ty >= kSettingsTop && ty < rows_bottom && row < count) {
+                if (row != remap_sel) {
+                    remap_sel = row;
+                } else {
+                    remap_capturing = true;
+                }
+            }
         } else if (tab == Tab::Settings) {
+            const auto rows = BuildSettingRows(settings_tab, settings);
             const int row = settings_scroll + (ty - kSettingsTop) / (kRowH + 8);
             const int rows_bottom = kSettingsTop + kSettingsRows * (kRowH + 8);
-            if (ty >= kSettingsTop && ty < rows_bottom && row < kNumSettings) {
+            if (ty >= kSettingsTop && ty < rows_bottom && row < static_cast<int>(rows.size())) {
+                const SettingRowIdx current_item = rows[row].item;
                 if (row != settings_sel) {
                     // First tap on a row just selects it, mirroring joystick navigation — same
                     // "one tap to select, another to modify" rule as the gamepad path below.
                     settings_sel = row;
                     settings_armed = false;
-                } else if (row == kLayoutCycleRow) {
+                } else if (current_item == SettingRowLayoutCycle) {
                     OpenLayoutPicker();
-                } else if (row == kControllerMapRow) {
-                    RemapControls();
                 } else if (settings_armed) {
                     // Already armed: tapping either half adjusts it, same as joystick left/right.
-                    CycleSetting(settings, settings_sel, tx > kContentX + kContentW / 2 ? +1 : -1);
+                    const int dir = tx > kContentX + kContentW / 2 ? +1 : -1;
+                    if (current_item == SettingRowGyroSensitivity) {
+                        AdjustGyroAxis(settings, gyro_edit_y, dir);
+                    } else {
+                        CycleSetting(settings, current_item, dir);
+                    }
                     settings_dirty = true;
-                } else if (IsBooleanSetting(settings_sel)) {
-                    ToggleSetting(settings, settings_sel);
+                } else if (IsBooleanSetting(current_item)) {
+                    ToggleSetting(settings, current_item);
                     settings_dirty = true;
                 } else {
                     settings_armed = true;
+                    gyro_edit_y = false;
                 }
             }
         } else {
@@ -1949,98 +2182,29 @@ private:
         DrawHint(c, hx, hy, "Y", "Cancel");
     }
 
-    void RemapControls() {
-        int sel = 0;
-        int scroll = 0;
-        bool capturing = false;
-        Repeater rep;
-
-        while (appletMainLoop()) {
-            padUpdate(pad_state);
-            const u64 down = padGetButtonsDown(pad_state);
-
-            if (capturing) {
-                for (const auto& [hid_mask, phys] : kPhysicalButtonMap) {
-                    if ((down & hid_mask) != 0) {
-                        SwitchFrontend::SetMapping(static_cast<SwitchFrontend::MappableControl>(sel),
-                                                   phys);
-                        capturing = false;
-                        break;
-                    }
-                }
-            } else {
-                const HidAnalogStickState ls = padGetStickPos(pad_state, 0);
-                constexpr int dz = 12000;
-                const u32 nav = rep.Step((down & HidNpadButton_Up) || ls.y > dz,
-                                         (down & HidNpadButton_Down) || ls.y < -dz, false, false);
-                const int count = SwitchFrontend::NumMappableControls;
-                if (nav & DirUp) {
-                    sel = std::max(0, sel - 1);
-                }
-                if (nav & DirDown) {
-                    sel = std::min(count - 1, sel + 1);
-                }
-                scroll = std::clamp(scroll, std::max(0, sel - kRemapRows + 1),
-                                    std::max(0, std::min(sel, count - kRemapRows)));
-                if (down & HidNpadButton_A) {
-                    capturing = true;
-                }
-                if (down & HidNpadButton_Y) {
-                    const auto control = static_cast<SwitchFrontend::MappableControl>(sel);
-                    SwitchFrontend::SetMapping(control, SwitchFrontend::DefaultMapping(control));
-                }
-                if (down & HidNpadButton_B) {
-                    break;
-                }
-            }
-
-            DrawRemapControls(sel, scroll, capturing);
-            Present();
-        }
-        SwitchFrontend::ApplyButtonMappings();
-        SwitchFrontend::SaveConfig();
-    }
-
-    void DrawRemapControls(int sel, int scroll, bool capturing) {
-        Canvas& c = canvas;
-        c.Clear(kColBg);
-
-        g_font.Draw(c, 40, 44, "Remap controls", 28, kColText);
-        c.FillRect(40, 76, kScreenW - 80, 1, kColRail);
-
+    void DrawControlsTab(Canvas& c, bool content_focus) {
+        const int x = kContentX + 24;
+        const int w = kContentW - 48;
         const int count = SwitchFrontend::NumMappableControls;
-        for (int i = scroll; i < std::min(count, scroll + kRemapRows); ++i) {
+        for (int i = remap_scroll; i < std::min(count, remap_scroll + kSettingsRows); ++i) {
             const auto control = static_cast<SwitchFrontend::MappableControl>(i);
-            const int y = kRemapTop + (i - scroll) * kRemapRowH;
-            if (i == sel) {
-                c.FillRoundRect(32, y, kScreenW - 64, kRemapRowH - 4, 8, kColSurfaceHi);
-                c.FillRoundRect(32, y + 8, 4, kRemapRowH - 20, 2, kColAccent);
+            const int y = kSettingsTop + (i - remap_scroll) * (kRowH + 8);
+            const bool on = i == remap_sel;
+            if (on) {
+                c.FillRoundRect(x, y, w, kRowH, 10, content_focus ? kColSurfaceHi : kColSurface);
+                c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2,
+                                content_focus ? kColAccent : kColBadge);
             }
-            g_font.Draw(c, 52, CenterBaseline(y, kRemapRowH - 4, 20),
-                        SwitchFrontend::ControlName(control), 20, kColText);
+            g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), SwitchFrontend::ControlName(control),
+                        22, kColText);
             const std::string value =
                 SwitchFrontend::PhysicalButtonName(SwitchFrontend::GetMapping(control));
-            const int vw = g_font.Measure(value, 20);
-            g_font.Draw(c, kScreenW - 52 - vw, CenterBaseline(y, kRemapRowH - 4, 20), value, 20,
-                        i == sel ? kColAccent : kColTextDim);
+            const int vw = g_font.Measure(value, 22);
+            g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), value, 22,
+                        on && content_focus ? kColAccent : kColTextDim);
         }
-        DrawListScrollbar(c, kScreenW - 20, kRemapTop, kRemapRows, kRemapRowH, count, scroll);
-
-        c.FillRect(0, kContentBottom, kScreenW, kHintH, kColHintBar);
-        c.FillRect(0, kContentBottom, kScreenW, 1, kColRail);
-        if (capturing) {
-            const std::string prompt =
-                std::string{"Press a button for "} +
-                SwitchFrontend::ControlName(static_cast<SwitchFrontend::MappableControl>(sel)) +
-                "...";
-            g_font.Draw(c, 40, kContentBottom + (kHintH - 20) / 2, prompt, 20, kColAccent);
-        } else {
-            int hx = 40;
-            const int hy = kContentBottom + (kHintH - 26) / 2;
-            hx += DrawHint(c, hx, hy, "A", "Remap") + 22;
-            hx += DrawHint(c, hx, hy, "Y", "Reset") + 22;
-            DrawHint(c, hx, hy, "B", "Back");
-        }
+        DrawListScrollbar(c, kScreenW - 10, kSettingsTop, kSettingsRows, kRowH + 8, count,
+                          remap_scroll);
     }
 
     void DrawPathsPage(Canvas& c) {
@@ -2259,7 +2423,33 @@ private:
         DrawHint(c, hx, hy, "B", "Cancel");
     }
 
-    void DrawPopup(Canvas& c, const std::string& message) {
+    void DrawConfirmClearShaderCache(Canvas& c, const GameEntry& game) {
+        constexpr int w = 620;
+        constexpr int h = 200;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        int ty = y + 20;
+        g_font.Draw(c, x + 24, ty + 22, "Clear shader cache?", 24, kColText);
+        ty += 40;
+        g_font.Draw(c, x + 24, ty + 18, g_font.Truncate(game.title, 18, w - 48), 18, kColTextDim);
+        ty += 30;
+        g_font.Draw(c, x + 24, ty + 18, "Every cached shader/pipeline for this title is", 18,
+                    kColTextDim);
+        ty += 24;
+        g_font.Draw(c, x + 24, ty + 18, "deleted. It'll recompile from scratch next launch.", 18,
+                    kColTextDim);
+
+        int hx = x + 24;
+        const int hy = y + h - 38;
+        hx += DrawHint(c, hx, hy, "A", "Clear") + 22;
+        DrawHint(c, hx, hy, "B", "Cancel");
+    }
+
+    void DrawPopup(Canvas& c, const std::string& message, const char* title = "Can't launch",
+                   u32 title_color = kColError) {
         constexpr int w = 620;
         constexpr int h = 176;
         const int x = (kScreenW - w) / 2;
@@ -2267,7 +2457,7 @@ private:
         c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
         c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
 
-        g_font.Draw(c, x + 24, y + 40, "Can't launch", 24, kColError);
+        g_font.Draw(c, x + 24, y + 40, title, 24, title_color);
         g_font.Draw(c, x + 24, y + 78, g_font.Truncate(message, 18, w - 48), 18, kColText);
 
         const int hx = x + 24;
@@ -2352,92 +2542,180 @@ private:
     }
 
     static constexpr int kRowH = 41;
+    static constexpr int kTabBarH = 44;
     static constexpr int kSettingsFooterH = 100;
-    static constexpr int kSettingsTop = kContentTop + 16;
+    static constexpr int kSettingsTop = kContentTop + kTabBarH + 16;
     static constexpr int kSettingsRows =
         (kContentBottom - kSettingsFooterH - kSettingsTop) / (kRowH + 8);
 
+    void DrawSettingsTabBar(Canvas& c) {
+        constexpr int cur_size = 24;
+        constexpr int side_size = 18;
+        constexpr int gap = 10;
+        constexpr int edge_pad = 24;
+
+        const int idx = static_cast<int>(settings_tab);
+        const char* cur = kSettingsTabs[idx].second;
+        const char* prev = kSettingsTabs[(idx - 1 + kNumSettingsTabs) % kNumSettingsTabs].second;
+        const char* next = kSettingsTabs[(idx + 1) % kNumSettingsTabs].second;
+
+        const int band_top = kContentTop;
+        const int text_baseline = CenterBaseline(band_top, kTabBarH, side_size);
+        const int cur_baseline = CenterBaseline(band_top, kTabBarH, cur_size);
+        constexpr int chip_h = 26;
+        const int chip_top = text_baseline - (chip_h + static_cast<int>(side_size * 0.7f)) / 2;
+
+        const int cur_w = g_font.Measure(cur, cur_size);
+        g_font.Draw(c, kContentX + (kContentW - cur_w) / 2, cur_baseline, cur, cur_size,
+                    kColAccent);
+
+        int lx = kContentX + edge_pad;
+        lx += DrawButtonChip(c, lx, chip_top, "L") + gap;
+        g_font.Draw(c, lx, text_baseline, prev, side_size, kColTextDim);
+
+        const int r_chip_w = std::max(chip_h, g_font.Measure("R", 18) + 16);
+        const int next_w = g_font.Measure(next, side_size);
+        const int rx = kContentX + kContentW - edge_pad - r_chip_w;
+        DrawButtonChip(c, rx, chip_top, "R");
+        g_font.Draw(c, rx - gap - next_w, text_baseline, next, side_size, kColTextDim);
+
+        c.FillRect(kContentX, band_top + kTabBarH, kContentW, 1, kColRail);
+    }
+
     void DrawSettingsPage(Canvas& c) {
         DrawHeader(c, "");
+        DrawSettingsTabBar(c);
         const bool content_focus = focus == Focus::Content;
-        const auto rows = BuildSettingRows(settings);
         const int x = kContentX + 24;
         const int w = kContentW - 48;
-        const int count = static_cast<int>(rows.size());
-        for (int i = settings_scroll; i < std::min(count, settings_scroll + kSettingsRows); ++i) {
-            const int y = kSettingsTop + (i - settings_scroll) * (kRowH + 8);
-            const bool on = i == settings_sel;
-            const bool armed_here = on && settings_armed && content_focus;
-            if (armed_here) {
-                // Highlight the whole row, not just the value, while armed — makes it
-                // unambiguous that joystick left/right is now live for this row.
-                c.FillRoundRect(x, y, w, kRowH, 10, kColAccent);
-                c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2, kColSurface);
-            } else if (on) {
-                c.FillRoundRect(x, y, w, kRowH, 10, content_focus ? kColSurfaceHi : kColSurface);
-                c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2,
-                                content_focus ? kColAccent : kColBadge);
-            }
-            g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), rows[i].label, 22,
-                        armed_here ? kColSurface : kColText);
-            const int vw = g_font.Measure(rows[i].value, 22);
-            g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), rows[i].value, 22,
-                        armed_here             ? kColSurface
-                        : on && content_focus  ? kColAccent
-                                                : kColTextDim);
-        }
-        DrawListScrollbar(c, kScreenW - 10, kSettingsTop, kSettingsRows, kRowH + 8, count,
-                          settings_scroll);
-
         const int footer_y = kSettingsTop + kSettingsRows * (kRowH + 8) + 8;
-        const std::string backend = std::string{"Graphics backend: "} + BackendName(settings.graphics_api);
-        g_font.Draw(c, x + 20, footer_y + 16, backend, 18, kColTextDim);
-        g_font.Draw(c, x + 20, footer_y + 42, "Changes apply the next time you launch a game.", 18,
-                    kColTextDim);
-        // Flavor text explaining the current select-then-adjust interaction, since there's
-        // nothing else on screen to tell a first-time player the stick doesn't just work.
-        // Button names render as the same rounded chips the hint bar uses, via DrawFlavorSentence.
-        if (settings_armed) {
-            DrawFlavorSentence(c, x + 20, footer_y + 66, kColAccent,
-                               {{.text = "Adjusting this value — use "},
-                                {.chip = "<>"},
-                                {.text = " to change it, "},
-                                {.chip = "A"},
-                                {.text = " or "},
-                                {.chip = "B"},
-                                {.text = " when done."}});
-        } else if (settings_sel != kLayoutCycleRow && settings_sel != kControllerMapRow) {
-            if (IsBooleanSetting(settings_sel)) {
-                DrawFlavorSentence(c, x + 20, footer_y + 66, kColTextDim,
-                                   {{.text = "Press "},
-                                    {.chip = "A"},
-                                    {.text = " to toggle. The stick only moves the selection."}});
+
+        if (settings_tab == SettingsTab::Controls) {
+            DrawControlsTab(c, content_focus);
+            if (remap_capturing) {
+                const auto control = static_cast<SwitchFrontend::MappableControl>(remap_sel);
+                const std::string prompt =
+                    std::string{"Press a button for "} + SwitchFrontend::ControlName(control) +
+                    "...";
+                g_font.Draw(c, x + 20, footer_y + 16, prompt, 18, kColAccent);
             } else {
-                DrawFlavorSentence(c, x + 20, footer_y + 66, kColTextDim,
+                DrawFlavorSentence(c, x + 20, footer_y + 16, kColTextDim,
                                    {{.text = "Press "},
                                     {.chip = "A"},
-                                    {.text = " to select this value, then use "},
-                                    {.chip = "<>"},
-                                    {.text = " to change it."}});
+                                    {.text = " to remap, "},
+                                    {.chip = "Y"},
+                                    {.text = " to reset to default."}});
+            }
+        } else {
+            auto rows = BuildSettingRows(settings_tab, settings);
+            const int count = static_cast<int>(rows.size());
+            const SettingRowIdx current_item = rows[settings_sel].item;
+            if (settings_armed && current_item == SettingRowGyroSensitivity) {
+                rows[settings_sel].value = GyroSensitivityArmedText(settings, gyro_edit_y);
+            }
+            for (int i = settings_scroll; i < std::min(count, settings_scroll + kSettingsRows);
+                 ++i) {
+                const int y = kSettingsTop + (i - settings_scroll) * (kRowH + 8);
+                const bool on = i == settings_sel;
+                const bool armed_here = on && settings_armed && content_focus;
+                if (armed_here) {
+                    // Highlight the whole row, not just the value, while armed — makes it
+                    // unambiguous that joystick left/right is now live for this row.
+                    c.FillRoundRect(x, y, w, kRowH, 10, kColAccent);
+                    c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2, kColSurface);
+                } else if (on) {
+                    c.FillRoundRect(x, y, w, kRowH, 10,
+                                    content_focus ? kColSurfaceHi : kColSurface);
+                    c.FillRoundRect(x, y + 8, 4, kRowH - 16, 2,
+                                    content_focus ? kColAccent : kColBadge);
+                }
+                g_font.Draw(c, x + 20, CenterBaseline(y, kRowH, 22), rows[i].label, 22,
+                            armed_here ? kColSurface : kColText);
+                const int vw = g_font.Measure(rows[i].value, 22);
+                g_font.Draw(c, x + w - 24 - vw, CenterBaseline(y, kRowH, 22), rows[i].value, 22,
+                            armed_here             ? kColSurface
+                            : on && content_focus  ? kColAccent
+                                                    : kColTextDim);
+            }
+            DrawListScrollbar(c, kScreenW - 10, kSettingsTop, kSettingsRows, kRowH + 8, count,
+                              settings_scroll);
+
+            g_font.Draw(c, x + 20, footer_y + 16, rows[settings_sel].description, 18, kColTextDim);
+            // Flavor text explaining the current select-then-adjust interaction, since there's
+            // nothing else on screen to tell a first-time player the stick doesn't just work.
+            // Button names render as the same rounded chips the hint bar uses, via
+            // DrawFlavorSentence.
+            if (settings_armed) {
+                if (current_item == SettingRowGyroSensitivity) {
+                    DrawFlavorSentence(c, x + 20, footer_y + 42, kColAccent,
+                                       {{.text = "Adjusting "},
+                                        {.chip = gyro_edit_y ? "Y" : "X"},
+                                        {.text = " — "},
+                                        {.chip = "v"},
+                                        {.text = " to swap axis, "},
+                                        {.chip = "<>"},
+                                        {.text = " changes it, "},
+                                        {.chip = "A"},
+                                        {.text = " or "},
+                                        {.chip = "B"},
+                                        {.text = " when done."}});
+                } else {
+                    DrawFlavorSentence(c, x + 20, footer_y + 42, kColAccent,
+                                       {{.text = "Adjusting this value — use "},
+                                        {.chip = "<>"},
+                                        {.text = " to change it, "},
+                                        {.chip = "A"},
+                                        {.text = " or "},
+                                        {.chip = "B"},
+                                        {.text = " when done."}});
+                }
+            } else if (current_item != SettingRowLayoutCycle) {
+                if (IsBooleanSetting(current_item)) {
+                    DrawFlavorSentence(
+                        c, x + 20, footer_y + 42, kColTextDim,
+                        {{.text = "Press "},
+                         {.chip = "A"},
+                         {.text = " to toggle. The stick only moves the selection."}});
+                } else {
+                    DrawFlavorSentence(c, x + 20, footer_y + 42, kColTextDim,
+                                       {{.text = "Press "},
+                                        {.chip = "A"},
+                                        {.text = " to select this value, then use "},
+                                        {.chip = "<>"},
+                                        {.text = " to change it."}});
+                }
             }
         }
 
         if (focus == Focus::Rail) {
             DrawRailHints(c);
+        } else if (settings_tab == SettingsTab::Controls) {
+            int hx = kContentX + 24;
+            const int hy = kContentBottom + (kHintH - 26) / 2;
+            if (!remap_capturing) {
+                hx += DrawHint(c, hx, hy, "A", "Remap") + 22;
+                hx += DrawHint(c, hx, hy, "Y", "Reset") + 22;
+                hx += DrawHint(c, hx, hy, "L/R", "Tab") + 22;
+                hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
+            }
+            DrawHint(c, hx, hy, "+ -", "Exit");
         } else {
+            const auto rows = BuildSettingRows(settings_tab, settings);
+            const SettingRowIdx current_item = rows[settings_sel].item;
             int hx = kContentX + 24;
             const int hy = kContentBottom + (kHintH - 26) / 2;
             if (settings_armed) {
                 hx += DrawHint(c, hx, hy, "<>", "Adjust") + 22;
                 hx += DrawHint(c, hx, hy, "A / B", "Done") + 22;
             } else {
-                if (settings_sel == kLayoutCycleRow || settings_sel == kControllerMapRow) {
+                if (current_item == SettingRowLayoutCycle) {
                     hx += DrawHint(c, hx, hy, "A", "Configure") + 22;
-                } else if (IsBooleanSetting(settings_sel)) {
+                } else if (IsBooleanSetting(current_item)) {
                     hx += DrawHint(c, hx, hy, "A", "Toggle") + 22;
                 } else {
                     hx += DrawHint(c, hx, hy, "A", "Select") + 22;
                 }
+                hx += DrawHint(c, hx, hy, "L/R", "Tab") + 22;
                 hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             }
             DrawHint(c, hx, hy, "+ -", "Exit");
@@ -2541,6 +2819,11 @@ private:
 
     Canvas canvas;
     bool touch_was_down = false;
+    int touch_start_x = 0;
+    int touch_start_y = 0;
+    int touch_last_x = 0;
+    int touch_last_y = 0;
+    bool touch_swipe_candidate = false;
     // Set by a second touch on the focused tile so Run() can escape the loop.
     std::optional<std::string> pending_launch;
 };

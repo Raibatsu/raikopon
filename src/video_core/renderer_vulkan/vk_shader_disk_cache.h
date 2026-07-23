@@ -294,6 +294,8 @@ private:
     private:
         bool ReadFromFileCached(void* dst, size_t absolute_pos, size_t size);
 
+        size_t RecoverFromTornWrite();
+
         CacheOpMode curr_mode = CacheOpMode::NONE;
         std::string filepath;
         FileUtil::IOFile file{};

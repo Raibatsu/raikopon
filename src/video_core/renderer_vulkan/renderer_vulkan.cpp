@@ -1839,8 +1839,15 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
         max_row_w = std::max(max_row_w, rw);
     }
     const int n = static_cast<int>(state.items.size());
-    const float inner_w = std::max({max_row_w, OverlayBuilder::Measure(state.title, title_scale),
-                                    OverlayBuilder::Measure(state.hint, scale)});
+    const bool has_tabs = !state.prev_tab.empty() || !state.next_tab.empty();
+    const float tab_gap = std::round(em * 0.9f);
+    const float prev_tab_w = OverlayBuilder::Measure(state.prev_tab, scale);
+    const float next_tab_w = OverlayBuilder::Measure(state.next_tab, scale);
+    const float title_w = OverlayBuilder::Measure(state.title, title_scale);
+    const float tab_bar_w =
+        has_tabs ? prev_tab_w + tab_gap + title_w + tab_gap + next_tab_w : title_w;
+    const float inner_w =
+        std::max({max_row_w, tab_bar_w, OverlayBuilder::Measure(state.hint, scale)});
     const float panel_w = std::clamp(inner_w + 2.0f * pad, 0.35f * w, 0.92f * w);
     const float panel_h =
         pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap + footer_h + pad;
@@ -1858,16 +1865,16 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
     };
 
     constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.55f};
-    constexpr std::array<float, 4> c_panel = {0.10f, 0.11f, 0.14f, 0.96f};
-    constexpr std::array<float, 4> c_accent = {0.30f, 0.34f, 0.45f, 0.9f};
-    constexpr std::array<float, 4> c_highlight = {0.20f, 0.45f, 0.85f, 0.9f};
-    // Warm accent for the armed row — joystick left/right is "live" for it, unlike plain
-    // selection (matches the Settings screen's armed-row treatment).
-    constexpr std::array<float, 4> c_armed = {0.98f, 0.67f, 0.29f, 0.9f};
-    constexpr std::array<float, 4> c_title = {1.0f, 1.0f, 1.0f, 1.0f};
-    constexpr std::array<float, 4> c_row = {0.82f, 0.85f, 0.92f, 1.0f};
-    constexpr std::array<float, 4> c_sel = {1.0f, 1.0f, 1.0f, 1.0f};
-    constexpr std::array<float, 4> c_footer = {0.60f, 0.63f, 0.72f, 1.0f};
+    constexpr std::array<float, 4> c_panel = {0x24 / 255.0f, 0x26 / 255.0f, 0x2B / 255.0f, 0.97f};
+    constexpr std::array<float, 4> c_divider = {0x3A / 255.0f, 0x3C / 255.0f, 0x42 / 255.0f, 1.0f};
+    constexpr std::array<float, 4> c_highlight = {0x30 / 255.0f, 0x33 / 255.0f, 0x39 / 255.0f,
+                                                  1.0f};
+    constexpr std::array<float, 4> c_accent = {0xFA / 255.0f, 0xAA / 255.0f, 0x49 / 255.0f, 1.0f};
+    constexpr std::array<float, 4> c_on_accent = {0x17 / 255.0f, 0x18 / 255.0f, 0x1B / 255.0f,
+                                                  1.0f};
+    constexpr std::array<float, 4> c_text = {0xF1 / 255.0f, 0xF2 / 255.0f, 0xF4 / 255.0f, 1.0f};
+    constexpr std::array<float, 4> c_text_dim = {0x9B / 255.0f, 0xA0 / 255.0f, 0xA6 / 255.0f,
+                                                  1.0f};
 
     // Dim the running game.
     {
@@ -1883,8 +1890,7 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
 
     // Walk down the panel building each section's vertical extents.
     float pen_y = panel_y0 + pad;
-    const float title_x =
-        std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.title, title_scale)) / 2.0f);
+    const float title_x = std::round(panel_x0 + (panel_w - title_w) / 2.0f);
     const float title_y = pen_y;
     pen_y += title_line_h + sep_gap * 0.5f;
     const float underline_y = std::round(pen_y);
@@ -1903,7 +1909,7 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
         const float th = std::max(1.0f, std::round(em / 12.0f));
         builder.AddRect(lx0, underline_y, lx1, underline_y + th);
         builder.AddRect(lx0, footer_line_y, lx1, footer_line_y + th);
-        emit(c_accent, s);
+        emit(c_divider, s);
     }
 
     const bool has_selection = n > 0 && state.selected >= 0 && state.selected < n;
@@ -1915,41 +1921,68 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
         const float inset = std::round(row_h * 0.08f);
         builder.AddRect(panel_x0 + pad * 0.5f, top + inset, panel_x1 - pad * 0.5f,
                         top + row_h - inset);
-        emit(state.armed ? c_armed : c_highlight, s);
+        emit(state.armed ? c_accent : c_highlight, s);
     }
 
-    // Title.
+    if (has_tabs) {
+        const float side_y = std::round(title_y + (title_line_h - line_h) / 2.0f);
+        const u32 s = builder.VertexCount();
+        builder.AddText(panel_x0 + pad, side_y, state.prev_tab, scale);
+        builder.AddText(panel_x1 - pad - next_tab_w, side_y, state.next_tab, scale);
+        emit(c_text_dim, s);
+    }
     {
         const u32 s = builder.VertexCount();
         builder.AddText(title_x, title_y, state.title, title_scale);
-        emit(c_title, s);
+        emit(c_accent, s);
     }
 
-    const auto add_row = [&](int i) {
+    const auto add_label = [&](int i) {
         const auto& item = state.items[i];
         const float top = rows_top + static_cast<float>(i) * row_h;
         const float ty = std::round(top + (row_h - line_h) / 2.0f);
         builder.AddText(panel_x0 + pad, ty, item.label, scale);
-        if (!item.value.empty()) {
-            const float vx = panel_x1 - pad - OverlayBuilder::Measure(item.value, scale);
-            builder.AddText(vx, ty, item.value, scale);
+    };
+    const auto add_value = [&](int i) {
+        const auto& item = state.items[i];
+        if (item.value.empty()) {
+            return;
         }
+        const float top = rows_top + static_cast<float>(i) * row_h;
+        const float ty = std::round(top + (row_h - line_h) / 2.0f);
+        const float vx = panel_x1 - pad - OverlayBuilder::Measure(item.value, scale);
+        builder.AddText(vx, ty, item.value, scale);
     };
 
-    // Draw non-selected rows, then the selected row brighter on top of its highlight.
     {
         const u32 s = builder.VertexCount();
         for (int i = 0; i < n; ++i) {
             if (i != state.selected) {
-                add_row(i);
+                add_label(i);
             }
         }
-        emit(c_row, s);
+        emit(c_text, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        for (int i = 0; i < n; ++i) {
+            if (i != state.selected) {
+                add_value(i);
+            }
+        }
+        emit(c_text_dim, s);
     }
     if (has_selection) {
-        const u32 s = builder.VertexCount();
-        add_row(state.selected);
-        emit(c_sel, s);
+        {
+            const u32 s = builder.VertexCount();
+            add_label(state.selected);
+            emit(state.armed ? c_on_accent : c_text, s);
+        }
+        {
+            const u32 s = builder.VertexCount();
+            add_value(state.selected);
+            emit(state.armed ? c_on_accent : c_accent, s);
+        }
     }
 
     // Footer hint.
@@ -1958,7 +1991,7 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
         const float fx =
             std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.hint, scale)) / 2.0f);
         builder.AddText(fx, footer_y, state.hint, scale);
-        emit(c_footer, s);
+        emit(c_text_dim, s);
     }
 
     if (batches.empty()) {

@@ -129,6 +129,22 @@ bool TryLoad(const std::string& path, const std::string& fallback_title, GameEnt
     return true;
 }
 
+void DeleteMatchingFiles(const std::string& directory, const std::string& needle, int& count) {
+    FileUtil::ForeachDirectoryEntry(
+        nullptr, directory,
+        [&needle, &count](u64*, const std::string& dir, const std::string& virtual_name) {
+            const std::string path = dir + virtual_name;
+            if (FileUtil::IsDirectory(path)) {
+                DeleteMatchingFiles(path + '/', needle, count);
+                return true;
+            }
+            if (virtual_name.find(needle) != std::string::npos && FileUtil::Delete(path)) {
+                ++count;
+            }
+            return true;
+        });
+}
+
 void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, int depth,
                    bool recursive) {
     if (depth > 4) {
@@ -416,6 +432,14 @@ const char* InstallResultText(InstallResult result) {
     }
 }
 
+int ClearShaderCache(std::uint64_t program_id) {
+    const std::string needle = fmt::format("{:016X}", program_id);
+    const std::string shader_dir = FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir);
+    int count = 0;
+    DeleteMatchingFiles(shader_dir, needle, count);
+    return count;
+}
+
 std::vector<GameEntry> ScanGames() {
     const SwitchPaths& paths = GetPaths();
     FileUtil::CreateFullPath(paths.roms_dir);
@@ -472,6 +496,9 @@ MenuSettings GetMenuSettings() {
         .use_disk_shader_cache = v.use_disk_shader_cache.GetValue(),
         .use_hw_shader = v.use_hw_shader.GetValue(),
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetValue(),
+        .skip_slow_draw = v.skip_slow_draw.GetValue(),
+        .skip_texture_copy = v.skip_texture_copy.GetValue(),
+        .skip_cpu_write = v.skip_cpu_write.GetValue(),
         .disable_right_eye_render = v.disable_right_eye_render.GetValue(),
         .texture_filter = static_cast<int>(v.texture_filter.GetValue()),
         .use_integer_scaling = v.use_integer_scaling.GetValue(),
@@ -501,6 +528,9 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_disk_shader_cache = s.use_disk_shader_cache;
     v.use_hw_shader = s.use_hw_shader;
     v.disable_pipeline_fast_path = s.disable_pipeline_fast_path;
+    v.skip_slow_draw = s.skip_slow_draw;
+    v.skip_texture_copy = s.skip_texture_copy;
+    v.skip_cpu_write = s.skip_cpu_write;
     v.disable_right_eye_render = s.disable_right_eye_render;
     v.texture_filter =
         static_cast<Settings::TextureFilter>(std::clamp(s.texture_filter, 0, 5));

@@ -86,6 +86,9 @@ struct MenuSettings {
     bool use_disk_shader_cache{};
     bool use_hw_shader{};
     bool disable_pipeline_fast_path{};
+    bool skip_slow_draw{};
+    bool skip_texture_copy{};
+    bool skip_cpu_write{};
     bool disable_right_eye_render{}; // Skip rendering the 3D right-eye view entirely.
     int texture_filter{};         // Upscaling filter, 0 = None .. 5 = MMPX.
     bool use_integer_scaling{};   // Scale the screen by whole-number factors only.
@@ -133,6 +136,8 @@ InstallResult InstallCia(const std::string& path,
 
 // A short reason for a failed installation.
 const char* InstallResultText(InstallResult result);
+
+int ClearShaderCache(std::uint64_t program_id);
 
 // The subfolders of `directory`, sorted by name.
 std::vector<DirEntry> ListSubdirectories(const std::string& directory);

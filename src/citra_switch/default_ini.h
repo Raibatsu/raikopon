@@ -32,6 +32,9 @@ use_disk_shader_cache =
 # Use hardware-accelerated PICA shaders instead of the software shader interpreter (1, default).
 use_hw_shader =
 disable_pipeline_fast_path =
+skip_slow_draw = false
+skip_texture_copy = false
+skip_cpu_write = false
 # Texture upscaling filter: 0: None (default), 1: Anime4K, 2: Bicubic, 3: ScaleForce, 4: xBRZ, 5: MMPX.
 texture_filter =
 # Scale the screen by whole-number factors only, avoiding uneven pixel stretching (0, default).
