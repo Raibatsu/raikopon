@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "citra_switch/config.h"
+#include "citra_switch/game_settings.h"
 #include "citra_switch/input.h"
 #include "citra_switch/keyboard_prompt.h"
 #include "citra_switch/overlay_menu.h"
@@ -439,25 +440,33 @@ std::string Value(const Row& row) {
 
 // Left/right on an armed value row. `dir` is -1 or +1. Only reachable for rows IsBooleanItem
 // returns false for — booleans flip directly on an A press instead (see Activate).
+// Every case below (bar CpuClock, which isn't reachable from the quick menu right now — see
+// Item::CpuClock's other cases) edits something per-game: MarkGameOverride snapshots the value
+// just written so it's remembered for this title instead of leaking into the global config.
 void Adjust(const Row& row, int dir) {
     switch (row.item) {
     case Item::ScreenLayout:
         StepScreenLayout(dir);
+        MarkGameOverride(OverrideField::ScreenLayout);
         break;
     case Item::GyroSensitivityX:
         SetGyroSensitivity(GetGyroSensitivityX() + dir * kGyroStep, GetGyroSensitivityY());
+        MarkGameOverride(OverrideField::GyroSensitivity);
         break;
     case Item::GyroSensitivityY:
         SetGyroSensitivity(GetGyroSensitivityX(), GetGyroSensitivityY() + dir * kGyroStep);
+        MarkGameOverride(OverrideField::GyroSensitivity);
         break;
     case Item::PointerSource:
         SetPointerSource(static_cast<PointerSource>(std::clamp(
             static_cast<int>(GetPointerSource()) + dir, 0, NumPointerSources - 1)));
+        MarkGameOverride(OverrideField::PointerSource);
         break;
     case Item::TextureFilter: {
         const int current = static_cast<int>(Settings::values.texture_filter.GetValue());
         Settings::values.texture_filter =
             static_cast<Settings::TextureFilter>(std::clamp(current + dir, 0, 5));
+        MarkGameOverride(OverrideField::TextureFilter);
         break;
     }
     case Item::CpuClock:
@@ -465,6 +474,7 @@ void Adjust(const Row& row, int dir) {
         break;
     case Item::MovieThrottleClock:
         SetMovieThrottleClockPercentage(GetMovieThrottleClockPercentage() + dir * kMovieThrottleStep);
+        MarkGameOverride(OverrideField::MovieThrottleClock);
         break;
     default:
         break;
@@ -480,13 +490,16 @@ void Activate(const Row& row) {
         break;
     case Item::FpsCounter:
         Settings::values.show_fps = !Settings::values.show_fps.GetValue();
+        MarkGameOverride(OverrideField::ShowFps);
         break;
     case Item::CustomTextures:
         Settings::values.custom_textures = !Settings::values.custom_textures.GetValue();
+        MarkGameOverride(OverrideField::CustomTextures);
         break;
     case Item::RightEyeRender:
         Settings::values.disable_right_eye_render =
             !Settings::values.disable_right_eye_render.GetValue();
+        MarkGameOverride(OverrideField::RightEyeRender);
         break;
     case Item::AddCheat:
         EditCheatFlow(-1);
@@ -565,10 +578,12 @@ void CloseQuickMenu() {
     VideoCore::OverlayMenuState state;
     state.visible = false;
     VideoCore::SetOverlayMenuState(state);
-    // Persist the settings the player changed.
+    // Persist the settings the player changed. Everything the quick menu can edit is per-game
+    // (see game_settings.h) rather than global, so this flushes the per-game override file
+    // instead of the global config.ini.
     if (was_open) {
         PersistCheats();
-        SaveConfig();
+        FlushGameOverrides();
         ResumeEmulation();
     }
 }

@@ -11,6 +11,8 @@ add_executable(citra_switch
     emu_window.cpp
     emu_window.h
     emulation.cpp
+    game_settings.cpp
+    game_settings.h
     harfbuzz_stubs.cpp
     horizon_sys_stubs.cpp
     input.cpp

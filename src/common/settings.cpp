@@ -226,6 +226,7 @@ void RestoreGlobalState(bool is_powered_on) {
     values.resolution_factor.SetGlobal(true);
     values.use_integer_scaling.SetGlobal(true);
     values.frame_limit.SetGlobal(true);
+    values.show_fps.SetGlobal(true);
     values.texture_filter.SetGlobal(true);
     values.texture_sampling.SetGlobal(true);
     values.delay_game_render_thread_us.SetGlobal(true);

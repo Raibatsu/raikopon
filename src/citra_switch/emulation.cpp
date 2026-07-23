@@ -17,6 +17,7 @@
 #include "citra_switch/applets/swkbd.h"
 #include "citra_switch/config.h"
 #include "citra_switch/emu_window.h"
+#include "citra_switch/game_settings.h"
 #include "common/file_util.h"
 #include "common/horizon_thread.h"
 #include "common/logging/log.h"
@@ -226,6 +227,9 @@ void EmuThread(std::string path) {
             s_load_ok = true;
 
             system.GetAppLoader().ReadProgramId(program_id);
+            // Applies any per-game overrides for the quick-menu-editable settings before
+            // anything below reads them, so the game boots with the right values from frame 1.
+            BeginGameOverrides(program_id);
             system.GPU().ApplyPerProgramSettings(program_id);
 
             // Load any cached disk shaders
@@ -514,6 +518,8 @@ void StopRom() {
     if (system.IsPoweredOn()) {
         system.Shutdown();
     }
+    // Reverts any per-game overrides BeginGameOverrides applied, back to the global config.
+    EndGameOverrides();
     s_paused = false;
     if (s_auto_muted) {
         Settings::values.audio_muted = false;
