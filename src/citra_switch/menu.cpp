@@ -605,6 +605,7 @@ enum SettingRowIdx {
     SettingRowSkipSlowDraw,
     SettingRowSkipTextureCopy,
     SettingRowSkipCpuWrite,
+    SettingRowEnableCompileBoost,
 };
 
 struct SettingRow {
@@ -649,6 +650,10 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
              "Drastically reduces stuttering in-game by keeping compiled shaders on disk."},
             {SettingRowHwShader, "Hardware Shader", s.use_hw_shader ? "On" : "Off",
              "Emulate shaders more efficiently on GPU."},
+            {SettingRowEnableCompileBoost, "Enable Compile Boost",
+             s.enable_compile_boost ? "On" : "Off",
+             "Dramatically speeds up shader compiling speed but reduces GPU performance during "
+             "that duration."},
             {SettingRowDisableRightEye, "Disable Right Eye Render",
              s.disable_right_eye_render ? "On" : "Off",
              "Disable this for huge speed boost. Only enable this if you have issues rendering "
@@ -749,6 +754,7 @@ bool IsBooleanSetting(SettingRowIdx item) {
     case SettingRowSkipSlowDraw:
     case SettingRowSkipTextureCopy:
     case SettingRowSkipCpuWrite:
+    case SettingRowEnableCompileBoost:
         return true;
     default:
         return false;
@@ -804,6 +810,9 @@ void ToggleSetting(MenuSettings& s, SettingRowIdx item) {
         break;
     case SettingRowSkipCpuWrite:
         s.skip_cpu_write = !s.skip_cpu_write;
+        break;
+    case SettingRowEnableCompileBoost:
+        s.enable_compile_boost = !s.enable_compile_boost;
         break;
     default:
         break;

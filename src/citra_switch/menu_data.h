@@ -89,6 +89,7 @@ struct MenuSettings {
     bool skip_slow_draw{};
     bool skip_texture_copy{};
     bool skip_cpu_write{};
+    bool enable_compile_boost{}; // CPU boost mode during in-game shader/pipeline compiles.
     bool disable_right_eye_render{}; // Skip rendering the 3D right-eye view entirely.
     int texture_filter{};         // Upscaling filter, 0 = None .. 5 = MMPX.
     bool use_integer_scaling{};   // Scale the screen by whole-number factors only.
