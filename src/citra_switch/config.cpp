@@ -141,6 +141,7 @@ private:
         ReadSetting("Renderer", Settings::values.skip_slow_draw);
         ReadSetting("Renderer", Settings::values.skip_texture_copy);
         ReadSetting("Renderer", Settings::values.skip_cpu_write);
+        ReadSetting("Renderer", Settings::values.enable_compile_boost);
         ReadSetting("Renderer", Settings::values.show_fps);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
         ReadSetting("Renderer", Settings::values.texture_filter);
@@ -225,6 +226,8 @@ private:
         ss << "skip_texture_copy = " << (v.skip_texture_copy.GetValue() ? "true" : "false")
            << '\n';
         ss << "skip_cpu_write = " << (v.skip_cpu_write.GetValue() ? "true" : "false") << '\n';
+        ss << "enable_compile_boost = " << (v.enable_compile_boost.GetValue() ? "true" : "false")
+           << '\n';
         ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << '\n';
         ss << "use_shader_jit = " << (v.use_shader_jit.GetValue() ? "true" : "false") << '\n';
         ss << "texture_filter = " << static_cast<int>(v.texture_filter.GetValue()) << '\n';

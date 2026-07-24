@@ -41,6 +41,7 @@ enum class Item {
     GyroSensitivityY,
     CpuClock,
     MovieThrottleClock,
+    EnableCompileBoost,
     AddCheat,
     Cheat,
     CheatsEmpty,
@@ -316,6 +317,7 @@ void RebuildRows() {
         // CPU Clock hidden for now — see Item::CpuClock's other cases (Label/Value/Adjust)
         // for the still-working plumbing if this comes back.
         s_rows.push_back({Item::MovieThrottleClock});
+        s_rows.push_back({Item::EnableCompileBoost});
         s_rows.push_back({Item::Resume});
         s_rows.push_back({Item::ExitGame});
         break;
@@ -362,6 +364,7 @@ bool IsBooleanItem(Item item) {
     case Item::CustomTextures:
     case Item::RightEyeRender:
     case Item::PointerMode:
+    case Item::EnableCompileBoost:
     case Item::Cheat:
         return true;
     default:
@@ -393,6 +396,8 @@ std::string Label(const Row& row) {
         return "CPU Clock";
     case Item::MovieThrottleClock:
         return "Movie CPU Throttle";
+    case Item::EnableCompileBoost:
+        return "Compile Boost";
     case Item::AddCheat:
         return "+ Add Cheat";
     case Item::Cheat:
@@ -431,6 +436,8 @@ std::string Value(const Row& row) {
         return std::to_string(Settings::values.cpu_clock_percentage.GetValue()) + "%";
     case Item::MovieThrottleClock:
         return std::to_string(GetMovieThrottleClockPercentage()) + "%";
+    case Item::EnableCompileBoost:
+        return Settings::values.enable_compile_boost.GetValue() ? "On" : "Off";
     case Item::Cheat:
         return CheatEnabled(row.cheat_index) ? "On" : "Off";
     default:
@@ -500,6 +507,9 @@ void Activate(const Row& row) {
         Settings::values.disable_right_eye_render =
             !Settings::values.disable_right_eye_render.GetValue();
         MarkGameOverride(OverrideField::RightEyeRender);
+        break;
+    case Item::EnableCompileBoost:
+        Settings::values.enable_compile_boost = !Settings::values.enable_compile_boost.GetValue();
         break;
     case Item::AddCheat:
         EditCheatFlow(-1);

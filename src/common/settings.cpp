@@ -101,6 +101,7 @@ void LogSettings() {
     log_setting("Renderer_SkipSlowDraw", values.skip_slow_draw.GetValue());
     log_setting("Renderer_SkipTextureCopy", values.skip_texture_copy.GetValue());
     log_setting("Renderer_SkipCPUWrite", values.skip_cpu_write.GetValue());
+    log_setting("Renderer_EnableCompileBoost", values.enable_compile_boost.GetValue());
     log_setting("Renderer_Debug", values.renderer_debug.GetValue());
     log_setting("Renderer_UseHwShader", values.use_hw_shader.GetValue());
     log_setting("Renderer_ShadersAccurateMul", values.shaders_accurate_mul.GetValue());

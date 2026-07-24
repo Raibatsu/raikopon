@@ -69,7 +69,7 @@ set(RAIKOPON_NRO_NAME "raikopon")
 nx_generate_nacp(OUTPUT ${RAIKOPON_NRO_NAME}.nacp
     NAME "Raikopon"
     AUTHOR "Azahar Team \& PalindromicBreadLoaf \& Raibatsu"
-    VERSION "1.3.0"
+    VERSION "1.4.0"
 )
 
 # Compile deko3d shaders with uam and pack them into the romfs.

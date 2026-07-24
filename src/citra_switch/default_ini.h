@@ -35,6 +35,11 @@ disable_pipeline_fast_path =
 skip_slow_draw = false
 skip_texture_copy = false
 skip_cpu_write = false
+# Raise the CPU clock (at the cost of dropping the GPU clock) while shaders/pipelines are
+# compiling in-game, dramatically speeding up compile time (1, default). Boot-time loading screen
+# compiles always use this regardless of the setting, since nothing is being rendered to lose GPU
+# performance from yet.
+enable_compile_boost = true
 # Texture upscaling filter: 0: None (default), 1: Anime4K, 2: Bicubic, 3: ScaleForce, 4: xBRZ, 5: MMPX.
 texture_filter =
 # Scale the screen by whole-number factors only, avoiding uneven pixel stretching (0, default).

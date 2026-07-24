@@ -499,6 +499,7 @@ MenuSettings GetMenuSettings() {
         .skip_slow_draw = v.skip_slow_draw.GetValue(),
         .skip_texture_copy = v.skip_texture_copy.GetValue(),
         .skip_cpu_write = v.skip_cpu_write.GetValue(),
+        .enable_compile_boost = v.enable_compile_boost.GetValue(),
         .disable_right_eye_render = v.disable_right_eye_render.GetValue(),
         .texture_filter = static_cast<int>(v.texture_filter.GetValue()),
         .use_integer_scaling = v.use_integer_scaling.GetValue(),
@@ -531,6 +532,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.skip_slow_draw = s.skip_slow_draw;
     v.skip_texture_copy = s.skip_texture_copy;
     v.skip_cpu_write = s.skip_cpu_write;
+    v.enable_compile_boost = s.enable_compile_boost;
     v.disable_right_eye_render = s.disable_right_eye_render;
     v.texture_filter =
         static_cast<Settings::TextureFilter>(std::clamp(s.texture_filter, 0, 5));
