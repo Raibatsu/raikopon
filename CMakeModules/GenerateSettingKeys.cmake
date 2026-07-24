@@ -39,6 +39,7 @@ foreach(KEY IN ITEMS
     "skip_slow_draw"
     "skip_texture_copy"
     "skip_cpu_write"
+    "enable_compile_boost"
     "async_shader_compilation"
     "async_presentation"
     "use_hw_shader"

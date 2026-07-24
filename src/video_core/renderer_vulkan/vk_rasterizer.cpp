@@ -170,6 +170,7 @@ void RasterizerVulkan::LoadDefaultDiskResources(
 
     pipeline_cache.SetProgramID(program_id);
     pipeline_cache.SetAccurateMul(accurate_mul);
+    pipeline_cache.BeginBootLoading();
     pipeline_cache.LoadCache(stop_loading, wrapped_callback);
 
     while (!stop_loading) {
@@ -181,6 +182,7 @@ void RasterizerVulkan::LoadDefaultDiskResources(
                          "");
         std::this_thread::sleep_for(std::chrono::milliseconds(16));
     }
+    pipeline_cache.EndBootLoading();
 
     wrapped_callback(VideoCore::LoadCallbackStage::Complete, 0, 0, "");
 }

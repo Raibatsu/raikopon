@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -17,14 +18,18 @@
 namespace Common::ShaderCompileStats {
 
 // Call right before queuing a background compile job.
-void BeginCompile();
+[[nodiscard]] bool BeginCompile(bool allow_boost);
 
-// Call once that job finishes, regardless of whether it succeeded.
-void EndCompile();
+// Call once that job finishes, regardless of whether it succeeded. `boosted` must be exactly
+// what the matching BeginCompile() call returned.
+void EndCompile(bool boosted);
+
+void RecordStall(std::chrono::microseconds duration);
 
 struct Progress {
     std::uint32_t done;
     std::uint32_t total;
+    std::uint64_t stall_time_us;
 };
 
 // The current batch's progress, or nullopt if there's nothing in flight right now.
@@ -35,6 +40,8 @@ std::optional<Progress> GetProgress();
 // (ROM load, CIA install). No-op off Switch.
 void AcquireCpuBoost();
 void ReleaseCpuBoost();
+
+void SetBootLoading(bool active);
 
 // RAII wrapper around Acquire/ReleaseCpuBoost for scope-bound holders.
 class ScopedCpuBoost {

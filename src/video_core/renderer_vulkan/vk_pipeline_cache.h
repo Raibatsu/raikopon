@@ -5,6 +5,7 @@
 #pragma once
 
 #include <bitset>
+#include <memory>
 
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
@@ -61,6 +62,20 @@ public:
     /// Loads the driver pipeline cache and the disk shader cache
     void LoadCache(const std::atomic_bool& stop_loading = std::atomic_bool{false},
                    const VideoCore::DiskResourceLoadCallback& callback = {});
+
+    /// Nothing else needs the CPU/GPU yet during a boot loading screen -- spins up an
+    /// unrestricted, unpaced worker pool for replaying the disk cache and bypasses the shared
+    /// compile pacer, since neither serves any purpose without a frame being presented.
+    void BeginBootLoading();
+
+    /// Drains and tears down the boot worker pool, and re-arms normal pacing for gameplay.
+    void EndBootLoading();
+
+    /// The pool boot-time cache replay should queue onto instead of the normal small/paced
+    /// pools, or nullptr outside of BeginBootLoading()/EndBootLoading().
+    Common::ThreadWorker* BootWorkerOverride() {
+        return boot_workers.get();
+    }
 
     /// Switches the driver pipeline cache and the shader disk cache to the specified title
     void SwitchCache(u64 title_id, const std::atomic_bool& stop_loading = std::atomic_bool{false},
@@ -147,9 +162,11 @@ private:
     vk::UniquePipelineCache driver_pipeline_cache;
     vk::UniquePipelineLayout pipeline_layout;
     std::size_t num_worker_threads;
+    std::shared_ptr<Common::PaceLimiter> compile_pacer;
     Common::ThreadWorker pipeline_workers;
     Common::ThreadWorker shader_workers;
     Common::ThreadWorker priority_workers;
+    std::unique_ptr<Common::ThreadWorker> boot_workers;
     PipelineInfo current_info{};
     GraphicsPipeline* current_pipeline{};
     std::array<DescriptorHeap, NumDescriptorHeaps> descriptor_heaps;

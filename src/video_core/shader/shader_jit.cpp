@@ -11,6 +11,7 @@
 #include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "common/shader_compile_stats.h"
 #include "video_core/shader/shader.h"
 #include "video_core/shader/shader_interpreter.h"
@@ -32,7 +33,7 @@ JitEngine::JitEngine()
 JitEngine::~JitEngine() = default;
 
 void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
-                             std::shared_ptr<const SwizzleData> swizzle_data) {
+                             std::shared_ptr<const SwizzleData> swizzle_data, bool boosted) {
     std::unique_ptr<JitShader> shader;
     if (!exec_memory_exhausted.load(std::memory_order_relaxed)) {
         try {
@@ -51,7 +52,7 @@ void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCod
     }
     entry->shader = std::move(shader);
     entry->ready.store(true, std::memory_order_release);
-    Common::ShaderCompileStats::EndCompile();
+    Common::ShaderCompileStats::EndCompile(boosted);
 }
 
 void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
@@ -82,9 +83,10 @@ void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
         // to outlive this one job.
         auto program_code = std::make_shared<ProgramCode>(setup.GetProgramCode());
         auto swizzle_data = std::make_shared<SwizzleData>(setup.GetSwizzleData());
-        Common::ShaderCompileStats::BeginCompile();
-        compile_workers.QueueWork([this, entry, program_code, swizzle_data] {
-            CompileEntry(entry, program_code, swizzle_data);
+        const bool boosted = Common::ShaderCompileStats::BeginCompile(
+            Settings::values.enable_compile_boost.GetValue());
+        compile_workers.QueueWork([this, entry, program_code, swizzle_data, boosted] {
+            CompileEntry(entry, program_code, swizzle_data, boosted);
         });
     }
 

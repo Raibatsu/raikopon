@@ -39,7 +39,7 @@ private:
     };
 
     void CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
-                      std::shared_ptr<const SwizzleData> swizzle_data);
+                      std::shared_ptr<const SwizzleData> swizzle_data, bool boosted);
 
     std::unordered_map<u64, std::unique_ptr<CacheEntry>> cache;
     std::mutex cache_mutex;
