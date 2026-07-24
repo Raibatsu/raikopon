@@ -596,6 +596,8 @@ bool Instance::CreateDevice() {
     if (has_pipeline_creation_cache_control) {
         FEAT_SET(vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT,
                  pipelineCreationCacheControl, pipeline_creation_cache_control)
+        LOG_INFO(Render_Vulkan, "pipelineCreationCacheControl feature: {}",
+                pipeline_creation_cache_control);
     } else {
         device_chain.unlink<vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>();
     }

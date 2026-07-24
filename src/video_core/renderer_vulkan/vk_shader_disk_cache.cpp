@@ -124,14 +124,15 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
 
             shader.program = std::move(program);
             const vk::Device device = parent.instance.GetDevice();
-            Common::ShaderCompileStats::BeginCompile();
-            parent.shader_workers.QueueWork([device, &shader, this, spirv_id] {
+            const bool boosted = Common::ShaderCompileStats::BeginCompile(
+                Settings::values.enable_compile_boost.GetValue());
+            parent.shader_workers.QueueWork([device, &shader, this, spirv_id, boosted] {
                 auto spirv = CompileGLSL(shader.program, vk::ShaderStageFlagBits::eVertex);
                 AppendVSSPIRV(vs_cache, spirv, spirv_id);
                 shader.program.clear();
                 shader.module = CompileSPV(spirv, device);
                 shader.MarkDone();
-                Common::ShaderCompileStats::EndCompile();
+                Common::ShaderCompileStats::EndCompile(boosted);
             });
         }
 
@@ -160,8 +161,10 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
     if (new_shader) {
         LOG_NEW_OBJECT(Render_Vulkan, "New FS config {:016X}", fs_config_hash);
 
-        Common::ShaderCompileStats::BeginCompile();
-        parent.shader_workers.QueueWork([fs_config, user, this, &shader, fs_config_hash]() {
+        const bool boosted = Common::ShaderCompileStats::BeginCompile(
+            Settings::values.enable_compile_boost.GetValue());
+        parent.shader_workers.QueueWork([fs_config, user, this, &shader, fs_config_hash,
+                                         boosted]() {
             std::vector<u32> spirv;
             const bool use_spirv = parent.profile.vk_use_spirv_generator;
             if (use_spirv && !fs_config.UsesSpirvIncompatibleConfig()) {
@@ -182,7 +185,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
                                     .fs_config = fs_config};
                 AppendFSConfig(fs_cache, entry, fs_config_hash);
             }
-            Common::ShaderCompileStats::EndCompile();
+            Common::ShaderCompileStats::EndCompile(boosted);
         });
     }
 
@@ -217,8 +220,10 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFixedGeometrySh
         if (new_shader) {
             LOG_NEW_OBJECT(Render_Vulkan, "New GS config {:016X}", gs_config_hash);
 
-            Common::ShaderCompileStats::BeginCompile();
-            parent.shader_workers.QueueWork([gs_config, this, &shader, gs_config_hash]() {
+            const bool boosted = Common::ShaderCompileStats::BeginCompile(
+                Settings::values.enable_compile_boost.GetValue());
+            parent.shader_workers.QueueWork([gs_config, this, &shader, gs_config_hash,
+                                             boosted]() {
                 ExtraFixedGSConfig extra;
                 extra.use_clip_planes = parent.profile.has_clip_planes;
                 extra.separable_shader = true;
@@ -234,7 +239,7 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFixedGeometrySh
                     .gs_config = gs_config,
                 };
                 AppendGSConfig(gs_cache, entry, gs_config_hash);
-                Common::ShaderCompileStats::EndCompile();
+                Common::ShaderCompileStats::EndCompile(boosted);
             });
         }
 
@@ -1507,7 +1512,7 @@ bool ShaderDiskCache::InitPLCache(const std::atomic_bool& stop_loading,
                 parent.instance, parent.renderpass_cache, info, *parent.driver_pipeline_cache,
                 *parent.pipeline_layout, shaders, &parent.pipeline_workers);
 
-            it_pl.value()->TryBuild(PipelineWaitMode::Async);
+            it_pl.value()->TryBuild(PipelineWaitMode::Async, parent.BootWorkerOverride());
 
             LOG_DEBUG(Render_Vulkan, "    built.");
 

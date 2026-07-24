@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <chrono>
 #include <memory>
 #include <SPIRV/GlslangToSpv.h>
 #include <glslang/Include/ResourceLimits.h>
@@ -11,6 +12,25 @@
 #include "common/logging/log.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+
+namespace {
+constexpr std::chrono::milliseconds kSlowShaderCompileThreshold{20};
+
+const char* StageName(vk::ShaderStageFlagBits stage) {
+    switch (stage) {
+    case vk::ShaderStageFlagBits::eVertex:
+        return "vertex";
+    case vk::ShaderStageFlagBits::eGeometry:
+        return "geometry";
+    case vk::ShaderStageFlagBits::eFragment:
+        return "fragment";
+    case vk::ShaderStageFlagBits::eCompute:
+        return "compute";
+    default:
+        return "unknown";
+    }
+}
+} // namespace
 
 namespace Vulkan {
 
@@ -166,6 +186,8 @@ std::vector<u32> CompileGLSL(std::string_view code, vk::ShaderStageFlagBits stag
         return {};
     }
 
+    const auto compile_start = std::chrono::steady_clock::now();
+
     EProfile profile = ECoreProfile;
     EShMessages messages =
         static_cast<EShMessages>(EShMsgDefault | EShMsgSpvRules | EShMsgVulkanRules);
@@ -217,6 +239,13 @@ std::vector<u32> CompileGLSL(std::string_view code, vk::ShaderStageFlagBits stag
         LOG_INFO(Render_Vulkan, "SPIR-V conversion messages: {}", spv_messages);
     }
 
+    const auto compile_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - compile_start);
+    if (compile_elapsed > kSlowShaderCompileThreshold) {
+        LOG_WARNING(Render_Vulkan, "CompileGLSL ({} shader) took {}ms", StageName(stage),
+                    compile_elapsed.count());
+    }
+
     return out_code;
 }
 
@@ -226,8 +255,15 @@ vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
         .pCode = code.data(),
     };
 
+    const auto compile_start = std::chrono::steady_clock::now();
     try {
-        return device.createShaderModule(shader_info);
+        vk::ShaderModule module = device.createShaderModule(shader_info);
+        const auto compile_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - compile_start);
+        if (compile_elapsed > kSlowShaderCompileThreshold) {
+            LOG_WARNING(Render_Vulkan, "vkCreateShaderModule took {}ms", compile_elapsed.count());
+        }
+        return module;
     } catch (vk::SystemError& err) {
         LOG_ERROR(Render_Vulkan, "{}", err.what());
     }

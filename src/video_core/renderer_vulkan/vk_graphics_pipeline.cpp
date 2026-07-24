@@ -6,6 +6,7 @@
 
 #include "common/alignment.h"
 #include "common/hash.h"
+#include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
 #include "common/shader_compile_stats.h"
@@ -92,8 +93,14 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
         switch (wait_mode) {
         case PipelineWaitMode::Async:
             return false;
-        case PipelineWaitMode::Bounded:
-            return WaitDoneFor(kBoundedWaitBudget);
+        case PipelineWaitMode::Bounded: {
+            const auto start = std::chrono::steady_clock::now();
+            const bool ready = WaitDoneFor(kBoundedWaitBudget);
+            Common::ShaderCompileStats::RecordStall(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - start));
+            return ready;
+        }
         case PipelineWaitMode::Blocking:
             return true;
         }
@@ -108,6 +115,7 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
             return false;
         }
         if (wait_mode == PipelineWaitMode::Bounded) {
+            const auto start = std::chrono::steady_clock::now();
             shaders_ready = true;
             for (Shader* shader : stages) {
                 if (shader && !shader->WaitDoneFor(kBoundedWaitBudget)) {
@@ -115,6 +123,9 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
                     break;
                 }
             }
+            Common::ShaderCompileStats::RecordStall(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - start));
             if (!shaders_ready) {
                 return false;
             }
@@ -123,25 +134,48 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
 
     // Ask the driver if it can give us the pipeline quickly.
     if (shaders_ready && !Settings::values.disable_pipeline_fast_path.GetValue() &&
-        instance.IsPipelineCreationCacheControlSupported() && Build(true)) {
-        return true;
+        instance.IsPipelineCreationCacheControlSupported()) {
+        constexpr std::chrono::microseconds kFastPathSlowThreshold{1000};
+        const auto start = std::chrono::steady_clock::now();
+        const bool built = Build(true);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start);
+        if (elapsed > kFastPathSlowThreshold) {
+            static std::atomic_bool warned_slow_fast_path{false};
+            if (!warned_slow_fast_path.exchange(true)) {
+                LOG_WARNING(Render_Vulkan,
+                            "Pipeline fast path (FAIL_ON_PIPELINE_COMPILE_REQUIRED) took {}us, "
+                            "driver may not honor the fail-fast hint",
+                            elapsed.count());
+            }
+        }
+        if (built) {
+            return true;
+        }
     }
 
-    // Fallback to (a)synchronous compilation
-    Common::ThreadWorker* const target_worker =
-        (wait_mode == PipelineWaitMode::Bounded && priority_worker) ? priority_worker : worker;
-    Common::ShaderCompileStats::BeginCompile();
-    target_worker->QueueWork([this] {
+    // Fallback to (a)synchronous compilation. priority_worker overrides the pipeline's own
+    // worker whenever a caller supplies one, not just in Bounded mode - e.g. boot-time cache
+    // replay passes a dedicated, unpaced pool since nothing needs protecting from it yet.
+    Common::ThreadWorker* const target_worker = priority_worker ? priority_worker : worker;
+    const bool boosted =
+        Common::ShaderCompileStats::BeginCompile(Settings::values.enable_compile_boost.GetValue());
+    target_worker->QueueWork([this, boosted] {
         Build();
-        Common::ShaderCompileStats::EndCompile();
+        Common::ShaderCompileStats::EndCompile(boosted);
     });
     is_pending = true;
 
     switch (wait_mode) {
     case PipelineWaitMode::Async:
         return false;
-    case PipelineWaitMode::Bounded:
-        return WaitDoneFor(kBoundedWaitBudget);
+    case PipelineWaitMode::Bounded: {
+        const auto start = std::chrono::steady_clock::now();
+        const bool ready = WaitDoneFor(kBoundedWaitBudget);
+        Common::ShaderCompileStats::RecordStall(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - start));
+        return ready;
+    }
     case PipelineWaitMode::Blocking:
         return true;
     }
@@ -324,7 +358,15 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
         pipeline_info.flags |= vk::PipelineCreateFlagBits::eFailOnPipelineCompileRequiredEXT;
     }
 
+    constexpr std::chrono::milliseconds kSlowPipelineThreshold{20};
+    const auto compile_start = std::chrono::steady_clock::now();
     auto result = instance.GetDevice().createGraphicsPipelineUnique(pipeline_cache, pipeline_info);
+    const auto compile_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - compile_start);
+    if (compile_elapsed > kSlowPipelineThreshold) {
+        LOG_WARNING(Render_Vulkan, "vkCreateGraphicsPipelines took {}ms (fail_on_compile_required={})",
+                    compile_elapsed.count(), fail_on_compile_required);
+    }
     if (result.result == vk::Result::eSuccess) {
         pipeline = std::move(result.value);
     } else if (result.result == vk::Result::eErrorPipelineCompileRequiredEXT) {

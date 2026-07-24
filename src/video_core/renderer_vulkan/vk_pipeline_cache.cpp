@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <chrono>
+
 #include <boost/container/static_vector.hpp>
 
 #include "common/common_paths.h"
@@ -10,6 +12,7 @@
 #include "common/microprofile.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
+#include "common/shader_compile_stats.h"
 #include "core/core.h"
 #include "core/loader/loader.h"
 #include "video_core/pica/shader_setup.h"
@@ -85,10 +88,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     : instance{instance_}, scheduler{scheduler_}, renderpass_cache{renderpass_cache_},
       update_queue{update_queue_},
 #ifdef __SWITCH__
-      // hardware_concurrency() isn't reliable here, and we specifically want one worker per
-      // target core below so compile load actually spreads across both instead of funneling
-      // onto one core alone.
-      num_worker_threads{2},
+      num_worker_threads{1},
 #else
       num_worker_threads{std::max(std::thread::hardware_concurrency(), 2U) / 2},
 #endif
@@ -96,9 +96,22 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
       // guaranteed to be available to a homebrew .nro - see vk_scheduler.cpp's WorkerThread).
       // The two pools' core lists are reversed so, worker-index for worker-index, shader and
       // pipeline compiles land on different cores instead of both funneling onto the same one.
-      pipeline_workers{num_worker_threads, "Pipeline workers", {}, {1, 0}},
-      shader_workers{num_worker_threads, "Shader workers", {}, {0, 1}},
-      priority_workers{1, "Priority pipeline workers", {}, {0}},
+#ifdef __SWITCH__
+      compile_pacer{std::make_shared<Common::PaceLimiter>(std::chrono::milliseconds{150})},
+#else
+      compile_pacer{},
+#endif
+      // Past 100 pending, whatever was queued most recently jumps ahead of the older backlog --
+      // in a high-action scene, the oldest queued pipelines are the ones most likely to no longer
+      // match what's actually on screen by the time they'd otherwise be reached. priority_workers
+      // is left FIFO (default 0 = disabled): it's meant to stay a single-item-at-a-time fast lane,
+      // not accumulate a backlog worth reordering.
+      pipeline_workers{num_worker_threads, "Pipeline workers", {}, {1, 0},
+                       Common::ThreadPriority::Low, compile_pacer, 100},
+      shader_workers{num_worker_threads, "Shader workers", {}, {0, 1}, Common::ThreadPriority::Low,
+                     compile_pacer, 100},
+      priority_workers{1, "Priority pipeline workers", {}, {0}, Common::ThreadPriority::Normal,
+                       compile_pacer},
       descriptor_heaps{
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), BUFFER_BINDINGS, 32},
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), TEXTURE_BINDINGS<1>},
@@ -106,6 +119,21 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
       trivial_vertex_shader{
           instance, vk::ShaderStageFlagBits::eVertex,
           GLSL::GenerateTrivialVertexShader(instance.IsShaderClipDistanceSupported(), true)} {
+    if (compile_pacer) {
+        // Below 200 pending this behaves exactly as the flat 150ms already confirmed working for
+        // normal-sized bursts. Only shrinks toward the 20ms floor once a backlog is deep enough
+        // (200-800 pending) that spacing out delivery has clearly diminishing returns compared to
+        // just clearing the queue - e.g. a scene with hundreds of simultaneous new pipelines.
+        // pipeline_workers/shader_workers/priority_workers are the only pools on this pacer, so
+        // GetProgress() here reflects only their own backlog, not some other pool's.
+        compile_pacer->ConfigureBacklogScaling(
+            [] {
+                const auto progress = Common::ShaderCompileStats::GetProgress();
+                return progress ? static_cast<std::size_t>(progress->total - progress->done)
+                                : std::size_t{0};
+            },
+            200, 800, std::chrono::milliseconds{20});
+    }
     scheduler.RegisterOnDispatch([this] { update_queue.Flush(); });
     profile = Pica::Shader::Profile{
         .enable_accurate_mul = false,
@@ -167,6 +195,28 @@ void PipelineCache::LoadCache(const std::atomic_bool& stop_loading,
                               const VideoCore::DiskResourceLoadCallback& callback) {
     LoadDriverPipelineDiskCache(stop_loading, callback);
     LoadDiskCache(stop_loading, callback);
+}
+
+void PipelineCache::BeginBootLoading() {
+    if (compile_pacer) {
+        compile_pacer->SetBypassed(true);
+    }
+    Common::ShaderCompileStats::SetBootLoading(true);
+#ifdef __SWITCH__
+    boot_workers = std::unique_ptr<Common::ThreadWorker>(new Common::ThreadWorker(
+        4, "Boot cache workers", {}, std::vector<std::uint32_t>{0, 1, 2, 3}));
+#endif
+}
+
+void PipelineCache::EndBootLoading() {
+    if (boot_workers) {
+        boot_workers->WaitForRequests();
+        boot_workers.reset();
+    }
+    if (compile_pacer) {
+        compile_pacer->SetBypassed(false);
+    }
+    Common::ShaderCompileStats::SetBootLoading(false);
 }
 
 void PipelineCache::SwitchCache(u64 title_id, const std::atomic_bool& stop_loading,
@@ -384,7 +434,9 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
     }
 
     GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
-    if (!pipeline->IsDone() && !pipeline->TryBuild(wait_mode, &priority_workers)) {
+    Common::ThreadWorker* const bounded_priority_worker =
+        wait_mode == PipelineWaitMode::Bounded ? &priority_workers : nullptr;
+    if (!pipeline->IsDone() && !pipeline->TryBuild(wait_mode, bounded_priority_worker)) {
         return false;
     }
 
@@ -493,7 +545,11 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
 
         if (pipeline_dirty) {
             if (!pipeline->IsDone()) {
+                const auto start = std::chrono::steady_clock::now();
                 pipeline->WaitDone();
+                Common::ShaderCompileStats::RecordStall(
+                    std::chrono::duration_cast<std::chrono::microseconds>(
+                        std::chrono::steady_clock::now() - start));
             }
             cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
         }
