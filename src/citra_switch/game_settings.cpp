@@ -40,7 +40,7 @@ bool s_dirty = false;
 int s_pre_gyro_x = 100;
 int s_pre_gyro_y = 100;
 int s_pre_pointer_source = 0;
-int s_pre_movie_throttle = 25;
+int s_pre_movie_throttle = 45;
 
 GameOverrides ReadOverridesFile(std::uint64_t program_id) {
     GameOverrides overrides{};
@@ -100,7 +100,7 @@ GameOverrides ReadOverridesFile(std::uint64_t program_id) {
     }
     if (has("movie_throttle_clock_percentage")) {
         overrides.movie_throttle_clock_percentage =
-            static_cast<int>(ini.GetInteger(kSection, "movie_throttle_clock_percentage", 25));
+            static_cast<int>(ini.GetInteger(kSection, "movie_throttle_clock_percentage", 45));
     }
     return overrides;
 }

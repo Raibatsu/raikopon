@@ -85,7 +85,7 @@ gyro_sensitivity_y =
 # Defaults to every preset enabled. The quick menu always offers every layout.
 layout_cycle_mask =
 # Core Clock percentage used while a movie-library CRO is loaded, e.g. Pokémon cutscenes
-# (25, default). Editable from the quick menu. 10-100.
+# (45, default). Editable from the quick menu. 10-100.
 movie_throttle_clock_percentage =
 
 [Controls]

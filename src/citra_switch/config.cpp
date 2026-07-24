@@ -183,7 +183,7 @@ private:
             config->GetInteger("Switch", "layout_cycle_mask", all_layouts)));
 
         SwitchFrontend::SetMovieThrottleClockPercentage(
-            config->GetInteger("Switch", "movie_throttle_clock_percentage", 25));
+            config->GetInteger("Switch", "movie_throttle_clock_percentage", 45));
 
         // Each control stores the index of the physical Switch button it drives.
         for (int i = 0; i < SwitchFrontend::NumMappableControls; ++i) {
