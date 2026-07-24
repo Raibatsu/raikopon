@@ -54,7 +54,7 @@ constexpr s32 kMovieThrottleClockMax = 100;
 // Percentage the Core Clock is throttled to while a movie-library CRO reports playback is
 // active (see RegisterMovieCpuThrottle). Adjustable from the quick menu — see
 // Get/SetMovieThrottleClockPercentage below.
-std::atomic<s32> s_movie_throttle_clock_percentage{25};
+std::atomic<s32> s_movie_throttle_clock_percentage{45};
 // The player's own Core Clock setting, captured when a video starts so it can be restored
 // exactly (rather than hardcoding 100%) once the video ends.
 s32 s_saved_cpu_clock_percentage = 100;
