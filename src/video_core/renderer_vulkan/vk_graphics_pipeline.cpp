@@ -87,10 +87,8 @@ GraphicsPipeline::~GraphicsPipeline() = default;
 bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker* priority_worker) {
     constexpr std::chrono::microseconds kBoundedWaitBudget{1500};
 
-    // The pipeline is currently being compiled. We can either wait for it
-    // or skip the draw.
-    if (is_pending) {
-        switch (wait_mode) {
+    const auto wait_for_pending = [&](PipelineWaitMode mode) {
+        switch (mode) {
         case PipelineWaitMode::Async:
             return false;
         case PipelineWaitMode::Bounded: {
@@ -104,6 +102,13 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
         case PipelineWaitMode::Blocking:
             return true;
         }
+        return false;
+    };
+
+    // The pipeline is currently being compiled. We can either wait for it
+    // or skip the draw.
+    if (is_pending.load(std::memory_order::acquire)) {
+        return wait_for_pending(wait_mode);
     }
 
     // If the shaders haven't been compiled yet, we cannot proceed.
@@ -157,6 +162,25 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
     // Fallback to (a)synchronous compilation. priority_worker overrides the pipeline's own
     // worker whenever a caller supplies one, not just in Bounded mode - e.g. boot-time cache
     // replay passes a dedicated, unpaced pool since nothing needs protecting from it yet.
+    // Claim the build atomically: the inline path below runs Build() on the calling thread, so
+    // without this two threads racing the is_pending check above could both build the same
+    // pipeline concurrently. Previously every Build() was serialized onto one worker pool.
+    if (is_pending.exchange(true, std::memory_order::acq_rel)) {
+        return wait_for_pending(wait_mode);
+    }
+
+    // A Blocking caller is going to sit on WaitDone() regardless, so building on the calling thread
+    // costs it nothing extra and keeps the (single, on Switch) pipeline worker free. Queueing it
+    // instead used to head-of-line block the whole pool: Build() waits on shader modules from a
+    // different pool, so one cross-pool wait froze every other pipeline behind it.
+    if (wait_mode == PipelineWaitMode::Blocking) {
+        const bool boosted = Common::ShaderCompileStats::BeginCompile(
+            Settings::values.enable_compile_boost.GetValue());
+        Build();
+        Common::ShaderCompileStats::EndCompile(boosted);
+        return true;
+    }
+
     Common::ThreadWorker* const target_worker = priority_worker ? priority_worker : worker;
     const bool boosted =
         Common::ShaderCompileStats::BeginCompile(Settings::values.enable_compile_boost.GetValue());
@@ -164,7 +188,6 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
         Build();
         Common::ShaderCompileStats::EndCompile(boosted);
     });
-    is_pending = true;
 
     switch (wait_mode) {
     case PipelineWaitMode::Async:

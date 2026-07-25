@@ -436,8 +436,12 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
     GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
     Common::ThreadWorker* const bounded_priority_worker =
         wait_mode == PipelineWaitMode::Bounded ? &priority_workers : nullptr;
-    if (!pipeline->IsDone() && !pipeline->TryBuild(wait_mode, bounded_priority_worker)) {
-        return false;
+    if (!pipeline->IsDone()) {
+        const Common::PaceUrgentScope urgent{
+            wait_mode == PipelineWaitMode::Async ? nullptr : compile_pacer};
+        if (!pipeline->TryBuild(wait_mode, bounded_priority_worker)) {
+            return false;
+        }
     }
 
     const bool is_dirty = scheduler.IsStateDirty(StateFlags::Pipeline);
@@ -546,6 +550,7 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
         if (pipeline_dirty) {
             if (!pipeline->IsDone()) {
                 const auto start = std::chrono::steady_clock::now();
+                const Common::PaceUrgentScope urgent{compile_pacer};
                 pipeline->WaitDone();
                 Common::ShaderCompileStats::RecordStall(
                     std::chrono::duration_cast<std::chrono::microseconds>(
