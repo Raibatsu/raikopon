@@ -314,8 +314,7 @@ void RebuildRows() {
         s_rows.push_back({Item::ExitGame});
         break;
     case Page::System:
-        // CPU Clock hidden for now — see Item::CpuClock's other cases (Label/Value/Adjust)
-        // for the still-working plumbing if this comes back.
+        s_rows.push_back({Item::CpuClock});
         s_rows.push_back({Item::MovieThrottleClock});
         s_rows.push_back({Item::EnableCompileBoost});
         s_rows.push_back({Item::Resume});
@@ -447,12 +446,13 @@ std::string Value(const Row& row) {
 
 // Left/right on an armed value row. `dir` is -1 or +1. Only reachable for rows IsBooleanItem
 // returns false for — booleans flip directly on an A press instead (see Activate).
-// Every case below (bar CpuClock, which isn't reachable from the quick menu right now — see
-// Item::CpuClock's other cases) edits something per-game: MarkGameOverride snapshots the value
-// just written so it's remembered for this title instead of leaking into the global config.
+// Every case below edits something per-game, and the order matters: BeginFieldOverride takes the
+// field off global first so the write lands in its per-game slot, then MarkGameOverride snapshots
+// the value just written so it's remembered for this title instead of leaking into global config.
 void Adjust(const Row& row, int dir) {
     switch (row.item) {
     case Item::ScreenLayout:
+        BeginFieldOverride(OverrideField::ScreenLayout);
         StepScreenLayout(dir);
         MarkGameOverride(OverrideField::ScreenLayout);
         break;
@@ -470,6 +470,7 @@ void Adjust(const Row& row, int dir) {
         MarkGameOverride(OverrideField::PointerSource);
         break;
     case Item::TextureFilter: {
+        BeginFieldOverride(OverrideField::TextureFilter);
         const int current = static_cast<int>(Settings::values.texture_filter.GetValue());
         Settings::values.texture_filter =
             static_cast<Settings::TextureFilter>(std::clamp(current + dir, 0, 5));
@@ -477,7 +478,9 @@ void Adjust(const Row& row, int dir) {
         break;
     }
     case Item::CpuClock:
+        BeginFieldOverride(OverrideField::CpuClock);
         SetCpuClock(Settings::values.cpu_clock_percentage.GetValue() + dir * kClockStep);
+        MarkGameOverride(OverrideField::CpuClock);
         break;
     case Item::MovieThrottleClock:
         SetMovieThrottleClockPercentage(GetMovieThrottleClockPercentage() + dir * kMovieThrottleStep);
@@ -496,20 +499,25 @@ void Activate(const Row& row) {
         TogglePointerMode();
         break;
     case Item::FpsCounter:
+        BeginFieldOverride(OverrideField::ShowFps);
         Settings::values.show_fps = !Settings::values.show_fps.GetValue();
         MarkGameOverride(OverrideField::ShowFps);
         break;
     case Item::CustomTextures:
+        BeginFieldOverride(OverrideField::CustomTextures);
         Settings::values.custom_textures = !Settings::values.custom_textures.GetValue();
         MarkGameOverride(OverrideField::CustomTextures);
         break;
     case Item::RightEyeRender:
+        BeginFieldOverride(OverrideField::RightEyeRender);
         Settings::values.disable_right_eye_render =
             !Settings::values.disable_right_eye_render.GetValue();
         MarkGameOverride(OverrideField::RightEyeRender);
         break;
     case Item::EnableCompileBoost:
+        BeginFieldOverride(OverrideField::EnableCompileBoost);
         Settings::values.enable_compile_boost = !Settings::values.enable_compile_boost.GetValue();
+        MarkGameOverride(OverrideField::EnableCompileBoost);
         break;
     case Item::AddCheat:
         EditCheatFlow(-1);

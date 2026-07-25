@@ -15,6 +15,8 @@
 #include "common/file_util.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
+#include "core/core.h"
+#include "core/core_timing.h"
 
 namespace SwitchFrontend {
 
@@ -102,6 +104,13 @@ GameOverrides ReadOverridesFile(std::uint64_t program_id) {
         overrides.movie_throttle_clock_percentage =
             static_cast<int>(ini.GetInteger(kSection, "movie_throttle_clock_percentage", 45));
     }
+    if (has("cpu_clock_percentage")) {
+        overrides.cpu_clock_percentage =
+            static_cast<int>(ini.GetInteger(kSection, "cpu_clock_percentage", 100));
+    }
+    if (has("enable_compile_boost")) {
+        overrides.enable_compile_boost = ini.GetBoolean(kSection, "enable_compile_boost", false);
+    }
     return overrides;
 }
 
@@ -113,7 +122,8 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
                          overrides.upright_screen || overrides.upright_screen_flipped ||
                          overrides.small_screen_position || overrides.gyro_sensitivity_x ||
                          overrides.gyro_sensitivity_y || overrides.pointer_source ||
-                         overrides.movie_throttle_clock_percentage;
+                         overrides.movie_throttle_clock_percentage ||
+                         overrides.cpu_clock_percentage || overrides.enable_compile_boost;
     if (!any_set) {
         // Nothing customised (any longer) — no point leaving an empty file behind.
         FileUtil::Delete(path);
@@ -145,6 +155,8 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
     write_int("gyro_sensitivity_y", overrides.gyro_sensitivity_y);
     write_int("pointer_source", overrides.pointer_source);
     write_int("movie_throttle_clock_percentage", overrides.movie_throttle_clock_percentage);
+    write_int("cpu_clock_percentage", overrides.cpu_clock_percentage);
+    write_bool("enable_compile_boost", overrides.enable_compile_boost);
 
     FileUtil::CreateFullPath(path);
     if (!FileUtil::WriteStringToFile(true, path, ss.str())) {
@@ -218,6 +230,74 @@ void BeginGameOverrides(std::uint64_t program_id) {
     if (s_active.movie_throttle_clock_percentage) {
         SetMovieThrottleClockPercentage(*s_active.movie_throttle_clock_percentage);
     }
+    if (s_active.cpu_clock_percentage) {
+        v.cpu_clock_percentage.SetGlobal(false);
+        v.cpu_clock_percentage = *s_active.cpu_clock_percentage;
+        // Running timers hold their own copy of the clock scale, so a value set while the core is
+        // already up has to be pushed into core timing to take effect without a reboot.
+        auto& system = Core::System::GetInstance();
+        if (system.IsPoweredOn()) {
+            system.CoreTiming().UpdateClockSpeed(
+                static_cast<u32>(*s_active.cpu_clock_percentage));
+        }
+    }
+    if (s_active.enable_compile_boost) {
+        v.enable_compile_boost.SetGlobal(false);
+        v.enable_compile_boost = *s_active.enable_compile_boost;
+    }
+}
+
+// Takes one setting off global, carrying its current effective value into the custom slot.
+// `custom` is value-initialized (0/false), not seeded from the global value, so a bare
+// SetGlobal(false) would make the setting read as zero until something wrote to it — which breaks
+// any caller that computes its new value from the old one (the layout stepper, the clock stepper).
+template <typename SettingT>
+void TakeCustom(SettingT& setting) {
+    if (!setting.UsingGlobal()) {
+        return;
+    }
+    const auto current = setting.GetValue();
+    setting.SetGlobal(false);
+    setting.SetValue(current);
+}
+
+void BeginFieldOverride(OverrideField field) {
+    if (s_program_id == 0) {
+        return;
+    }
+    auto& v = Settings::values;
+    switch (field) {
+    case OverrideField::TextureFilter:
+        TakeCustom(v.texture_filter);
+        break;
+    case OverrideField::ShowFps:
+        TakeCustom(v.show_fps);
+        break;
+    case OverrideField::CustomTextures:
+        TakeCustom(v.custom_textures);
+        break;
+    case OverrideField::RightEyeRender:
+        TakeCustom(v.disable_right_eye_render);
+        break;
+    case OverrideField::ScreenLayout:
+        TakeCustom(v.layout_option);
+        TakeCustom(v.swap_screen);
+        TakeCustom(v.upright_screen);
+        TakeCustom(v.upright_screen_flipped);
+        TakeCustom(v.small_screen_position);
+        break;
+    case OverrideField::CpuClock:
+        TakeCustom(v.cpu_clock_percentage);
+        break;
+    case OverrideField::EnableCompileBoost:
+        TakeCustom(v.enable_compile_boost);
+        break;
+    case OverrideField::GyroSensitivity:
+    case OverrideField::PointerSource:
+    case OverrideField::MovieThrottleClock:
+        // Frontend-only state, no global/custom split to switch.
+        break;
+    }
 }
 
 void MarkGameOverride(OverrideField field) {
@@ -255,6 +335,12 @@ void MarkGameOverride(OverrideField field) {
     case OverrideField::MovieThrottleClock:
         s_active.movie_throttle_clock_percentage = GetMovieThrottleClockPercentage();
         break;
+    case OverrideField::CpuClock:
+        s_active.cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue());
+        break;
+    case OverrideField::EnableCompileBoost:
+        s_active.enable_compile_boost = v.enable_compile_boost.GetValue();
+        break;
     }
     s_dirty = true;
 }
@@ -273,8 +359,9 @@ void EndGameOverrides() {
         return;
     }
 
-    // SwitchableSetting-backed fields: switching back to global is enough, the global slot was
-    // never touched by SetValue() above.
+    // SwitchableSetting-backed fields: switching back to global is enough, because
+    // BeginFieldOverride took each one off global before the quick menu wrote to it, so every
+    // edit landed in `custom` and the global slot still holds what the config file loaded.
     Settings::RestoreGlobalState(false);
 
     // Frontend-only fields have no such split, so put back what BeginGameOverrides snapshotted.
