@@ -145,6 +145,14 @@ RasterizerVulkan::~RasterizerVulkan() = default;
 void RasterizerVulkan::TickFrame() {
     scheduler.WaitWorker();
     res_cache.TickFrame();
+
+    ++render_frame_index;
+    constexpr u64 kColorTargetForgetAfter = 256;
+    if ((render_frame_index & 0xFF) == 0) {
+        std::erase_if(color_target_last_frame, [this](const auto& entry) {
+            return render_frame_index - entry.second > kColorTargetForgetAfter;
+        });
+    }
 }
 
 void RasterizerVulkan::LoadDefaultDiskResources(
@@ -484,7 +492,11 @@ bool RasterizerVulkan::AccelerateDrawBatchInternal(bool is_indexed) {
         SetupIndexArray();
     }
 
+    const PAddr color_addr = regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress();
+    const bool self_healing = IsColorTargetSelfHealing(color_addr);
     const PipelineWaitMode wait_mode = !async_shaders
+                                           ? PipelineWaitMode::Blocking
+                                       : !self_healing
                                            ? PipelineWaitMode::Blocking
                                        : regs.pipeline.num_vertices <= 6
                                            ? PipelineWaitMode::Bounded
@@ -514,6 +526,28 @@ bool RasterizerVulkan::AccelerateDrawBatchInternal(bool is_indexed) {
     });
 
     return true;
+}
+
+bool RasterizerVulkan::IsColorTargetSelfHealing(PAddr color_addr) const {
+    if (color_addr == 0) {
+        return true;
+    }
+    for (const auto& config : pica.regs.framebuffer_config) {
+        if (color_addr == config.address_left1 || color_addr == config.address_left2 ||
+            color_addr == config.address_right1 || color_addr == config.address_right2) {
+            return true;
+        }
+    }
+    constexpr u64 kSelfHealWindow = 8;
+    const auto it = color_target_last_frame.find(color_addr);
+    return it != color_target_last_frame.end() &&
+           render_frame_index - it->second <= kSelfHealWindow;
+}
+
+void RasterizerVulkan::RecordColorTarget(PAddr color_addr) {
+    if (color_addr != 0) {
+        color_target_last_frame[color_addr] = render_frame_index;
+    }
 }
 
 void RasterizerVulkan::SetupIndexArray() {
@@ -640,6 +674,10 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
             cmdbuf.bindVertexBuffers(0, stream_buffer.Handle(), offset);
             cmdbuf.draw(vertex_count, 1, 0, 0);
         });
+    }
+
+    if (using_color_fb) {
+        RecordColorTarget(regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress());
     }
 
     vertex_batch.clear();

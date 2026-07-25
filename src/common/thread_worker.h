@@ -38,6 +38,15 @@ public:
         bypassed.store(bypassed_, std::memory_order_relaxed);
     }
 
+    // Suspends pacing while a frame-critical thread is blocked waiting on compile work. Refcounted
+    // so concurrent waiters don't un-bypass each other.
+    void PushUrgent() {
+        urgent.fetch_add(1, std::memory_order_relaxed);
+    }
+    void PopUrgent() {
+        urgent.fetch_sub(1, std::memory_order_relaxed);
+    }
+
     void ConfigureBacklogScaling(std::function<std::size_t()> backlog_provider_,
                                  std::size_t low_backlog, std::size_t high_backlog,
                                  std::chrono::milliseconds floor_gap_) {
@@ -48,7 +57,8 @@ public:
     }
 
     void Pace() {
-        if (bypassed.load(std::memory_order_relaxed)) {
+        if (bypassed.load(std::memory_order_relaxed) ||
+            urgent.load(std::memory_order_relaxed) > 0) {
             return;
         }
         const auto gap = CurrentGap();
@@ -92,6 +102,28 @@ private:
     std::function<std::size_t()> backlog_provider;
     std::chrono::steady_clock::time_point last_completion{};
     std::atomic<bool> bypassed{false};
+    std::atomic<int> urgent{0};
+};
+
+class PaceUrgentScope {
+public:
+    explicit PaceUrgentScope(std::shared_ptr<PaceLimiter> pacer_) : pacer{std::move(pacer_)} {
+        if (pacer) {
+            pacer->PushUrgent();
+        }
+    }
+    ~PaceUrgentScope() {
+        if (pacer) {
+            pacer->PopUrgent();
+        }
+    }
+    PaceUrgentScope(const PaceUrgentScope&) = delete;
+    PaceUrgentScope& operator=(const PaceUrgentScope&) = delete;
+    PaceUrgentScope(PaceUrgentScope&&) = delete;
+    PaceUrgentScope& operator=(PaceUrgentScope&&) = delete;
+
+private:
+    std::shared_ptr<PaceLimiter> pacer;
 };
 
 template <class StateType = void>

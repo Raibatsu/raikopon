@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include "common/common_types.h"
 #include "common/hash.h"
 #include "common/thread_worker.h"
 #include "video_core/pica/regs_pipeline.h"
@@ -351,7 +352,7 @@ private:
 
     PipelineInfo info;
     std::array<Shader*, 3> stages;
-    bool is_pending{};
+    std::atomic_bool is_pending{};
 };
 
 } // namespace Vulkan

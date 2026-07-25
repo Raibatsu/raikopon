@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "video_core/rasterizer_accelerated.h"
 #include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -95,6 +97,9 @@ private:
     /// Internal implementation for AccelerateDrawBatch
     bool AccelerateDrawBatchInternal(bool is_indexed);
 
+    bool IsColorTargetSelfHealing(PAddr color_addr) const;
+    void RecordColorTarget(PAddr color_addr);
+
     /// Setup index array for AccelerateDrawBatch
     void SetupIndexArray();
 
@@ -142,6 +147,8 @@ private:
     u32 uniform_size_aligned_vs;
     u32 uniform_size_aligned_fs;
     bool async_shaders{false};
+    std::unordered_map<PAddr, u64> color_target_last_frame;
+    u64 render_frame_index{0};
 };
 
 } // namespace Vulkan
