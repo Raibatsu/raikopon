@@ -352,9 +352,9 @@ void PresentWindow::WaitPresent() {
 
 void PresentWindow::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanPresent");
-    // Exclusive core 0, off the CPU-JIT (2) and audio (1) cores. Core 3 is avoided entirely -
-    // see the core-affinity notes in vk_scheduler.cpp's WorkerThread.
-    Common::Horizon::PinCurrentThreadPreferred({0});
+    // See VulkanWorker: park presentation alongside submission — PinGraphicsSupportThread also
+    // knows to spread out from the async GPU thread's core when that's enabled.
+    Common::Horizon::PinGraphicsSupportThread(Settings::values.async_gpu_emulation.GetValue());
     constexpr std::chrono::milliseconds kSlowPresentGapThreshold{100};
     auto last_present = std::chrono::steady_clock::now();
     while (!token.stop_requested()) {

@@ -5,6 +5,7 @@
 #include <mutex>
 #include "common/horizon_thread.h"
 #include "common/thread.h"
+#include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 
@@ -162,9 +163,10 @@ void MasterSemaphoreFence::SubmitWork(vk::CommandBuffer cmdbuf, vk::Semaphore wa
 
 void MasterSemaphoreFence::WaitThread(std::stop_token token) {
     Common::SetCurrentThreadName("VulkanFence");
-    // Mostly blocked on GPU fences - same treatment as VulkanWorker in vk_scheduler.cpp (prefer
-    // core 1, float onto 0 too, never core 3).
-    Common::Horizon::PinCurrentThreadAffinity(1, (1ULL << 0) | (1ULL << 1));
+    // Mostly blocked on GPU fences. PinGraphicsSupportThread additionally knows to spread out
+    // from the async GPU thread's core when that's enabled, which the previous fixed
+    // core-1/float-to-0 affinity here didn't account for.
+    Common::Horizon::PinGraphicsSupportThread(Settings::values.async_gpu_emulation.GetValue());
     const vk::Device device{instance.GetDevice()};
     while (!token.stop_requested()) {
         vk::Fence fence;

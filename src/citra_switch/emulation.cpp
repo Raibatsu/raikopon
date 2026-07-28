@@ -40,6 +40,8 @@ std::atomic<bool> s_stop{true};
 // Set true once system.Load succeeds.
 // This lets the menu tell a crash/bad ROM apart from a clean exit.
 std::atomic<bool> s_load_ok{false};
+// Layout requests originate on the frontend thread and are consumed by the sole GPU producer.
+std::atomic<bool> s_layout_update_pending{false};
 
 // Guards the pause-wait handshake below — closes the lost-wakeup window between a waiter
 // checking the predicate and actually going to sleep. Does not "protect" s_paused's value
@@ -126,7 +128,7 @@ std::size_t s_layout_index = 0;
 // Bitmask of presets R3 cycles through. Bit i set means preset i is in the rotation.
 std::atomic<std::uint32_t> s_layout_cycle_mask{(1u << s_layout_presets.size()) - 1};
 
-// Applies the preset at s_layout_index to the live settings and relays out the framebuffer.
+// Applies the preset at s_layout_index and requests a framebuffer relayout.
 void ApplyCurrentLayout() {
     const ScreenLayoutPreset& preset = s_layout_presets[s_layout_index];
     Settings::values.layout_option = preset.layout;
@@ -134,7 +136,7 @@ void ApplyCurrentLayout() {
     Settings::values.upright_screen = preset.upright_screen;
     Settings::values.upright_screen_flipped = preset.upright_flipped;
     Settings::values.small_screen_position = preset.small_screen_position;
-    Core::System::GetInstance().GPU().Renderer().UpdateCurrentFramebufferLayout();
+    s_layout_update_pending.store(true, std::memory_order_release);
     LOG_INFO(Frontend, "Screen layout: {}", preset.name);
 }
 
@@ -244,6 +246,9 @@ void EmuThread(std::string path) {
 
         LOG_INFO(Frontend, "Emulation started (program id {:016X})", program_id);
         while (!s_stop) {
+            if (s_layout_update_pending.exchange(false, std::memory_order_acq_rel)) {
+                system.GPU().UpdateCurrentFramebufferLayout();
+            }
             if (s_paused.load(std::memory_order_relaxed)) {
                 {
                     std::unique_lock<std::mutex> lock(s_pause_mutex);
@@ -254,7 +259,7 @@ void EmuThread(std::string path) {
                 }
                 if (s_paused.load(std::memory_order_relaxed) &&
                     !s_stop.load(std::memory_order_relaxed)) {
-                    system.GPU().Renderer().SwapBuffers();
+                    system.GPU().SwapBuffers();
                 }
                 continue;
             }
@@ -519,7 +524,7 @@ void MirrorScreenSides() {
     // Keeps R3's cycle position (and its reported preset name) truthful after a mirror lands on
     // a different preset's arrangement — a no-op if the new state doesn't match any preset.
     SyncLayoutIndex();
-    system.GPU().Renderer().UpdateCurrentFramebufferLayout();
+    s_layout_update_pending.store(true, std::memory_order_release);
 }
 
 const char* CurrentScreenLayoutName() {

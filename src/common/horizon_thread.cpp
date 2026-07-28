@@ -102,6 +102,26 @@ bool PinCurrentThreadAffinity(std::int32_t preferred_core, std::uint64_t affinit
     return ok;
 }
 
+bool PinAsyncGpuThread() {
+    return PinCurrentThreadPreferred({0, 3});
+}
+
+bool PinGraphicsSupportThread(bool async_gpu_enabled) {
+    if (async_gpu_enabled) {
+        return PinCurrentThreadPreferred({3, 1, 0});
+    }
+    return PinCurrentThreadPreferred({3, 0});
+}
+
+std::int32_t GetCurrentThreadCore() {
+    s32 core{};
+    u64 affinity{};
+    if (svcGetThreadCoreMask(&core, &affinity, CurThreadHandle) != 0) {
+        return -1;
+    }
+    return core;
+}
+
 std::uint64_t GetTotalMemorySize() {
     u64 size{};
     if (svcGetInfo(&size, InfoTypeTotalMemorySize, CurProcessHandle, 0) != 0) {
@@ -122,6 +142,18 @@ bool PinCurrentThreadPreferred(std::initializer_list<std::uint32_t>) {
 
 bool PinCurrentThreadAffinity(std::int32_t, std::uint64_t) {
     return false;
+}
+
+bool PinAsyncGpuThread() {
+    return false;
+}
+
+bool PinGraphicsSupportThread(bool) {
+    return false;
+}
+
+std::int32_t GetCurrentThreadCore() {
+    return -1;
 }
 
 std::uint64_t GetTotalMemorySize() {

@@ -41,6 +41,8 @@ foreach(KEY IN ITEMS
     "skip_texture_copy"
     "skip_cpu_write"
     "enable_compile_boost"
+    "async_gpu_emulation"
+    "strict_gpu_sync"
     "async_shader_compilation"
     "async_presentation"
     "use_hw_shader"

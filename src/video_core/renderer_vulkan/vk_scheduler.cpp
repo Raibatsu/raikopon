@@ -6,6 +6,7 @@
 #include <utility>
 #include "common/horizon_thread.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "common/thread.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -126,11 +127,10 @@ void Scheduler::DispatchWork() {
 
 void Scheduler::WorkerThread(std::stop_token stop_token) {
     Common::SetCurrentThreadName("VulkanWorker");
-    // Prefer core 1 but allow floating onto core 0 too, off the CPU JIT (2) and present (0-
-    // exclusive) cores. Deliberately never targets core 3 - homebrew .nro launches aren't
-    // guaranteed that core, and pinning threads there when it's unavailable silently falls
-    // back onto whatever core *is* allowed, defeating the whole point of spreading work out.
-    Common::Horizon::PinCurrentThreadAffinity(1, (1ULL << 0) | (1ULL << 1));
+    // Keep GPU command submission off the CPU JIT core (2) and the audio core (1).
+    // PinGraphicsSupportThread also knows to spread out from the async GPU thread's core when
+    // that's enabled.
+    Common::Horizon::PinGraphicsSupportThread(Settings::values.async_gpu_emulation.GetValue());
 
     const auto TryPopQueue{[this](auto& work) -> bool {
         if (work_queue.empty()) {
