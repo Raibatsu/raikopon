@@ -189,10 +189,6 @@ RendererVulkan::~RendererVulkan() {
     device.destroySampler(overlay_font_sampler);
     device.destroyImageView(overlay_font_view);
     vmaDestroyImage(instance.GetAllocator(), overlay_font_image, overlay_font_allocation);
-
-    device.destroyPipeline(menu_pipeline);
-    device.destroyShaderModule(menu_fragment_shader);
-    DestroyMenuCanvas();
 }
 
 void RendererVulkan::PrepareRendertarget() {
@@ -343,8 +339,6 @@ void RendererVulkan::CompileShaders() {
         Compile(HostShaders::VULKAN_OVERLAY_VERT, vk::ShaderStageFlagBits::eVertex, device);
     overlay_fragment_shader =
         Compile(HostShaders::VULKAN_OVERLAY_FRAG, vk::ShaderStageFlagBits::eFragment, device);
-    menu_fragment_shader =
-        Compile(HostShaders::VULKAN_MENU_FRAG, vk::ShaderStageFlagBits::eFragment, device);
 
     auto properties = instance.GetPhysicalDevice().getProperties();
     for (std::size_t i = 0; i < present_samplers.size(); i++) {
@@ -957,28 +951,6 @@ void RendererVulkan::BuildPipelines() {
             instance.GetDevice().createGraphicsPipeline({}, overlay_pipeline_info);
         ASSERT_MSG(result == vk::Result::eSuccess, "Unable to build overlay pipeline");
         overlay_pipeline = pipeline;
-
-        // Same state, same vertex layout, same pipeline layout — only the fragment shader differs.
-        const std::array menu_shader_stages = {
-            vk::PipelineShaderStageCreateInfo{
-                .stage = vk::ShaderStageFlagBits::eVertex,
-                .module = overlay_vertex_shader,
-                .pName = "main",
-            },
-            vk::PipelineShaderStageCreateInfo{
-                .stage = vk::ShaderStageFlagBits::eFragment,
-                .module = menu_fragment_shader,
-                .pName = "main",
-            },
-        };
-        vk::GraphicsPipelineCreateInfo menu_pipeline_info = overlay_pipeline_info;
-        menu_pipeline_info.stageCount = static_cast<u32>(menu_shader_stages.size());
-        menu_pipeline_info.pStages = menu_shader_stages.data();
-
-        const auto [menu_result, menu_pipe] =
-            instance.GetDevice().createGraphicsPipeline({}, menu_pipeline_info);
-        ASSERT_MSG(menu_result == vk::Result::eSuccess, "Unable to build menu pipeline");
-        menu_pipeline = menu_pipe;
     }
 }
 
@@ -1442,9 +1414,6 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     RecordOverlay(std::move(loading_overlay));
     RecordOverlay(std::move(layout_editor));
 
-    // Last, so the settings screen covers the game and every other overlay.
-    DrawMenuCanvas();
-
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
 }
 
@@ -1828,256 +1797,11 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLoadingOverlay(
     return overlay;
 }
 
-void RendererVulkan::CreateMenuCanvas(u32 width, u32 height) {
-    vk::Device device = instance.GetDevice();
-
-    const vk::ImageCreateInfo image_info = {
-        .imageType = vk::ImageType::e2D,
-        // The canvas words are 0xAABBGGRR, i.e. R,G,B,A in memory order.
-        .format = vk::Format::eR8G8B8A8Unorm,
-        .extent = {width, height, 1},
-        .mipLevels = 1,
-        .arrayLayers = 1,
-        .samples = vk::SampleCountFlagBits::e1,
-        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
-    };
-    const VmaAllocationCreateInfo alloc_info = {
-        .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-    };
-    VkImage unsafe_image{};
-    VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
-    VkResult result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
-                                     &unsafe_image, &menu_canvas_allocation, nullptr);
-    if (result != VK_SUCCESS) [[unlikely]] {
-        LOG_ERROR(Render_Vulkan, "Failed allocating menu canvas image with error {}", result);
-        return;
-    }
-    menu_canvas_image = vk::Image{unsafe_image};
-
-    const vk::ImageViewCreateInfo view_info = {
-        .image = menu_canvas_image,
-        .viewType = vk::ImageViewType::e2D,
-        .format = vk::Format::eR8G8B8A8Unorm,
-        .subresourceRange{
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-    menu_canvas_view = device.createImageView(view_info);
-
-    // Nearest: the canvas is authored at output resolution, so any filtering would only blur text.
-    const vk::SamplerCreateInfo sampler_info = {
-        .magFilter = vk::Filter::eNearest,
-        .minFilter = vk::Filter::eNearest,
-        .mipmapMode = vk::SamplerMipmapMode::eNearest,
-        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
-        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
-        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
-        .anisotropyEnable = false,
-        .compareEnable = false,
-        .borderColor = vk::BorderColor::eFloatTransparentBlack,
-        .unnormalizedCoordinates = false,
-    };
-    menu_canvas_sampler = device.createSampler(sampler_info);
-
-    // Persistent staging buffer: the canvas is re-uploaded whenever the menu redraws, so
-    // allocating one per upload would churn a few MiB every frame the menu is open.
-    const vk::DeviceSize canvas_size = vk::DeviceSize{width} * height * 4;
-    const vk::BufferCreateInfo staging_info = {
-        .size = canvas_size,
-        .usage = vk::BufferUsageFlagBits::eTransferSrc,
-    };
-    const VmaAllocationCreateInfo staging_alloc_info = {
-        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
-                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-    };
-    VkBuffer unsafe_staging{};
-    VmaAllocationInfo staging_mapped{};
-    VkBufferCreateInfo unsafe_staging_info = static_cast<VkBufferCreateInfo>(staging_info);
-    result = vmaCreateBuffer(instance.GetAllocator(), &unsafe_staging_info, &staging_alloc_info,
-                             &unsafe_staging, &menu_staging_allocation, &staging_mapped);
-    if (result != VK_SUCCESS) [[unlikely]] {
-        LOG_ERROR(Render_Vulkan, "Failed allocating menu canvas staging buffer with error {}",
-                  result);
-        return;
-    }
-    menu_staging_buffer = vk::Buffer{unsafe_staging};
-    menu_staging_mapped = staging_mapped.pMappedData;
-
-    // Same binding shape as the overlay atlas, so overlay_descriptor_layout is reused.
-    const vk::DescriptorPoolSize pool_size = {
-        .type = vk::DescriptorType::eCombinedImageSampler,
-        .descriptorCount = 1,
-    };
-    menu_descriptor_pool = device.createDescriptorPoolUnique({
-        .maxSets = 1,
-        .poolSizeCount = 1,
-        .pPoolSizes = &pool_size,
-    });
-    const vk::DescriptorSetLayout set_layout = *overlay_descriptor_layout;
-    menu_descriptor_set = device.allocateDescriptorSets({
-        .descriptorPool = *menu_descriptor_pool,
-        .descriptorSetCount = 1,
-        .pSetLayouts = &set_layout,
-    })[0];
-
-    const vk::DescriptorImageInfo image_desc = {
-        .sampler = menu_canvas_sampler,
-        .imageView = menu_canvas_view,
-        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-    };
-    const vk::WriteDescriptorSet write = {
-        .dstSet = menu_descriptor_set,
-        .dstBinding = 0,
-        .dstArrayElement = 0,
-        .descriptorCount = 1,
-        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
-        .pImageInfo = &image_desc,
-    };
-    device.updateDescriptorSets(write, {});
-
-    menu_canvas_width = width;
-    menu_canvas_height = height;
-    menu_canvas_uploaded_version = 0;
-}
-
-void RendererVulkan::DestroyMenuCanvas() {
-    vk::Device device = instance.GetDevice();
-    menu_descriptor_pool.reset();
-    menu_descriptor_set = vk::DescriptorSet{};
-    if (menu_staging_buffer) {
-        vmaDestroyBuffer(instance.GetAllocator(), menu_staging_buffer, menu_staging_allocation);
-        menu_staging_buffer = vk::Buffer{};
-        menu_staging_allocation = {};
-        menu_staging_mapped = nullptr;
-    }
-    if (menu_canvas_sampler) {
-        device.destroySampler(menu_canvas_sampler);
-        menu_canvas_sampler = vk::Sampler{};
-    }
-    if (menu_canvas_view) {
-        device.destroyImageView(menu_canvas_view);
-        menu_canvas_view = vk::ImageView{};
-    }
-    if (menu_canvas_image) {
-        vmaDestroyImage(instance.GetAllocator(), menu_canvas_image, menu_canvas_allocation);
-        menu_canvas_image = vk::Image{};
-        menu_canvas_allocation = {};
-    }
-    menu_canvas_width = 0;
-    menu_canvas_height = 0;
-    menu_canvas_uploaded_version = 0;
-}
-
-void RendererVulkan::DrawMenuCanvas() {
-    if (!VideoCore::IsMenuCanvasVisible()) {
-        return;
-    }
-    const VideoCore::MenuCanvas canvas = VideoCore::GetMenuCanvas();
-    if (!canvas.visible || canvas.width <= 0 || canvas.height <= 0 || canvas.pixels.empty()) {
-        return;
-    }
-
-    const u32 width = static_cast<u32>(canvas.width);
-    const u32 height = static_cast<u32>(canvas.height);
-    if (menu_canvas_image && (menu_canvas_width != width || menu_canvas_height != height)) {
-        // The canvas is a fixed 1280x720 today; if that ever changes, rebuild rather than
-        // uploading into a mismatched image.
-        scheduler.Finish();
-        DestroyMenuCanvas();
-    }
-    if (!menu_canvas_image) {
-        CreateMenuCanvas(width, height);
-        if (!menu_canvas_image || !menu_staging_mapped) {
-            return;
-        }
-    }
-
-    if (canvas.version != menu_canvas_uploaded_version) {
-        const std::size_t bytes = canvas.pixels.size() * sizeof(u32);
-        std::memcpy(menu_staging_mapped, canvas.pixels.data(), bytes);
-        menu_canvas_uploaded_version = canvas.version;
-
-        renderpass_cache.EndRendering();
-        scheduler.Record([image = menu_canvas_image, staging = menu_staging_buffer, width,
-                          height](vk::CommandBuffer cmdbuf) {
-            const vk::ImageSubresourceRange range = {
-                .aspectMask = vk::ImageAspectFlagBits::eColor,
-                .baseMipLevel = 0,
-                .levelCount = 1,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            };
-            // eUndefined is correct here even on re-upload: the copy below rewrites every texel,
-            // so discarding the previous contents is exactly what we want.
-            const vk::ImageMemoryBarrier to_transfer = {
-                .srcAccessMask = vk::AccessFlagBits::eNone,
-                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
-                .oldLayout = vk::ImageLayout::eUndefined,
-                .newLayout = vk::ImageLayout::eTransferDstOptimal,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = image,
-                .subresourceRange = range,
-            };
-            cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
-                                   vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, to_transfer);
-
-            const vk::BufferImageCopy copy = {
-                .bufferOffset = 0,
-                .bufferRowLength = 0,
-                .bufferImageHeight = 0,
-                .imageSubresource{
-                    .aspectMask = vk::ImageAspectFlagBits::eColor,
-                    .mipLevel = 0,
-                    .baseArrayLayer = 0,
-                    .layerCount = 1,
-                },
-                .imageOffset = {0, 0, 0},
-                .imageExtent = {width, height, 1},
-            };
-            cmdbuf.copyBufferToImage(staging, image, vk::ImageLayout::eTransferDstOptimal, copy);
-
-            const vk::ImageMemoryBarrier to_shader = {
-                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
-                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
-                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                .image = image,
-                .subresourceRange = range,
-            };
-            cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-                                   vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {},
-                                   to_shader);
-        });
-    }
-
-    // Fullscreen quad in NDC with matching UVs. Same vertex layout as the overlay pipeline.
-    const float vertices[] = {
-        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,  -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
-        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f,
-    };
-    const u64 size = sizeof(vertices);
-    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
-    std::memcpy(data, vertices, size);
-    overlay_vertex_buffer.Commit(size);
-
-    scheduler.Record([this, offset = offset](vk::CommandBuffer cmdbuf) {
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, menu_pipeline);
-        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *overlay_pipeline_layout, 0,
-                                  menu_descriptor_set, {});
-        cmdbuf.bindVertexBuffers(0, overlay_vertex_buffer.Handle(), {0});
-        const u32 first_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
-        cmdbuf.draw(6, 1, first_vertex, 0);
-    });
-}
+// The CPU-canvas-as-texture approach was scaffolded here but never adopted — the in-game settings
+// screen (citra_switch/ingame_settings.cpp) ended up using the nwindow-handoff native-framebuffer
+// approach instead. CreateMenuCanvas/DestroyMenuCanvas/DrawMenuCanvas and the menu_* pipeline/
+// image/buffer fields were dead code (DrawMenuCanvas's own IsMenuCanvasVisible() guard always
+// returned false, since nothing ever called SetMenuCanvas) and have been removed.
 
 // Outlines both screens while the touch layout editor is open, brightening whichever one is
 // currently grabbed, and shows the control hint along the bottom. The screens themselves are

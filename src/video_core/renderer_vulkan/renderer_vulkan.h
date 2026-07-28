@@ -149,12 +149,6 @@ private:
 
     OverlayDraw PrepareLayoutEditor(const Layout::FramebufferLayout& layout);
 
-    // Lazily creates the canvas texture, uploads it when the published version changes, and draws
-    // it over everything. No-op unless the settings screen is currently showing.
-    void DrawMenuCanvas();
-    void CreateMenuCanvas(u32 width, u32 height);
-    void DestroyMenuCanvas();
-
     void RecordOverlay(OverlayDraw overlay);
 
     void LoadFBToScreenInfo(const Pica::FramebufferConfig& framebuffer, ScreenInfo& screen_info,
@@ -213,23 +207,6 @@ private:
     vk::UniqueDescriptorPool overlay_descriptor_pool{};
     vk::DescriptorSet overlay_descriptor_set{};
 
-    // The settings screen's CPU-rendered canvas, uploaded as a full-colour RGBA texture and drawn
-    // as a fullscreen quad. Shares the overlay's vertex shader, pipeline layout and descriptor
-    // layout; only the fragment shader differs (straight RGBA rather than coverage-times-tint).
-    vk::ShaderModule menu_fragment_shader{};
-    vk::Pipeline menu_pipeline{};
-    vk::Image menu_canvas_image{};
-    VmaAllocation menu_canvas_allocation{};
-    vk::ImageView menu_canvas_view{};
-    vk::Sampler menu_canvas_sampler{};
-    vk::UniqueDescriptorPool menu_descriptor_pool{};
-    vk::DescriptorSet menu_descriptor_set{};
-    vk::Buffer menu_staging_buffer{};
-    VmaAllocation menu_staging_allocation{};
-    void* menu_staging_mapped{};
-    u32 menu_canvas_width{};
-    u32 menu_canvas_height{};
-    u64 menu_canvas_uploaded_version{};
     float overlay_game_fps = 0.0f;
     std::chrono::steady_clock::time_point overlay_last_update{};
 
