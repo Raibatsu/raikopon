@@ -14,9 +14,7 @@
 #include "common/logging/log.h"
 #include "common/settings.h"
 #include "core/core.h"
-#include "video_core/gpu.h"
 #include "video_core/overlay.h"
-#include "video_core/renderer_base.h"
 
 namespace SwitchFrontend {
 
@@ -178,7 +176,7 @@ bool Contains(const Rect& r, int x, int y) {
 void Relayout() {
     auto& system = Core::System::GetInstance();
     if (system.IsPoweredOn()) {
-        system.GPU().Renderer().UpdateCurrentFramebufferLayout();
+        SwitchFrontend::RequestFramebufferRelayout();
     }
 }
 

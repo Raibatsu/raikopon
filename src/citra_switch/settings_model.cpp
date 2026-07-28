@@ -133,6 +133,12 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
              "Change the resolution the game is played at. 1x is 400x240."},
             {SettingRowVSync, "VSync", s.use_vsync ? "On" : "Off",
              "Reduces screen tearing at the cost of increased input latency."},
+            {SettingRowAsyncGpu, "Async GPU (needs restart)", s.async_gpu_emulation ? "On" : "Off",
+             "Runs GPU command processing on its own thread in parallel with the CPU. Faster, "
+             "but takes effect on next launch."},
+            {SettingRowStrictGpuSync, "Strict GPU Sync", s.strict_gpu_sync ? "On" : "Off",
+             "Waits for the GPU thread to catch up every frame instead of letting it lag behind. "
+             "Only matters with Async GPU on."},
             {SettingRowTextureFilter, "Texture Filter", TextureFilterName(s.texture_filter),
              "Add filters to your screen."},
             {SettingRowLinearFiltering, "Linear Filtering", s.filter_mode ? "On" : "Off",
@@ -237,6 +243,8 @@ void CycleSetting(MenuSettings& s, SettingRowIdx item, int dir) {
 bool IsBooleanSetting(SettingRowIdx item) {
     switch (item) {
     case SettingRowVSync:
+    case SettingRowAsyncGpu:
+    case SettingRowStrictGpuSync:
     case SettingRowAsyncShaders:
     case SettingRowDiskShaderCache:
     case SettingRowHwShader:
@@ -264,6 +272,12 @@ void ToggleSetting(MenuSettings& s, SettingRowIdx item) {
     switch (item) {
     case SettingRowVSync:
         s.use_vsync = !s.use_vsync;
+        break;
+    case SettingRowAsyncGpu:
+        s.async_gpu_emulation = !s.async_gpu_emulation;
+        break;
+    case SettingRowStrictGpuSync:
+        s.strict_gpu_sync = !s.strict_gpu_sync;
         break;
     case SettingRowAsyncShaders:
         s.async_shader_compilation = !s.async_shader_compilation;
@@ -337,6 +351,8 @@ bool IsPerGameEditable(SettingRowIdx item) {
     // be made a per-game override at all — flipping it in-game would either do nothing or leak
     // into the global default for every other title.
     case SettingRowCpuJit:
+    case SettingRowAsyncGpu:
+    case SettingRowStrictGpuSync:
     // R3 Screen Layouts opens its own multi-select picker in the library (OpenLayoutPicker),
     // which the in-game screen doesn't have; not a fit for the arm-and-cycle row model.
     case SettingRowLayoutCycle:

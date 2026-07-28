@@ -532,6 +532,8 @@ MenuSettings DefaultMenuSettings() {
     return MenuSettings{
         .resolution_factor = static_cast<int>(v.resolution_factor.GetDefault()),
         .use_vsync = v.use_vsync.GetDefault(),
+        .async_gpu_emulation = v.async_gpu_emulation.GetDefault(),
+        .strict_gpu_sync = v.strict_gpu_sync.GetDefault(),
         .async_shader_compilation = v.async_shader_compilation.GetDefault(),
         .use_disk_shader_cache = v.use_disk_shader_cache.GetDefault(),
         .use_hw_shader = v.use_hw_shader.GetDefault(),

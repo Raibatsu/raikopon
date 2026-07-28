@@ -68,6 +68,13 @@ void StepScreenLayout(int delta);
 // layout editor selecting Custom).
 void SyncScreenLayoutIndex();
 
+// Defers a framebuffer relayout to EmuThread's next loop iteration instead of applying it
+// immediately. With the async GPU thread, the renderer's framebuffer layout must only be touched
+// from the thread that owns it (EmuThread when async GPU is on); callers on the input/frontend
+// thread (e.g. the touch layout editor) that used to call
+// GPU().Renderer().UpdateCurrentFramebufferLayout() directly must go through this instead.
+void RequestFramebufferRelayout();
+
 // The name of the currently selected screen layout preset.
 const char* CurrentScreenLayoutName();
 

@@ -433,6 +433,10 @@ void SyncScreenLayoutIndex() {
     SyncLayoutIndex();
 }
 
+void RequestFramebufferRelayout() {
+    s_layout_update_pending.store(true, std::memory_order_release);
+}
+
 void StepScreenLayout(int delta) {
     auto& system = Core::System::GetInstance();
     if (!system.IsPoweredOn()) {

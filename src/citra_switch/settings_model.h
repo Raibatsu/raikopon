@@ -25,6 +25,8 @@ inline constexpr int kNumSettingsTabs = 4;
 enum SettingRowIdx {
     SettingRowResolution,
     SettingRowVSync,
+    SettingRowAsyncGpu,
+    SettingRowStrictGpuSync,
     SettingRowAsyncShaders,
     SettingRowDiskShaderCache,
     SettingRowHwShader,
