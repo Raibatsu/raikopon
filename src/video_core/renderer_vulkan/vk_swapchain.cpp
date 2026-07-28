@@ -270,6 +270,7 @@ void Swapchain::Destroy() {
     }
     image_acquired.clear();
     present_ready.clear();
+    image_count = 0;
 }
 
 void Swapchain::RefreshSemaphores() {
