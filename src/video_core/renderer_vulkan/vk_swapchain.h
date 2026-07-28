@@ -23,6 +23,12 @@ public:
     /// Creates (or recreates) the swapchain with a given size.
     void Create(u32 width, u32 height, vk::SurfaceKHR surface, bool low_refresh_rate);
 
+    /// Tears down the swapchain's own resources without touching the surface, so the window can
+    /// be handed to something else and reclaimed later with Create().
+    void DestroyResources() {
+        Destroy();
+    }
+
     /// Acquires the next image in the swapchain.
     bool AcquireNextImage();
 

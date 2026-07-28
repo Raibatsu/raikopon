@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <chrono>
+#include <thread>
 #include "common/horizon_thread.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -24,6 +25,22 @@ MICROPROFILE_DEFINE(Vulkan_WaitPresent, "Vulkan", "Wait For Present", MP_RGB(128
 namespace Vulkan {
 
 namespace {
+
+// TEMPORARY diagnostic. Common::Log is asynchronous (a queue drained by its own thread), so a
+// hard crash right after a log call can kill the process before that line ever reaches disk.
+// Common::Log::Stop() looked like the fix but is NOT a flush - it calls Close() on every backend
+// (FileBackend::Close() sets enabled=false permanently) and Start() never reopens it, so the
+// first "flush" silently blackholed every log call for the rest of the run. That's exactly what
+// happened last attempt: the log went quiet right after the very first checkpoint, which looked
+// like an immediate crash but was actually just the logger being disabled.
+// The real fix: FileBackend::Write() already calls file->Flush() (a real OS flush, no Close())
+// whenever the entry's level is >= Error, so callers pass LOG_ERROR for these checkpoints
+// specifically to get that side effect. The sleep gives the backend thread - a separate thread
+// that dequeues asynchronously - time to actually process the entry before we proceed; the level
+// only controls what Write() does once it runs, not when.
+void FlushLogSync() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+}
 
 bool CanBlitToSwapchain(const vk::PhysicalDevice& physical_device, vk::Format format) {
     const vk::FormatProperties props{physical_device.getFormatProperties(format)};
@@ -282,13 +299,35 @@ Frame* PresentWindow::GetRenderFrame() {
 void PresentWindow::Present(Frame* frame) {
     if (!use_present_thread) {
         scheduler.WaitWorker();
-        CopyToSwapchain(frame);
+        bool suspended;
+        {
+            std::scoped_lock lock{queue_mutex};
+            suspended = presentation_suspended.load(std::memory_order_relaxed);
+        }
+        if (!suspended) {
+            // SuspendPresentation() can now run concurrently from another thread even on this
+            // path, which didn't previously need to serialize against anything.
+            std::scoped_lock swapchain_lock{swapchain_mutex};
+            CopyToSwapchain(frame);
+        }
         free_queue.push(frame);
         return;
     }
 
+    // The push below happens whenever the scheduler gets around to executing this recorded
+    // callback, not synchronously with this Present() call - so the suspended check has to live
+    // here, atomically with the push under queue_mutex, not earlier in this function. Checking
+    // earlier would leave a window where a frame recorded just before suspend still gets pushed
+    // after it, straight at a swapchain SuspendPresentation is about to destroy.
     scheduler.Record([this, frame](vk::CommandBuffer) {
         std::unique_lock lock{queue_mutex};
+        if (presentation_suspended.load(std::memory_order_relaxed)) {
+            lock.unlock();
+            std::scoped_lock fl{free_mutex};
+            free_queue.push(frame);
+            free_cv.notify_one();
+            return;
+        }
         present_queue.push(frame);
         frame_cv.notify_one();
     });
@@ -356,6 +395,93 @@ void PresentWindow::PresentThread(std::stop_token token) {
         free_queue.push(frame);
         free_cv.notify_one();
     }
+}
+
+void PresentWindow::SuspendPresentation() {
+    if (presentation_suspended.load(std::memory_order_relaxed)) {
+        return;
+    }
+
+    // Gate first, then wait for the queue to drain - in that order. EmuThread's pause loop keeps
+    // calling SwapBuffers()/Present() every 16ms forever (see emulation.cpp), so if the gate were
+    // set after observing an empty queue, a frame recorded in that gap would still reach the
+    // present thread and crash it against a swapchain we're about to destroy. Setting the flag
+    // and waiting under the same queue_mutex critical section makes this atomic with Present()'s
+    // own check: any push recorded after this point sees the flag and diverts to free_queue
+    // instead, so once the queue is observed empty here, it is guaranteed to stay empty.
+    LOG_ERROR(Render_Vulkan, "Suspend: gating future frames, waiting for queue to drain");
+    FlushLogSync();
+    {
+        std::unique_lock lock{queue_mutex};
+        presentation_suspended.store(true, std::memory_order_relaxed);
+        frame_cv.wait(lock, [this] { return present_queue.empty(); });
+    }
+    LOG_ERROR(Render_Vulkan, "Suspend: queue drained, taking swapchain_mutex");
+    FlushLogSync();
+
+    // The queue being empty only proves the present thread has POPPED the last frame, not that
+    // it has finished CopyToSwapchain on it - it may still be mid-copy. Taking swapchain_mutex
+    // blocks until that finishes (see PresentThread's lock-exchange comment above).
+    std::scoped_lock lock{swapchain_mutex};
+    suspended_width = swapchain.GetWidth();
+    suspended_height = swapchain.GetHeight();
+    LOG_ERROR(Render_Vulkan, "Suspend: swapchain_mutex held, size {}x{}, calling scheduler.Finish()",
+             suspended_width, suspended_height);
+    FlushLogSync();
+
+    scheduler.Finish();
+    LOG_ERROR(Render_Vulkan, "Suspend: scheduler.Finish() done, calling graphics_queue.waitIdle()");
+    FlushLogSync();
+
+    graphics_queue.waitIdle();
+    LOG_ERROR(Render_Vulkan, "Suspend: graphics_queue.waitIdle() done, calling device.waitIdle()");
+    FlushLogSync();
+
+    instance.GetDevice().waitIdle();
+    LOG_ERROR(Render_Vulkan, "Suspend: device.waitIdle() done, destroying swapchain resources");
+    FlushLogSync();
+
+    swapchain.DestroyResources();
+    LOG_ERROR(Render_Vulkan, "Suspend: swapchain resources destroyed, destroying surface");
+    FlushLogSync();
+
+    // The Swapchain holds its own copy of this handle and destroys it in its destructor, so it
+    // must be handed a fresh one in ResumePresentation before anything can tear the app down -
+    // otherwise that destructor frees a stale surface.
+    instance.GetInstance().destroySurfaceKHR(surface);
+    surface = vk::SurfaceKHR{};
+    next_surface = surface;
+    LOG_ERROR(Render_Vulkan, "Presentation suspended, nwindow released");
+    FlushLogSync();
+}
+
+void PresentWindow::ResumePresentation() {
+    if (!presentation_suspended.load(std::memory_order_relaxed)) {
+        return;
+    }
+    LOG_ERROR(Render_Vulkan, "Resume: taking swapchain_mutex, calling CreateSurface");
+    FlushLogSync();
+
+    std::scoped_lock lock{swapchain_mutex};
+    surface = CreateSurface(instance.GetInstance(), emu_window);
+    LOG_ERROR(Render_Vulkan, "Resume: CreateSurface returned (valid={}), calling swapchain.Create",
+             static_cast<bool>(surface));
+    FlushLogSync();
+
+    next_surface = surface;
+    swapchain.Create(suspended_width, suspended_height, surface, low_refresh_rate);
+    LOG_ERROR(Render_Vulkan, "Resume: swapchain.Create returned, clearing suspend gate");
+    FlushLogSync();
+
+    {
+        // Symmetric with the setter above: clearing the gate under queue_mutex keeps it ordered
+        // consistently with Present()'s check rather than relying on the atomic alone.
+        std::scoped_lock qlock{queue_mutex};
+        presentation_suspended.store(false, std::memory_order_relaxed);
+    }
+    LOG_ERROR(Render_Vulkan, "Presentation resumed, swapchain recreated at {}x{}", suspended_width,
+             suspended_height);
+    FlushLogSync();
 }
 
 void PresentWindow::NotifySurfaceChanged() {

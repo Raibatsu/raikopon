@@ -49,6 +49,9 @@ filter_mode = true
 # Skip rendering the 3D right-eye view entirely, since Switch never displays it anyway (1, default
 # on Switch -- the shared upstream default is 0, since desktop/Android can still output real 3D).
 disable_right_eye_render = true
+# Independent top/bottom screen opacity for Custom Layout, 0-100 (100, default -- fully opaque).
+top_screen_opacity = 100
+bottom_screen_opacity = 100
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
 # Compile PICA vertex shaders to native code instead of interpreting them (1, default).

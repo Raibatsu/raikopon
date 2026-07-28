@@ -20,6 +20,7 @@
 #include "citra_switch/game_settings.h"
 #include "common/file_util.h"
 #include "common/horizon_thread.h"
+#include "common/logging/backend.h"
 #include "common/logging/log.h"
 #include "common/settings.h"
 #include "common/shader_compile_stats.h"
@@ -95,7 +96,7 @@ struct ScreenLayoutPreset {
     const char* name;
 };
 
-constexpr std::array<ScreenLayoutPreset, 9> s_layout_presets{{
+constexpr std::array<ScreenLayoutPreset, 10> s_layout_presets{{
     {Settings::LayoutOption::Default, false, false, false,
      Settings::SmallScreenPosition::BottomRight, "Vertical stack"},
     {Settings::LayoutOption::SideScreen, false, false, false,
@@ -114,6 +115,9 @@ constexpr std::array<ScreenLayoutPreset, 9> s_layout_presets{{
      Settings::SmallScreenPosition::BottomRight, "Hybrid screen"},
     {Settings::LayoutOption::Default, false, true, true,
      Settings::SmallScreenPosition::BottomRight, "Vertical stack (rotate console other way)"},
+    // Free-form rects from custom_top_*/custom_bottom_*, arranged by the touch layout editor.
+    {Settings::LayoutOption::CustomLayout, false, false, false,
+     Settings::SmallScreenPosition::BottomRight, "Custom"},
 }};
 
 // Kept consistent with Settings so the first press advances past the boot default.
@@ -364,6 +368,64 @@ void ResumeEmulation() {
 
 bool IsPaused() {
     return s_paused.load(std::memory_order_relaxed);
+}
+
+// Split from the libnx side of the probe because <switch.h> and core's headers can't coexist in
+// one TU (Result/u128/Service all collide) - the framebuffer half lives in citra_switch.cpp.
+// TEMPORARY diagnostic. Common::Log is asynchronous, so a hard crash right after a log call can
+// kill the process before that line reaches disk. Common::Log::Stop() looked like the fix but is
+// NOT a flush - it Close()s every backend (FileBackend::Close() sets enabled=false permanently)
+// and Start() never reopens it, so the previous attempt's first "flush" silently blackholed every
+// log call for the rest of the run - what looked like an instant crash was actually just the
+// logger going dark. FileBackend::Write() already does a real file->Flush() for entries at
+// Level::Error or above, with no Close() involved, so these checkpoints use LOG_ERROR
+// specifically for that side effect; the sleep gives the async backend thread time to actually
+// dequeue and process the entry before we move on, since the level only affects what Write() does
+// once it runs, not when.
+void FlushLogSync() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+}
+
+bool ReleaseWindowForMenu() {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        LOG_ERROR(Frontend, "nwindow handoff: no game running");
+        FlushLogSync();
+        return false;
+    }
+    LOG_ERROR(Frontend, "nwindow handoff: pausing emulation");
+    FlushLogSync();
+    PauseEmulation();
+    LOG_ERROR(Frontend, "nwindow handoff: suspending presentation");
+    FlushLogSync();
+    system.GPU().Renderer().SuspendPresentation();
+    LOG_ERROR(Frontend, "nwindow handoff: window released");
+    FlushLogSync();
+    return true;
+}
+
+void ReclaimWindowFromMenu() {
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        return;
+    }
+    LOG_ERROR(Frontend, "nwindow handoff: reclaiming window");
+    FlushLogSync();
+    system.GPU().Renderer().ResumePresentation();
+    LOG_ERROR(Frontend, "nwindow handoff: resuming emulation");
+    FlushLogSync();
+    ResumeEmulation();
+    LOG_ERROR(Frontend, "nwindow handoff: complete");
+    FlushLogSync();
+}
+
+void ProbeLog(const char* message) {
+    LOG_ERROR(Frontend, "{}", message);
+    FlushLogSync();
+}
+
+void SyncScreenLayoutIndex() {
+    SyncLayoutIndex();
 }
 
 void StepScreenLayout(int delta) {

@@ -11,9 +11,10 @@
 
 #include "citra_switch/applets/swkbd.h"
 #include "citra_switch/config.h"
+#include "citra_switch/ingame_settings.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
-#include "citra_switch/overlay_menu.h"
+#include "citra_switch/layout_editor.h"
 #include "common/horizon_thread.h"
 
 extern "C" {
@@ -123,46 +124,14 @@ u64 PollInput(PadState& pad, SwitchFrontend::InputState& state) {
         state.touch_pressed = true;
         state.touch_x = touch.touches[0].x;
         state.touch_y = touch.touches[0].y;
+        state.touch_count = std::min<std::uint32_t>(touch.count, state.touches.size());
+        for (std::uint32_t i = 0; i < state.touch_count; ++i) {
+            state.touches[i] = SwitchFrontend::TouchPoint{true, touch.touches[i].x,
+                                                          touch.touches[i].y};
+        }
     }
     return held;
 }
-
-struct QuickMenuRepeater {
-    static constexpr auto kInitialDelay = std::chrono::milliseconds(400);
-    static constexpr auto kRepeatInterval = std::chrono::milliseconds(83);
-
-    struct HoldState {
-        bool held = false;
-        std::chrono::steady_clock::time_point held_since{};
-        std::chrono::steady_clock::time_point last_fire{};
-    };
-    HoldState state[2]{}; // 0 = left, 1 = right
-
-    std::uint32_t Step(bool left, bool right) {
-        const bool wanted[2] = {left, right};
-        const auto now = std::chrono::steady_clock::now();
-        std::uint32_t fired = 0;
-        for (int d = 0; d < 2; ++d) {
-            HoldState& s = state[d];
-            if (!wanted[d]) {
-                s.held = false;
-                continue;
-            }
-            if (!s.held) {
-                s.held = true;
-                s.held_since = now;
-                s.last_fire = now;
-                fired |= 1u << d;
-                continue;
-            }
-            if (now - s.held_since >= kInitialDelay && now - s.last_fire >= kRepeatInterval) {
-                s.last_fire = now;
-                fired |= 1u << d;
-            }
-        }
-        return fired;
-    }
-};
 
 void RunGame(PadState& pad, const std::string& rom) {
     if (!SwitchFrontend::CreateWindow(nwindowGetDefault())) {
@@ -171,13 +140,12 @@ void RunGame(PadState& pad, const std::string& rom) {
         return;
     }
 
-    // Each game always starts with the touch pointer off and the quick menu closed.
+    // Each game always starts with the touch pointer off.
     SwitchFrontend::ResetPointer();
 
     if (SwitchFrontend::BootRom(rom)) {
         u64 prev_held = 0;
         std::uint64_t prev_input = 0;
-        QuickMenuRepeater quick_menu_repeater;
         while (appletMainLoop()) {
             // Blocks while the system keyboard is up. The emulation thread is waiting on it, so
             // nothing is being drawn meanwhile.
@@ -190,52 +158,61 @@ void RunGame(PadState& pad, const std::string& rom) {
             // remappable InputButton space so they respect the user's Remap Controls choices.
             const std::uint64_t input_pressed = state.buttons & ~prev_input;
 
-            // The +/- chord toggles the in-game quick menu.
+            // The layout editor owns the touchscreen and the face buttons while it's up, including
+            // Minus (reset), so everything below stays out of its way.
+            const bool editor_open = SwitchFrontend::IsLayoutEditorOpen();
+            if (editor_open) {
+                const SwitchFrontend::LayoutEditorNav editor_nav{
+                    .confirm = (pressed & HidNpadButton_A) != 0,
+                    .cancel = (pressed & HidNpadButton_B) != 0,
+                    .toggle_lock = (pressed & HidNpadButton_X) != 0,
+                    .reset = (pressed & HidNpadButton_Minus) != 0,
+                    .cycle_select = (pressed & (HidNpadButton_L | HidNpadButton_R)) != 0,
+                    .grow = (held & HidNpadButton_ZR) != 0,
+                    .shrink = (held & HidNpadButton_ZL) != 0,
+                    .opacity_up = (held & HidNpadButton_Right) != 0,
+                    .opacity_down = (held & HidNpadButton_Left) != 0,
+                };
+                SwitchFrontend::UpdateLayoutEditor(state, editor_nav);
+                SwitchFrontend::UpdateInput(SwitchFrontend::InputState{});
+            }
+
+            // The +/- chord opens the in-game settings screen: a native full-screen takeover via
+            // the nwindow handoff (ReleaseWindowForMenu/ReclaimWindowFromMenu), blocking this loop
+            // until the player closes it — unlike the old quick menu, there's no persistent
+            // "menu_open" state to poll each frame afterwards.
             constexpr u64 chord = HidNpadButton_Plus | HidNpadButton_Minus;
-            const bool chord_edge = (held & chord) == chord && (prev_held & chord) != chord;
+            const bool chord_edge =
+                !editor_open && (held & chord) == chord && (prev_held & chord) != chord;
             if (chord_edge) {
-                SwitchFrontend::ToggleQuickMenu();
+                SwitchFrontend::UpdateInput(SwitchFrontend::InputState{});
+                const bool quit_requested = SwitchFrontend::ShowInGameSettings(pad);
+                prev_held = held;
+                prev_input = state.buttons;
+                if (quit_requested) {
+                    break;
+                }
+                svcSleepThread(1'000'000);
+                continue;
             }
 
             constexpr u64 mirror_chord = HidNpadButton_StickL | HidNpadButton_Minus;
-            const bool mirror_chord_edge =
-                (held & mirror_chord) == mirror_chord && (prev_held & mirror_chord) != mirror_chord;
+            const bool mirror_chord_edge = !editor_open && (held & mirror_chord) == mirror_chord &&
+                                           (prev_held & mirror_chord) != mirror_chord;
             if (mirror_chord_edge) {
                 SwitchFrontend::MirrorScreenSides();
             }
 
-            const bool menu_open = SwitchFrontend::IsQuickMenuOpen();
+            // While the editor is up the guest sees neutral input. The editor already pushed its
+            // own neutral state above.
+            if (!editor_open) {
+                SwitchFrontend::UpdateInput(mirror_chord_edge ? SwitchFrontend::InputState{}
+                                                              : state);
+            }
 
-            // While the menu is up the guest sees neutral input.
-            SwitchFrontend::UpdateInput(menu_open || chord_edge || mirror_chord_edge
-                                            ? SwitchFrontend::InputState{}
-                                            : state);
-
-            if (menu_open && !chord_edge) {
-                // Left/right auto-repeat while held (unlike the other quick-menu directions),
-                // so value rows like the Movie CPU Throttle slider can be scrubbed quickly.
-                const std::uint32_t lr_repeat = quick_menu_repeater.Step(
-                    (held & (HidNpadButton_Left | HidNpadButton_StickLLeft)) != 0,
-                    (held & (HidNpadButton_Right | HidNpadButton_StickLRight)) != 0);
-                const SwitchFrontend::QuickMenuNav nav{
-                    .up = (pressed & (HidNpadButton_Up | HidNpadButton_StickLUp)) != 0,
-                    .down = (pressed & (HidNpadButton_Down | HidNpadButton_StickLDown)) != 0,
-                    .left = (lr_repeat & 1u) != 0,
-                    .right = (lr_repeat & 2u) != 0,
-                    .confirm = (pressed & HidNpadButton_A) != 0,
-                    .cancel = (pressed & HidNpadButton_B) != 0,
-                    .tab_prev = (pressed & HidNpadButton_L) != 0,
-                    .tab_next = (pressed & HidNpadButton_R) != 0,
-                    .page_prev = (pressed & HidNpadButton_ZL) != 0,
-                    .page_next = (pressed & HidNpadButton_ZR) != 0,
-                    .modify = (pressed & HidNpadButton_X) != 0,
-                    .remove = (pressed & HidNpadButton_Y) != 0,
-                };
-                if (SwitchFrontend::UpdateQuickMenu(nav) ==
-                    SwitchFrontend::QuickMenuAction::ExitGame) {
-                    break;
-                }
-            } else if (!menu_open) {
+            if (editor_open) {
+                // Nothing else may act on this frame's input.
+            } else {
                 using SwitchFrontend::ButtonMask;
                 using SwitchFrontend::GetMapping;
                 using SwitchFrontend::MappableControl;
@@ -273,7 +250,7 @@ void RunGame(PadState& pad, const std::string& rom) {
     }
 
     // Make sure a lingering overlay never survives into the next game or the library menu.
-    SwitchFrontend::CloseQuickMenu();
+    SwitchFrontend::CloseLayoutEditor(false);
     SwitchFrontend::DestroyWindow();
 }
 

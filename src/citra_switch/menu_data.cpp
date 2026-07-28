@@ -505,6 +505,7 @@ MenuSettings GetMenuSettings() {
         .use_integer_scaling = v.use_integer_scaling.GetValue(),
         .filter_mode = v.filter_mode.GetValue(),
         .show_fps = v.show_fps.GetValue(),
+        .custom_textures = v.custom_textures.GetValue(),
         .preload_textures = v.preload_textures.GetValue(),
         .dump_textures = v.dump_textures.GetValue(),
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue()),
@@ -518,6 +519,45 @@ MenuSettings GetMenuSettings() {
         .gyro_sensitivity_x = GetGyroSensitivityX(),
         .gyro_sensitivity_y = GetGyroSensitivityY(),
         .layout_cycle_mask = GetLayoutCycleMask(),
+    };
+}
+
+MenuSettings DefaultMenuSettings() {
+    const auto& v = Settings::values;
+    const int layout_count = GetScreenLayoutCount();
+    const std::uint32_t all_layouts =
+        layout_count >= 32 ? 0xFFFFFFFFu : (1u << layout_count) - 1;
+    return MenuSettings{
+        .resolution_factor = static_cast<int>(v.resolution_factor.GetDefault()),
+        .use_vsync = v.use_vsync.GetDefault(),
+        .async_shader_compilation = v.async_shader_compilation.GetDefault(),
+        .use_disk_shader_cache = v.use_disk_shader_cache.GetDefault(),
+        .use_hw_shader = v.use_hw_shader.GetDefault(),
+        .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetDefault(),
+        .skip_slow_draw = v.skip_slow_draw.GetDefault(),
+        .skip_texture_copy = v.skip_texture_copy.GetDefault(),
+        .skip_cpu_write = v.skip_cpu_write.GetDefault(),
+        .enable_compile_boost = v.enable_compile_boost.GetDefault(),
+        .disable_right_eye_render = v.disable_right_eye_render.GetDefault(),
+        .texture_filter = static_cast<int>(v.texture_filter.GetDefault()),
+        .use_integer_scaling = v.use_integer_scaling.GetDefault(),
+        .filter_mode = v.filter_mode.GetDefault(),
+        .show_fps = v.show_fps.GetDefault(),
+        .custom_textures = v.custom_textures.GetDefault(),
+        .preload_textures = v.preload_textures.GetDefault(),
+        .dump_textures = v.dump_textures.GetDefault(),
+        .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetDefault()),
+        .is_new_3ds = v.is_new_3ds.GetDefault(),
+        .use_cpu_jit = v.use_cpu_jit.GetDefault(),
+        .region_value = static_cast<int>(v.region_value.GetDefault()),
+        // Console/NAND setting and compile-time-fixed backend respectively — not reset.
+        .language = static_cast<int>(
+            Service::CFG::GetModule(Core::System::GetInstance())->GetSystemLanguage()),
+        .graphics_api = static_cast<int>(Settings::GetWorkingGraphicsAPI()),
+        .pointer_source = 0,      // Left stick, per default_ini.h.
+        .gyro_sensitivity_x = 100,
+        .gyro_sensitivity_y = 100,
+        .layout_cycle_mask = all_layouts, // Every preset enabled, per default_ini.h.
     };
 }
 
@@ -539,6 +579,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.use_integer_scaling = s.use_integer_scaling;
     v.filter_mode = s.filter_mode;
     v.show_fps = s.show_fps;
+    v.custom_textures = s.custom_textures;
     v.preload_textures = s.preload_textures;
     v.dump_textures = s.dump_textures;
     v.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage, 5, 400);

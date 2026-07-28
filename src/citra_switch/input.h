@@ -76,6 +76,13 @@ struct MotionState {
     float gyro_z{};
 };
 
+// A single contact on the Switch touchscreen, in its native 1280x720 space.
+struct TouchPoint {
+    bool pressed{};
+    std::uint32_t x{};
+    std::uint32_t y{};
+};
+
 struct InputState {
     std::uint64_t buttons{};
     std::int32_t left_x{};
@@ -85,6 +92,10 @@ struct InputState {
     bool touch_pressed{};
     std::uint32_t touch_x{};
     std::uint32_t touch_y{};
+    // Raw contacts, for gestures that need more than the single point the guest touchscreen can
+    // represent (the layout editor's pinch). touches[0] mirrors touch_pressed/x/y.
+    std::array<TouchPoint, 2> touches{};
+    std::uint32_t touch_count{};
     MotionState motion{};
 };
 

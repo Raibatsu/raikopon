@@ -348,6 +348,20 @@ FramebufferLayout CustomFrameLayout(u32 width, u32 height, bool is_swapped, bool
         is_swapped ? res.top_opacity = opacity_value : res.bottom_opacity = opacity_value;
     }
 
+    // Independent per-screen opacity, additional to the "secondary screen" scalar above — left at
+    // their 100% default this is a no-op multiply, so it doesn't change existing behaviour for
+    // frontends (desktop Qt/Android) that only expose custom_second_layer_opacity.
+    if (!is_portrait_mode) {
+        const float top_value = Settings::values.top_screen_opacity.GetValue() / 100.0f;
+        const float bottom_value = Settings::values.bottom_screen_opacity.GetValue() / 100.0f;
+        if (top_value < 1) {
+            res.top_opacity *= top_value;
+        }
+        if (bottom_value < 1) {
+            res.bottom_opacity *= bottom_value;
+        }
+    }
+
     const u16 top_x = is_portrait_mode ? Settings::values.custom_portrait_top_x.GetValue()
                                        : Settings::values.custom_top_x.GetValue();
     const u16 top_width = is_portrait_mode ? Settings::values.custom_portrait_top_width.GetValue()

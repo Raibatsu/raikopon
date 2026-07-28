@@ -597,6 +597,11 @@ struct Values {
     Setting<u16> custom_bottom_width{640, Keys::custom_bottom_width};
     Setting<u16> custom_bottom_height{480, Keys::custom_bottom_height};
     Setting<u16> custom_second_layer_opacity{100, Keys::custom_second_layer_opacity};
+    // Independent per-screen opacity (Custom Layout only), additional to the scalar above —
+    // 100 (fully opaque) is a no-op, so leaving these untouched doesn't change existing
+    // custom_second_layer_opacity behaviour. Switchable so they can be a per-game override.
+    SwitchableSetting<u16> top_screen_opacity{100, Keys::top_screen_opacity};
+    SwitchableSetting<u16> bottom_screen_opacity{100, Keys::bottom_screen_opacity};
     SwitchableSetting<AspectRatio> aspect_ratio{AspectRatio::Default, Keys::aspect_ratio};
     SwitchableSetting<bool> screen_top_stretch{false, Keys::screen_top_stretch};
     Setting<u16> screen_top_leftright_padding{0, Keys::screen_top_leftright_padding};

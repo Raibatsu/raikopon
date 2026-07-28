@@ -63,6 +63,11 @@ void MirrorScreenSides();
 // Steps the screen layout by `delta` presets and applies it live.
 void StepScreenLayout(int delta);
 
+// Re-points the preset index at whichever preset matches the live settings, so the name the menus
+// report stays truthful after something outside the stepper changed the layout (e.g. the touch
+// layout editor selecting Custom).
+void SyncScreenLayoutIndex();
+
 // The name of the currently selected screen layout preset.
 const char* CurrentScreenLayoutName();
 
@@ -97,5 +102,19 @@ void ResumeEmulation();
 
 // True while emulation is paused via PauseEmulation().
 bool IsPaused();
+
+// Pauses emulation and releases the nwindow from the Vulkan swapchain so the caller can draw to
+// it with a libnx framebuffer. Returns false if no game is running. The libnx half has to live in
+// a translation unit that includes <switch.h>, which core's headers can't coexist with.
+bool ReleaseWindowForMenu();
+
+// Undoes ReleaseWindowForMenu: recreates the surface/swapchain and resumes emulation.
+void ReclaimWindowFromMenu();
+
+// TEMPORARY. Logs `message` via Common::Log and flushes synchronously before returning. Exists so
+// citra_switch.cpp's nwindow probe (which can't include common/logging/log.h - see the comment at
+// its call site) can still get a checkpoint into azahar_log.txt that survives a crash on the very
+// next line.
+void ProbeLog(const char* message);
 
 } // namespace SwitchFrontend

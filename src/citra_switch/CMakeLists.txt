@@ -8,6 +8,8 @@ add_executable(citra_switch
     applets/swkbd.h
     applets/swkbd_horizon.cpp
     applets/swkbd_horizon.h
+    canvas.cpp
+    canvas.h
     citra_switch.cpp
     config.cpp
     config.h
@@ -24,16 +26,22 @@ add_executable(citra_switch
     horizon_exception_entry.S
     horizon_exception_entry.h
     horizon_sys_stubs.cpp
+    ingame_cheats.cpp
+    ingame_cheats.h
+    ingame_settings.cpp
+    ingame_settings.h
     input.cpp
     input.h
+    layout_editor.cpp
+    layout_editor.h
     keyboard_prompt.h
     menu.cpp
     menu.h
     menu_data.cpp
     menu_data.h
-    overlay_menu.cpp
-    overlay_menu.h
     rail_icons.h
+    settings_model.cpp
+    settings_model.h
 )
 
 # oaknut_horizon_jit is pulled in transitively via oaknut

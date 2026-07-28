@@ -148,6 +148,8 @@ private:
         ReadSetting("Renderer", Settings::values.use_integer_scaling);
         ReadSetting("Renderer", Settings::values.filter_mode);
         ReadSetting("Renderer", Settings::values.disable_right_eye_render);
+        ReadSetting("Renderer", Settings::values.top_screen_opacity);
+        ReadSetting("Renderer", Settings::values.bottom_screen_opacity);
 
         // Utility
         ReadSetting("Utility", Settings::values.custom_textures);
@@ -235,7 +237,9 @@ private:
            << '\n';
         ss << "filter_mode = " << (v.filter_mode.GetValue() ? "true" : "false") << '\n';
         ss << "disable_right_eye_render = "
-           << (v.disable_right_eye_render.GetValue() ? "true" : "false") << "\n\n";
+           << (v.disable_right_eye_render.GetValue() ? "true" : "false") << '\n';
+        ss << "top_screen_opacity = " << v.top_screen_opacity.GetValue() << '\n';
+        ss << "bottom_screen_opacity = " << v.bottom_screen_opacity.GetValue() << "\n\n";
 
         ss << "[Utility]\n";
         ss << "custom_textures = " << (v.custom_textures.GetValue() ? "true" : "false") << '\n';

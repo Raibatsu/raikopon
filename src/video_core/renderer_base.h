@@ -64,6 +64,14 @@ public:
     // if second == true then it is the second screen
     virtual void NotifySurfaceChanged(bool second) {}
 
+    /// Releases the presentation surface so the frontend can draw to the window itself (the
+    /// library menu's libnx framebuffer). Emulation must be paused first. No-op where the backend
+    /// doesn't support handing the window back.
+    virtual void SuspendPresentation() {}
+
+    /// Reclaims the window after SuspendPresentation.
+    virtual void ResumePresentation() {}
+
     /// Returns the resolution scale factor relative to the native 3DS screen resolution
     u32 GetResolutionScaleFactor();
 

@@ -63,6 +63,20 @@ public:
         return swapchain.GetImageCount();
     }
 
+    /// Releases the swapchain and the VI surface so something else (the libnx framebuffer the
+    /// library menu draws with) can claim the nwindow. Emulation must already be paused: this
+    /// drains the present queue and waits for the GPU to go idle, but nothing stops a newly
+    /// produced frame from queueing behind it.
+    void SuspendPresentation();
+
+    /// Re-creates the surface and swapchain after SuspendPresentation. Must be called before
+    /// anything tries to present again, and before shutdown.
+    void ResumePresentation();
+
+    bool IsPresentationSuspended() const noexcept {
+        return presentation_suspended.load(std::memory_order_relaxed);
+    }
+
 private:
     void PresentThread(std::stop_token token);
 
@@ -96,6 +110,13 @@ private:
     bool blit_supported;
     bool use_present_thread{true};
     void* last_render_surface{};
+    // Guarded by queue_mutex where it matters for correctness (see Present()): EmuThread's pause
+    // loop keeps calling SwapBuffers()/Present() every 16ms indefinitely (see emulation.cpp), so
+    // this has to gate every future push, not just reflect a one-time drain. The atomic is only
+    // for the unguarded external IsPresentationSuspended() poll below.
+    std::atomic<bool> presentation_suspended{};
+    u32 suspended_width{};
+    u32 suspended_height{};
 };
 
 } // namespace Vulkan

@@ -95,6 +95,7 @@ struct MenuSettings {
     bool use_integer_scaling{};   // Scale the screen by whole-number factors only.
     bool filter_mode{};           // Linear (on) vs nearest-neighbor (off) filtering.
     bool show_fps{};              // On-screen framerate counter.
+    bool custom_textures{};       // Enable loading a custom texture pack at all.
     bool preload_textures{};      // Load the whole custom texture pack up front.
     bool dump_textures{};         // Write the game's textures out to disk.
     int cpu_clock_percentage{};   // 5..400.
@@ -151,6 +152,12 @@ bool EnsureDirectory(const std::string& directory);
 
 // Snapshots the editable settings from Settings::values.
 MenuSettings GetMenuSettings();
+
+// Every field's compile-time default (Settings::values.field.GetDefault() for the ones backed by
+// a real Setting/SwitchableSetting), not whatever config.ini currently has loaded. `language` and
+// `graphics_api` are left at their current live value — the former is a console/NAND setting, not
+// an emulator one, and the latter has no in-app control on Switch (one backend per build).
+MenuSettings DefaultMenuSettings();
 
 // Applies edited settings to Settings::values and saves config.ini.
 void SetMenuSettings(const MenuSettings& settings);
