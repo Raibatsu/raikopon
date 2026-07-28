@@ -108,17 +108,30 @@ private:
 
     template <typename Type, bool ranged>
     void ReadSetting(const std::string& group, Settings::Setting<Type, ranged>& setting) {
+        Type default_value = setting.GetDefault();
+        if constexpr (std::is_integral_v<Type> && !std::is_same_v<Type, bool>) {
+            if (group == "Renderer" &&
+                setting.GetLabel() == Settings::values.factor_3d.GetLabel()) {
+                default_value = static_cast<Type>(60);
+            } else if (group == "Layout" &&
+                       setting.GetLabel() == Settings::values.cardboard_x_shift.GetLabel()) {
+                default_value = static_cast<Type>(35);
+            } else if (group == "Layout" &&
+                       setting.GetLabel() == Settings::values.cardboard_y_shift.GetLabel()) {
+                default_value = static_cast<Type>(0);
+            }
+        }
+
         if constexpr (std::is_same_v<Type, std::string>) {
-            std::string value = config->Get(group, setting.GetLabel(), setting.GetDefault());
-            setting = value.empty() ? setting.GetDefault() : std::move(value);
+            std::string value = config->Get(group, setting.GetLabel(), default_value);
+            setting = value.empty() ? default_value : std::move(value);
         } else if constexpr (std::is_same_v<Type, bool>) {
-            setting = config->GetBoolean(group, setting.GetLabel(), setting.GetDefault());
+            setting = config->GetBoolean(group, setting.GetLabel(), default_value);
         } else if constexpr (std::is_floating_point_v<Type>) {
-            setting =
-                static_cast<Type>(config->GetReal(group, setting.GetLabel(), setting.GetDefault()));
+            setting = static_cast<Type>(config->GetReal(group, setting.GetLabel(), default_value));
         } else {
             setting = static_cast<Type>(config->GetInteger(
-                group, setting.GetLabel(), static_cast<long>(setting.GetDefault())));
+                group, setting.GetLabel(), static_cast<long>(default_value)));
         }
     }
 
@@ -149,6 +162,13 @@ private:
         ReadSetting("Renderer", Settings::values.texture_filter);
         ReadSetting("Renderer", Settings::values.use_integer_scaling);
         ReadSetting("Renderer", Settings::values.filter_mode);
+        ReadSetting("Renderer", Settings::values.render_3d);
+        ReadSetting("Renderer", Settings::values.factor_3d);
+        ReadSetting("Renderer", Settings::values.swap_eyes_3d);
+        ReadSetting("Renderer", Settings::values.mono_render_option);
+        ReadSetting("Renderer", Settings::values.cardboard_screen_size);
+        ReadSetting("Renderer", Settings::values.cardboard_x_shift);
+        ReadSetting("Renderer", Settings::values.cardboard_y_shift);
         ReadSetting("Renderer", Settings::values.disable_right_eye_render);
         ReadSetting("Renderer", Settings::values.top_screen_opacity);
         ReadSetting("Renderer", Settings::values.bottom_screen_opacity);
@@ -241,6 +261,13 @@ private:
         ss << "use_integer_scaling = " << (v.use_integer_scaling.GetValue() ? "true" : "false")
            << '\n';
         ss << "filter_mode = " << (v.filter_mode.GetValue() ? "true" : "false") << '\n';
+        ss << "render_3d = " << static_cast<int>(v.render_3d.GetValue()) << '\n';
+        ss << "factor_3d = " << v.factor_3d.GetValue() << '\n';
+        ss << "swap_eyes_3d = " << (v.swap_eyes_3d.GetValue() ? "true" : "false") << '\n';
+        ss << "mono_render_option = " << static_cast<int>(v.mono_render_option.GetValue()) << '\n';
+        ss << "cardboard_screen_size = " << v.cardboard_screen_size.GetValue() << '\n';
+        ss << "cardboard_x_shift = " << v.cardboard_x_shift.GetValue() << '\n';
+        ss << "cardboard_y_shift = " << v.cardboard_y_shift.GetValue() << '\n';
         ss << "disable_right_eye_render = "
            << (v.disable_right_eye_render.GetValue() ? "true" : "false") << '\n';
         ss << "top_screen_opacity = " << v.top_screen_opacity.GetValue() << '\n';

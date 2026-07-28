@@ -50,6 +50,22 @@ texture_filter =
 use_integer_scaling =
 # Smooth (bilinear) filtering of the 3DS's low native resolution instead of a sharp/blocky look (1, default).
 filter_mode = true
+# Stereoscopic 3D mode. 0: Off (default), 1: Side by side, 2: Side by side (full), 3: Anaglyph,
+# 4: Interlaced, 5: Reverse interlaced, 6: Nintendo Labo VR (side-by-side split scaled/aligned for
+# a cardboard-style viewer held up to the screen).
+render_3d =
+# Depth of the 3D effect, 0-100 (0, default).
+factor_3d =
+# Swap which eye's image is shown on which side (0, default).
+swap_eyes_3d = false
+# Which eye's view is used when only one is rendered (e.g. 2D or Anaglyph). 0: Left eye (default),
+# 1: Right eye.
+mono_render_option =
+# Labo VR viewport size as a percentage of the full layout, 30-100 (100, default).
+cardboard_screen_size = 100
+# Labo VR horizontal/vertical eye alignment, -100 to 100 (0, default -- centered).
+cardboard_x_shift = 0
+cardboard_y_shift = 0
 # Skip rendering the 3D right-eye view entirely, since Switch never displays it anyway (1, default
 # on Switch -- the shared upstream default is 0, since desktop/Android can still output real 3D).
 disable_right_eye_render = true
