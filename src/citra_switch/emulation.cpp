@@ -412,6 +412,14 @@ bool ReleaseWindowForMenu() {
     LOG_ERROR(Frontend, "nwindow handoff: pausing emulation");
     FlushLogSync();
     PauseEmulation();
+    // With async_gpu_emulation on, SwapBuffers() (still called every 16ms by EmuThread's pause
+    // loop below, for the touch layout editor's overlay case) only enqueues work for the GPU
+    // thread instead of presenting synchronously. PauseEmulation() alone doesn't guarantee that
+    // thread has finished any command queued right before the pause took effect, so without this
+    // wait SuspendPresentation() below can destroy the swapchain out from under a command the GPU
+    // thread is still mid-flight on - corrupting its fence/image-index tracking so frames never
+    // present again after ResumePresentation() recreates it (stuck black screen on menu close).
+    system.GPU().WaitIdle();
     LOG_ERROR(Frontend, "nwindow handoff: suspending presentation");
     FlushLogSync();
     system.GPU().Renderer().SuspendPresentation();
