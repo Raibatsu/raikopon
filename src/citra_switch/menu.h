@@ -25,7 +25,7 @@ struct MenuResult {
 MenuResult RunMenu(PadState& pad);
 
 // Queues a one-shot notice for the next RunMenu entry.
-void SetMenuNotice(const std::string& text);
+void SetMenuNotice(const std::string& text, bool error = true);
 
 // Queues a blocking, single-button popup to show the next time RunMenu is entered
 // (e.g. after a failed launch attempt).

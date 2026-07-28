@@ -40,6 +40,7 @@ std::atomic<bool> s_stop{true};
 // Set true once system.Load succeeds.
 // This lets the menu tell a crash/bad ROM apart from a clean exit.
 std::atomic<bool> s_load_ok{false};
+std::atomic<bool> s_artic_disconnected{false};
 // Layout requests originate on the frontend thread and are consumed by the sole GPU producer.
 std::atomic<bool> s_layout_update_pending{false};
 
@@ -228,6 +229,8 @@ void EmuThread(std::string path) {
 
             const Core::System::ResultStatus load_result = system.Load(*window, path);
             if (load_result != Core::System::ResultStatus::Success) {
+                s_artic_disconnected =
+                    load_result == Core::System::ResultStatus::ErrorArticDisconnected;
                 LOG_CRITICAL(Frontend, "Failed to load ROM '{}' (error {})", path,
                              static_cast<int>(load_result));
                 window->DoneCurrent();
@@ -275,6 +278,8 @@ void EmuThread(std::string path) {
             if (result == Core::System::ResultStatus::ShutdownRequested) {
                 LOG_INFO(Frontend, "Guest requested shutdown");
             } else {
+                s_artic_disconnected =
+                    result == Core::System::ResultStatus::ErrorArticDisconnected;
                 LOG_CRITICAL(Frontend, "Emulation halted: {} (error {})", system.GetStatusDetails(),
                              static_cast<int>(result));
             }
@@ -307,6 +312,7 @@ bool BootRom(const std::string& rom_arg) {
     LOG_INFO(Frontend, "Booting ROM {}", path);
 
     s_load_ok = false;
+    s_artic_disconnected = false;
     s_paused = false;
     auto& system = Core::System::GetInstance();
     FileUtil::SetCurrentRomPath(path);
@@ -572,6 +578,10 @@ void SetMovieThrottleClockPercentage(s32 percentage) {
 
 bool LoadFailed() {
     return !s_load_ok;
+}
+
+bool ArticDisconnected() {
+    return s_artic_disconnected;
 }
 
 void StopRom() {
