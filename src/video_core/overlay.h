@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -12,31 +13,52 @@
 // the game.
 namespace VideoCore {
 
-// One line in the overlay. Actions (Resume, Exit, etc.) carry no value.
-struct OverlayMenuItem {
-    std::string label;
-    std::string value;
-    bool is_action{};
+// A screen rectangle in the editor's canvas space (the same absolute output pixels the
+// custom_top_*/custom_bottom_* settings use).
+struct LayoutEditorRect {
+    int x{}, y{}, w{}, h{};
 };
 
-struct OverlayMenuState {
+// Description of the touch layout editor, drawn over the game while it is open.
+struct LayoutEditorState {
     bool visible{};
-    std::string title;
-    std::string prev_tab;
-    std::string next_tab;
-    std::vector<OverlayMenuItem> items;
-    int selected{};
-    bool armed{}; // True while the selected row is armed for joystick left/right adjustment.
-    std::string hint; // Footer help text.
+    LayoutEditorRect top;
+    LayoutEditorRect bottom;
+    int canvas_width{};
+    int canvas_height{};
+    bool selected_top{};
+    bool selected_bottom{};
+    bool aspect_locked{};
 };
 
-// Publishes the latest overlay description (called from the input thread).
-void SetOverlayMenuState(const OverlayMenuState& state);
+void SetLayoutEditorState(const LayoutEditorState& state);
+LayoutEditorState GetLayoutEditorState();
+bool IsLayoutEditorVisible();
 
-// Snapshots the current overlay description (called from the renderer/emulation thread).
-OverlayMenuState GetOverlayMenuState();
+// The settings screen rendered as a CPU RGBA canvas (0xAABBGGRR words, i.e. R,G,B,A bytes) and
+// handed to the active renderer to draw over the game. `version` bumps on every published frame so
+// the renderer only re-uploads when the pixels actually changed.
+struct MenuCanvas {
+    bool visible{};
+    std::vector<std::uint32_t> pixels;
+    int width{};
+    int height{};
+    std::uint64_t version{};
+};
 
-// Skip the copy above when nothing is shown.
-bool IsOverlayMenuVisible();
+// Publishes a newly drawn canvas (called from the input thread). Bumps the version.
+void SetMenuCanvas(const std::uint32_t* pixels, int width, int height);
+
+// Hides the canvas without publishing pixels.
+void ClearMenuCanvas();
+
+// Copies the current canvas out (called from the emulation/render thread).
+MenuCanvas GetMenuCanvas();
+
+// Cheap check so the renderer can skip the copy above entirely.
+bool IsMenuCanvasVisible();
+
+// The version of the latest published canvas, so the renderer can skip re-uploading.
+std::uint64_t GetMenuCanvasVersion();
 
 } // namespace VideoCore

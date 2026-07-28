@@ -24,6 +24,7 @@
 
 #include "video_core/host_shaders/vulkan_cursor_frag.h"
 #include "video_core/host_shaders/vulkan_cursor_vert.h"
+#include "video_core/host_shaders/vulkan_menu_frag.h"
 #include "video_core/host_shaders/vulkan_overlay_frag.h"
 #include "video_core/host_shaders/vulkan_overlay_vert.h"
 #include "video_core/renderer_vulkan/overlay_font.h"
@@ -188,6 +189,10 @@ RendererVulkan::~RendererVulkan() {
     device.destroySampler(overlay_font_sampler);
     device.destroyImageView(overlay_font_view);
     vmaDestroyImage(instance.GetAllocator(), overlay_font_image, overlay_font_allocation);
+
+    device.destroyPipeline(menu_pipeline);
+    device.destroyShaderModule(menu_fragment_shader);
+    DestroyMenuCanvas();
 }
 
 void RendererVulkan::PrepareRendertarget() {
@@ -338,6 +343,8 @@ void RendererVulkan::CompileShaders() {
         Compile(HostShaders::VULKAN_OVERLAY_VERT, vk::ShaderStageFlagBits::eVertex, device);
     overlay_fragment_shader =
         Compile(HostShaders::VULKAN_OVERLAY_FRAG, vk::ShaderStageFlagBits::eFragment, device);
+    menu_fragment_shader =
+        Compile(HostShaders::VULKAN_MENU_FRAG, vk::ShaderStageFlagBits::eFragment, device);
 
     auto properties = instance.GetPhysicalDevice().getProperties();
     for (std::size_t i = 0; i < present_samplers.size(); i++) {
@@ -950,6 +957,28 @@ void RendererVulkan::BuildPipelines() {
             instance.GetDevice().createGraphicsPipeline({}, overlay_pipeline_info);
         ASSERT_MSG(result == vk::Result::eSuccess, "Unable to build overlay pipeline");
         overlay_pipeline = pipeline;
+
+        // Same state, same vertex layout, same pipeline layout — only the fragment shader differs.
+        const std::array menu_shader_stages = {
+            vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eVertex,
+                .module = overlay_vertex_shader,
+                .pName = "main",
+            },
+            vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eFragment,
+                .module = menu_fragment_shader,
+                .pName = "main",
+            },
+        };
+        vk::GraphicsPipelineCreateInfo menu_pipeline_info = overlay_pipeline_info;
+        menu_pipeline_info.stageCount = static_cast<u32>(menu_shader_stages.size());
+        menu_pipeline_info.pStages = menu_shader_stages.data();
+
+        const auto [menu_result, menu_pipe] =
+            instance.GetDevice().createGraphicsPipeline({}, menu_pipeline_info);
+        ASSERT_MSG(menu_result == vk::Result::eSuccess, "Unable to build menu pipeline");
+        menu_pipeline = menu_pipe;
     }
 }
 
@@ -1368,7 +1397,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     OverlayDraw fps_overlay = PrepareFpsOverlay(layout);
     OverlayDraw shader_compile_overlay = PrepareShaderCompileOverlay(layout);
     OverlayDraw loading_overlay = PrepareLoadingOverlay(layout);
-    OverlayDraw quick_menu = PrepareQuickMenu(layout);
+    OverlayDraw layout_editor = PrepareLayoutEditor(layout);
 
     PrepareDraw(frame, layout);
 
@@ -1411,7 +1440,10 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     RecordOverlay(std::move(fps_overlay));
     RecordOverlay(std::move(shader_compile_overlay));
     RecordOverlay(std::move(loading_overlay));
-    RecordOverlay(std::move(quick_menu));
+    RecordOverlay(std::move(layout_editor));
+
+    // Last, so the settings screen covers the game and every other overlay.
+    DrawMenuCanvas();
 
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
 }
@@ -1796,13 +1828,267 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLoadingOverlay(
     return overlay;
 }
 
-RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
+void RendererVulkan::CreateMenuCanvas(u32 width, u32 height) {
+    vk::Device device = instance.GetDevice();
+
+    const vk::ImageCreateInfo image_info = {
+        .imageType = vk::ImageType::e2D,
+        // The canvas words are 0xAABBGGRR, i.e. R,G,B,A in memory order.
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .extent = {width, height, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    };
+    const VmaAllocationCreateInfo alloc_info = {
+        .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+    };
+    VkImage unsafe_image{};
+    VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
+    VkResult result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
+                                     &unsafe_image, &menu_canvas_allocation, nullptr);
+    if (result != VK_SUCCESS) [[unlikely]] {
+        LOG_ERROR(Render_Vulkan, "Failed allocating menu canvas image with error {}", result);
+        return;
+    }
+    menu_canvas_image = vk::Image{unsafe_image};
+
+    const vk::ImageViewCreateInfo view_info = {
+        .image = menu_canvas_image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .subresourceRange{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+    menu_canvas_view = device.createImageView(view_info);
+
+    // Nearest: the canvas is authored at output resolution, so any filtering would only blur text.
+    const vk::SamplerCreateInfo sampler_info = {
+        .magFilter = vk::Filter::eNearest,
+        .minFilter = vk::Filter::eNearest,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        .anisotropyEnable = false,
+        .compareEnable = false,
+        .borderColor = vk::BorderColor::eFloatTransparentBlack,
+        .unnormalizedCoordinates = false,
+    };
+    menu_canvas_sampler = device.createSampler(sampler_info);
+
+    // Persistent staging buffer: the canvas is re-uploaded whenever the menu redraws, so
+    // allocating one per upload would churn a few MiB every frame the menu is open.
+    const vk::DeviceSize canvas_size = vk::DeviceSize{width} * height * 4;
+    const vk::BufferCreateInfo staging_info = {
+        .size = canvas_size,
+        .usage = vk::BufferUsageFlagBits::eTransferSrc,
+    };
+    const VmaAllocationCreateInfo staging_alloc_info = {
+        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    VkBuffer unsafe_staging{};
+    VmaAllocationInfo staging_mapped{};
+    VkBufferCreateInfo unsafe_staging_info = static_cast<VkBufferCreateInfo>(staging_info);
+    result = vmaCreateBuffer(instance.GetAllocator(), &unsafe_staging_info, &staging_alloc_info,
+                             &unsafe_staging, &menu_staging_allocation, &staging_mapped);
+    if (result != VK_SUCCESS) [[unlikely]] {
+        LOG_ERROR(Render_Vulkan, "Failed allocating menu canvas staging buffer with error {}",
+                  result);
+        return;
+    }
+    menu_staging_buffer = vk::Buffer{unsafe_staging};
+    menu_staging_mapped = staging_mapped.pMappedData;
+
+    // Same binding shape as the overlay atlas, so overlay_descriptor_layout is reused.
+    const vk::DescriptorPoolSize pool_size = {
+        .type = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+    };
+    menu_descriptor_pool = device.createDescriptorPoolUnique({
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size,
+    });
+    const vk::DescriptorSetLayout set_layout = *overlay_descriptor_layout;
+    menu_descriptor_set = device.allocateDescriptorSets({
+        .descriptorPool = *menu_descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &set_layout,
+    })[0];
+
+    const vk::DescriptorImageInfo image_desc = {
+        .sampler = menu_canvas_sampler,
+        .imageView = menu_canvas_view,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    const vk::WriteDescriptorSet write = {
+        .dstSet = menu_descriptor_set,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .pImageInfo = &image_desc,
+    };
+    device.updateDescriptorSets(write, {});
+
+    menu_canvas_width = width;
+    menu_canvas_height = height;
+    menu_canvas_uploaded_version = 0;
+}
+
+void RendererVulkan::DestroyMenuCanvas() {
+    vk::Device device = instance.GetDevice();
+    menu_descriptor_pool.reset();
+    menu_descriptor_set = vk::DescriptorSet{};
+    if (menu_staging_buffer) {
+        vmaDestroyBuffer(instance.GetAllocator(), menu_staging_buffer, menu_staging_allocation);
+        menu_staging_buffer = vk::Buffer{};
+        menu_staging_allocation = {};
+        menu_staging_mapped = nullptr;
+    }
+    if (menu_canvas_sampler) {
+        device.destroySampler(menu_canvas_sampler);
+        menu_canvas_sampler = vk::Sampler{};
+    }
+    if (menu_canvas_view) {
+        device.destroyImageView(menu_canvas_view);
+        menu_canvas_view = vk::ImageView{};
+    }
+    if (menu_canvas_image) {
+        vmaDestroyImage(instance.GetAllocator(), menu_canvas_image, menu_canvas_allocation);
+        menu_canvas_image = vk::Image{};
+        menu_canvas_allocation = {};
+    }
+    menu_canvas_width = 0;
+    menu_canvas_height = 0;
+    menu_canvas_uploaded_version = 0;
+}
+
+void RendererVulkan::DrawMenuCanvas() {
+    if (!VideoCore::IsMenuCanvasVisible()) {
+        return;
+    }
+    const VideoCore::MenuCanvas canvas = VideoCore::GetMenuCanvas();
+    if (!canvas.visible || canvas.width <= 0 || canvas.height <= 0 || canvas.pixels.empty()) {
+        return;
+    }
+
+    const u32 width = static_cast<u32>(canvas.width);
+    const u32 height = static_cast<u32>(canvas.height);
+    if (menu_canvas_image && (menu_canvas_width != width || menu_canvas_height != height)) {
+        // The canvas is a fixed 1280x720 today; if that ever changes, rebuild rather than
+        // uploading into a mismatched image.
+        scheduler.Finish();
+        DestroyMenuCanvas();
+    }
+    if (!menu_canvas_image) {
+        CreateMenuCanvas(width, height);
+        if (!menu_canvas_image || !menu_staging_mapped) {
+            return;
+        }
+    }
+
+    if (canvas.version != menu_canvas_uploaded_version) {
+        const std::size_t bytes = canvas.pixels.size() * sizeof(u32);
+        std::memcpy(menu_staging_mapped, canvas.pixels.data(), bytes);
+        menu_canvas_uploaded_version = canvas.version;
+
+        renderpass_cache.EndRendering();
+        scheduler.Record([image = menu_canvas_image, staging = menu_staging_buffer, width,
+                          height](vk::CommandBuffer cmdbuf) {
+            const vk::ImageSubresourceRange range = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            };
+            // eUndefined is correct here even on re-upload: the copy below rewrites every texel,
+            // so discarding the previous contents is exactly what we want.
+            const vk::ImageMemoryBarrier to_transfer = {
+                .srcAccessMask = vk::AccessFlagBits::eNone,
+                .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+                .oldLayout = vk::ImageLayout::eUndefined,
+                .newLayout = vk::ImageLayout::eTransferDstOptimal,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = image,
+                .subresourceRange = range,
+            };
+            cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eFragmentShader,
+                                   vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, to_transfer);
+
+            const vk::BufferImageCopy copy = {
+                .bufferOffset = 0,
+                .bufferRowLength = 0,
+                .bufferImageHeight = 0,
+                .imageSubresource{
+                    .aspectMask = vk::ImageAspectFlagBits::eColor,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageOffset = {0, 0, 0},
+                .imageExtent = {width, height, 1},
+            };
+            cmdbuf.copyBufferToImage(staging, image, vk::ImageLayout::eTransferDstOptimal, copy);
+
+            const vk::ImageMemoryBarrier to_shader = {
+                .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+                .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+                .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+                .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                .image = image,
+                .subresourceRange = range,
+            };
+            cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                                   vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {},
+                                   to_shader);
+        });
+    }
+
+    // Fullscreen quad in NDC with matching UVs. Same vertex layout as the overlay pipeline.
+    const float vertices[] = {
+        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,  -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+        -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f,
+    };
+    const u64 size = sizeof(vertices);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, vertices, size);
+    overlay_vertex_buffer.Commit(size);
+
+    scheduler.Record([this, offset = offset](vk::CommandBuffer cmdbuf) {
+        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, menu_pipeline);
+        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *overlay_pipeline_layout, 0,
+                                  menu_descriptor_set, {});
+        cmdbuf.bindVertexBuffers(0, overlay_vertex_buffer.Handle(), {0});
+        const u32 first_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+        cmdbuf.draw(6, 1, first_vertex, 0);
+    });
+}
+
+// Outlines both screens while the touch layout editor is open, brightening whichever one is
+// currently grabbed, and shows the control hint along the bottom. The screens themselves are
+// already drawn by the normal custom-layout path, so this only adds the chrome.
+RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
     const Layout::FramebufferLayout& layout) {
-    if (!VideoCore::IsOverlayMenuVisible()) {
+    if (!VideoCore::IsLayoutEditorVisible()) {
         return {};
     }
-    const VideoCore::OverlayMenuState state = VideoCore::GetOverlayMenuState();
-    if (!state.visible) {
+    const VideoCore::LayoutEditorState state = VideoCore::GetLayoutEditorState();
+    if (!state.visible || state.canvas_width <= 0 || state.canvas_height <= 0) {
         return {};
     }
 
@@ -1812,200 +2098,177 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareQuickMenu(
         return {};
     }
 
+    // The editor works in canvas pixels; the output is normally the same 1280x720, but scale
+    // anyway so this stays correct if the window size ever differs.
+    const float sx = w / static_cast<float>(state.canvas_width);
+    const float sy = h / static_cast<float>(state.canvas_height);
+
     std::vector<float> verts;
-    verts.reserve(2048);
+    verts.reserve(1024);
     OverlayBuilder builder{verts, w, h};
 
-    // Font em size scaled to the output so the menu is a consistent size everywhere.
-    const float em = std::max(18.0f, std::round(h / 26.0f));
-    const float title_em = std::round(em * 1.18f);
+    const float em = std::max(14.0f, std::round(h / 32.0f));
     const float scale = em / OverlayFont::kBakePixelHeight;
-    const float title_scale = title_em / OverlayFont::kBakePixelHeight;
+    const float thickness = std::max(2.0f, std::round(h / 240.0f));
+
+    const auto add_outline = [&](const VideoCore::LayoutEditorRect& r) {
+        const float x0 = r.x * sx;
+        const float y0 = r.y * sy;
+        const float x1 = (r.x + r.w) * sx;
+        const float y1 = (r.y + r.h) * sy;
+        builder.AddRect(x0, y0, x1, y0 + thickness);             // top
+        builder.AddRect(x0, y1 - thickness, x1, y1);             // bottom
+        builder.AddRect(x0, y0, x0 + thickness, y1);             // left
+        builder.AddRect(x1 - thickness, y0, x1, y1);             // right
+    };
+
+    // Unselected outlines first, then the selected one, so each group can carry its own colour.
+    if (!state.selected_top) {
+        add_outline(state.top);
+    }
+    if (!state.selected_bottom) {
+        add_outline(state.bottom);
+    }
+    const u32 idle_vertices = builder.VertexCount();
+
+    if (state.selected_top) {
+        add_outline(state.top);
+    }
+    if (state.selected_bottom) {
+        add_outline(state.bottom);
+    }
+    const u32 active_vertices = builder.VertexCount() - idle_vertices;
+
+    // A single long sentence used to overflow the screen once controller hints were added
+    // alongside the touch ones. Button chips (small badge + a one/two-word label, same idea as
+    // canvas.h's DrawButtonChip/DrawHint the native-framebuffer screens use) pack the same
+    // information into much less width, wrapped across two rows.
+    struct ChipHint {
+        const char* chip;
+        std::string label;
+    };
+    const std::array<ChipHint, 4> row_common{{
+        {"A", "Save"},
+        {"B", "Cancel"},
+        {"X", state.aspect_locked ? "Free stretch" : "Lock aspect"},
+        {"-", "Reset"},
+    }};
+    const std::array<ChipHint, 5> row_controller{{
+        {"LS", "Move"},
+        {"RS", "Stretch"},
+        {"ZL/ZR", "Scale"},
+        {"L/R", "Select"},
+        {"D-Pad", "Opacity"},
+    }};
+
     const float line_h = OverlayFont::kLineHeight * scale;
-    const float title_line_h = OverlayFont::kLineHeight * title_scale;
-    const float row_h = std::round(line_h * 1.5f);
-    const float footer_h = line_h;
-    const float pad = std::round(em * 0.9f);
-    const float sep_gap = std::round(row_h * 0.4f);
-    const float col_gap = em * 1.4f;
+    const float chip_pad_x = std::round(em * 0.35f);
+    const float chip_h = std::round(line_h + chip_pad_x);
+    const float chip_label_gap = std::round(em * 0.3f);
+    const float entry_gap = std::round(em * 0.7f);
+    const float row_gap = std::round(em * 0.3f);
+    const float bottom_margin = std::round(em * 0.6f);
 
-    // Size the panel to its contents and centre it.
-    float max_row_w = 0.0f;
-    for (const auto& item : state.items) {
-        float rw = OverlayBuilder::Measure(item.label, scale);
-        if (!item.value.empty()) {
-            rw += col_gap + OverlayBuilder::Measure(item.value, scale);
+    struct ChipDraw {
+        float chip_x0, chip_y0, chip_x1, chip_y1;
+        float chip_text_x, chip_text_y;
+        const char* chip_text;
+        float desc_text_x, desc_text_y;
+        std::string desc_text;
+    };
+    std::vector<ChipDraw> draws;
+
+    const auto chip_width = [&](const char* chip) {
+        return std::max(chip_h, OverlayBuilder::Measure(chip, scale) + 2.0f * chip_pad_x);
+    };
+    const auto row_width = [&](const auto& row) {
+        float total = 0.0f;
+        for (const auto& entry : row) {
+            total += chip_width(entry.chip) + chip_label_gap +
+                     OverlayBuilder::Measure(entry.label, scale) + entry_gap;
         }
-        max_row_w = std::max(max_row_w, rw);
-    }
-    const int n = static_cast<int>(state.items.size());
-    const bool has_tabs = !state.prev_tab.empty() || !state.next_tab.empty();
-    const float tab_gap = std::round(em * 0.9f);
-    const float prev_tab_w = OverlayBuilder::Measure(state.prev_tab, scale);
-    const float next_tab_w = OverlayBuilder::Measure(state.next_tab, scale);
-    const float title_w = OverlayBuilder::Measure(state.title, title_scale);
-    const float tab_bar_w =
-        has_tabs ? prev_tab_w + tab_gap + title_w + tab_gap + next_tab_w : title_w;
-    const float inner_w =
-        std::max({max_row_w, tab_bar_w, OverlayBuilder::Measure(state.hint, scale)});
-    const float panel_w = std::clamp(inner_w + 2.0f * pad, 0.35f * w, 0.92f * w);
-    const float panel_h =
-        pad + title_line_h + sep_gap + static_cast<float>(n) * row_h + sep_gap + footer_h + pad;
-    const float panel_x0 = std::round((w - panel_w) / 2.0f);
-    const float panel_y0 = std::round((h - panel_h) / 2.0f);
-    const float panel_x1 = panel_x0 + panel_w;
-    const float panel_y1 = panel_y0 + panel_h;
-
-    std::vector<OverlayDraw::Batch> batches;
-    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
-        const u32 count = builder.VertexCount() - start;
-        if (count > 0) {
-            batches.push_back({color, start, count});
+        return total - entry_gap;
+    };
+    const auto layout_row = [&](const auto& row, float row_top) {
+        float x = std::round((w - row_width(row)) * 0.5f);
+        for (const auto& entry : row) {
+            const float cw = chip_width(entry.chip);
+            const float chip_text_w = OverlayBuilder::Measure(entry.chip, scale);
+            ChipDraw d;
+            d.chip_x0 = x;
+            d.chip_y0 = row_top;
+            d.chip_x1 = x + cw;
+            d.chip_y1 = row_top + chip_h;
+            d.chip_text_x = std::round(x + (cw - chip_text_w) * 0.5f);
+            d.chip_text_y = std::round(row_top + (chip_h - line_h) * 0.5f);
+            d.chip_text = entry.chip;
+            d.desc_text_x = std::round(x + cw + chip_label_gap);
+            d.desc_text_y = std::round(row_top + (chip_h - line_h) * 0.5f);
+            d.desc_text = entry.label;
+            draws.push_back(d);
+            x = std::round(x + cw + chip_label_gap + OverlayBuilder::Measure(entry.label, scale) +
+                           entry_gap);
         }
     };
 
-    constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.55f};
-    constexpr std::array<float, 4> c_panel = {0x24 / 255.0f, 0x26 / 255.0f, 0x2B / 255.0f, 0.97f};
-    constexpr std::array<float, 4> c_divider = {0x3A / 255.0f, 0x3C / 255.0f, 0x42 / 255.0f, 1.0f};
-    constexpr std::array<float, 4> c_highlight = {0x30 / 255.0f, 0x33 / 255.0f, 0x39 / 255.0f,
-                                                  1.0f};
-    constexpr std::array<float, 4> c_accent = {0xFA / 255.0f, 0xAA / 255.0f, 0x49 / 255.0f, 1.0f};
-    constexpr std::array<float, 4> c_on_accent = {0x17 / 255.0f, 0x18 / 255.0f, 0x1B / 255.0f,
-                                                  1.0f};
-    constexpr std::array<float, 4> c_text = {0xF1 / 255.0f, 0xF2 / 255.0f, 0xF4 / 255.0f, 1.0f};
-    constexpr std::array<float, 4> c_text_dim = {0x9B / 255.0f, 0xA0 / 255.0f, 0xA6 / 255.0f,
-                                                  1.0f};
+    const float row1_top = std::round(h - bottom_margin - chip_h);
+    const float row2_top = std::round(row1_top - row_gap - chip_h);
+    layout_row(row_controller, row2_top);
+    layout_row(row_common, row1_top);
 
-    // Dim the running game.
-    {
-        const u32 s = builder.VertexCount();
-        builder.AddRect(0.0f, 0.0f, w, h);
-        emit(c_dim, s);
+    for (const auto& d : draws) {
+        builder.AddRect(d.chip_x0, d.chip_y0, d.chip_x1, d.chip_y1);
     }
-    {
-        const u32 s = builder.VertexCount();
-        builder.AddRect(panel_x0, panel_y0, panel_x1, panel_y1);
-        emit(c_panel, s);
-    }
+    const u32 chip_bg_vertices = builder.VertexCount() - idle_vertices - active_vertices;
 
-    // Walk down the panel building each section's vertical extents.
-    float pen_y = panel_y0 + pad;
-    const float title_x = std::round(panel_x0 + (panel_w - title_w) / 2.0f);
-    const float title_y = pen_y;
-    pen_y += title_line_h + sep_gap * 0.5f;
-    const float underline_y = std::round(pen_y);
-    pen_y += sep_gap * 0.5f;
-    const float rows_top = pen_y;
-    pen_y = rows_top + static_cast<float>(n) * row_h + sep_gap * 0.5f;
-    const float footer_line_y = std::round(pen_y);
-    pen_y += sep_gap * 0.5f;
-    const float footer_y = pen_y;
-
-    // Title underline and footer separator.
-    {
-        const u32 s = builder.VertexCount();
-        const float lx0 = panel_x0 + pad;
-        const float lx1 = panel_x1 - pad;
-        const float th = std::max(1.0f, std::round(em / 12.0f));
-        builder.AddRect(lx0, underline_y, lx1, underline_y + th);
-        builder.AddRect(lx0, footer_line_y, lx1, footer_line_y + th);
-        emit(c_divider, s);
+    for (const auto& d : draws) {
+        builder.AddText(d.chip_text_x, d.chip_text_y, d.chip_text, scale);
     }
+    const u32 chip_text_vertices =
+        builder.VertexCount() - idle_vertices - active_vertices - chip_bg_vertices;
 
-    const bool has_selection = n > 0 && state.selected >= 0 && state.selected < n;
+    for (const auto& d : draws) {
+        builder.AddText(d.desc_text_x, d.desc_text_y, d.desc_text, scale);
+    }
+    const u32 desc_text_vertices = builder.VertexCount() - idle_vertices - active_vertices -
+                                   chip_bg_vertices - chip_text_vertices;
 
-    // Highlight bar behind the selected row.
-    if (has_selection) {
-        const u32 s = builder.VertexCount();
-        const float top = rows_top + static_cast<float>(state.selected) * row_h;
-        const float inset = std::round(row_h * 0.08f);
-        builder.AddRect(panel_x0 + pad * 0.5f, top + inset, panel_x1 - pad * 0.5f,
-                        top + row_h - inset);
-        emit(state.armed ? c_accent : c_highlight, s);
-    }
-
-    if (has_tabs) {
-        const float side_y = std::round(title_y + (title_line_h - line_h) / 2.0f);
-        const u32 s = builder.VertexCount();
-        builder.AddText(panel_x0 + pad, side_y, state.prev_tab, scale);
-        builder.AddText(panel_x1 - pad - next_tab_w, side_y, state.next_tab, scale);
-        emit(c_text_dim, s);
-    }
-    {
-        const u32 s = builder.VertexCount();
-        builder.AddText(title_x, title_y, state.title, title_scale);
-        emit(c_accent, s);
-    }
-
-    const auto add_label = [&](int i) {
-        const auto& item = state.items[i];
-        const float top = rows_top + static_cast<float>(i) * row_h;
-        const float ty = std::round(top + (row_h - line_h) / 2.0f);
-        builder.AddText(panel_x0 + pad, ty, item.label, scale);
-    };
-    const auto add_value = [&](int i) {
-        const auto& item = state.items[i];
-        if (item.value.empty()) {
-            return;
-        }
-        const float top = rows_top + static_cast<float>(i) * row_h;
-        const float ty = std::round(top + (row_h - line_h) / 2.0f);
-        const float vx = panel_x1 - pad - OverlayBuilder::Measure(item.value, scale);
-        builder.AddText(vx, ty, item.value, scale);
-    };
-
-    {
-        const u32 s = builder.VertexCount();
-        for (int i = 0; i < n; ++i) {
-            if (i != state.selected) {
-                add_label(i);
-            }
-        }
-        emit(c_text, s);
-    }
-    {
-        const u32 s = builder.VertexCount();
-        for (int i = 0; i < n; ++i) {
-            if (i != state.selected) {
-                add_value(i);
-            }
-        }
-        emit(c_text_dim, s);
-    }
-    if (has_selection) {
-        {
-            const u32 s = builder.VertexCount();
-            add_label(state.selected);
-            emit(state.armed ? c_on_accent : c_text, s);
-        }
-        {
-            const u32 s = builder.VertexCount();
-            add_value(state.selected);
-            emit(state.armed ? c_on_accent : c_accent, s);
-        }
-    }
-
-    // Footer hint.
-    if (!state.hint.empty()) {
-        const u32 s = builder.VertexCount();
-        const float fx =
-            std::round(panel_x0 + (panel_w - OverlayBuilder::Measure(state.hint, scale)) / 2.0f);
-        builder.AddText(fx, footer_y, state.hint, scale);
-        emit(c_text_dim, s);
-    }
-
-    if (batches.empty()) {
+    const u64 size = verts.size() * sizeof(float);
+    if (size == 0) {
         return {};
     }
-
-    const u32 size = static_cast<u32>(verts.size() * sizeof(float));
     auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
     std::memcpy(data, verts.data(), size);
     overlay_vertex_buffer.Commit(size);
 
+    constexpr std::array<float, 4> idle_color = {1.0f, 1.0f, 1.0f, 0.45f};
+    constexpr std::array<float, 4> active_color = {0.35f, 0.85f, 1.0f, 0.95f};
+    constexpr std::array<float, 4> chip_bg_color = {0.0f, 0.0f, 0.0f, 0.75f};
+    constexpr std::array<float, 4> chip_text_color = {1.0f, 1.0f, 1.0f, 1.0f};
+    constexpr std::array<float, 4> desc_text_color = {0.85f, 0.85f, 0.85f, 0.9f};
+
     OverlayDraw overlay;
     overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
-    overlay.batches = std::move(batches);
+    u32 first = 0;
+    if (idle_vertices > 0) {
+        overlay.batches.push_back({idle_color, first, idle_vertices});
+    }
+    first += idle_vertices;
+    if (active_vertices > 0) {
+        overlay.batches.push_back({active_color, first, active_vertices});
+    }
+    first += active_vertices;
+    if (chip_bg_vertices > 0) {
+        overlay.batches.push_back({chip_bg_color, first, chip_bg_vertices});
+    }
+    first += chip_bg_vertices;
+    if (chip_text_vertices > 0) {
+        overlay.batches.push_back({chip_text_color, first, chip_text_vertices});
+    }
+    first += chip_text_vertices;
+    if (desc_text_vertices > 0) {
+        overlay.batches.push_back({desc_text_color, first, desc_text_vertices});
+    }
     return overlay;
 }
 
@@ -2028,6 +2291,12 @@ void RendererVulkan::RecordOverlay(OverlayDraw overlay) {
 }
 
 void RendererVulkan::SwapBuffers() {
+    // EmuThread's pause loop calls this every 16ms indefinitely regardless of pause state (see
+    // emulation.cpp), so while the window has been handed to the menu this is pure wasted work -
+    // Present()'s own gate is what actually prevents the crash, this is just avoiding the churn.
+    if (main_present_window.IsPresentationSuspended()) {
+        return;
+    }
     system.perf_stats->StartSwap();
     const Layout::FramebufferLayout& layout = render_window.GetFramebufferLayout();
     PrepareRendertarget();
