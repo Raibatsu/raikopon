@@ -54,6 +54,7 @@ void WriteUserDirPointer(const std::string& user_dir) {
 
 SwitchFrontend::SwitchPaths s_paths;
 std::string s_active_user_dir;
+std::string s_inserted_cartridge;
 
 // Reads/Writes the SD-card config file
 class Config {
@@ -195,6 +196,11 @@ private:
             s_paths.roms_dir = SwitchFrontend::GetDefaultRomsDir(s_paths.user_dir);
         }
         s_paths.scan_recursive = config->GetBoolean("Switch", "scan_recursive", true);
+        s_inserted_cartridge =
+            Common::StripSpaces(config->Get("Switch", "inserted_cartridge", ""));
+        if (!s_inserted_cartridge.empty() && !FileUtil::Exists(s_inserted_cartridge)) {
+            s_inserted_cartridge.clear();
+        }
 
         SwitchFrontend::SetPointerSource(static_cast<SwitchFrontend::PointerSource>(
             std::clamp<long>(config->GetInteger("Switch", "pointer_source", 0), 0,
@@ -287,6 +293,7 @@ private:
         ss << "[Switch]\n";
         ss << "roms_dir = " << s_paths.roms_dir << '\n';
         ss << "scan_recursive = " << (s_paths.scan_recursive ? "true" : "false") << '\n';
+        ss << "inserted_cartridge = " << s_inserted_cartridge << '\n';
         ss << "pointer_source = " << static_cast<int>(SwitchFrontend::GetPointerSource()) << '\n';
         ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
         ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
@@ -355,6 +362,15 @@ void SetPaths(const SwitchPaths& paths) {
         WriteUserDirPointer(user_dir);
         LOG_INFO(Frontend, "Dekopon directory set to {}, applies on the next launch", user_dir);
     }
+    SaveConfig();
+}
+
+const std::string& GetInsertedCartridge() {
+    return s_inserted_cartridge;
+}
+
+void SetInsertedCartridge(const std::string& path) {
+    s_inserted_cartridge = path;
     SaveConfig();
 }
 
