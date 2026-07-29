@@ -66,8 +66,10 @@ public:
     /// Releases the swapchain and the VI surface so something else (the libnx framebuffer the
     /// library menu draws with) can claim the nwindow. Emulation must already be paused: this
     /// drains the present queue and waits for the GPU to go idle, but nothing stops a newly
-    /// produced frame from queueing behind it.
-    void SuspendPresentation();
+    /// produced frame from queueing behind it. Returns false (without suspending) if the present
+    /// thread doesn't hand back swapchain_mutex within a few seconds - most likely because it's
+    /// stuck inside a GPU wait in CopyToSwapchain - rather than joining it in an unbounded hang.
+    bool SuspendPresentation();
 
     /// Re-creates the surface and swapchain after SuspendPresentation. Must be called before
     /// anything tries to present again, and before shutdown.
@@ -101,7 +103,7 @@ private:
     std::condition_variable free_cv;
     std::condition_variable recreate_surface_cv;
     std::condition_variable_any frame_cv;
-    std::mutex swapchain_mutex;
+    std::timed_mutex swapchain_mutex;
     std::mutex recreate_surface_mutex;
     std::mutex queue_mutex;
     std::mutex free_mutex;

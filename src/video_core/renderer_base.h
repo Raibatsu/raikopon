@@ -65,9 +65,13 @@ public:
     virtual void NotifySurfaceChanged(bool second) {}
 
     /// Releases the presentation surface so the frontend can draw to the window itself (the
-    /// library menu's libnx framebuffer). Emulation must be paused first. No-op where the backend
-    /// doesn't support handing the window back.
-    virtual void SuspendPresentation() {}
+    /// library menu's libnx framebuffer). Emulation must be paused first. No-op (returns true)
+    /// where the backend doesn't support handing the window back. Returns false if the backend
+    /// couldn't safely suspend (e.g. timed out waiting on a wedged present thread) - the caller
+    /// must not proceed with the handoff in that case.
+    virtual bool SuspendPresentation() {
+        return true;
+    }
 
     /// Reclaims the window after SuspendPresentation.
     virtual void ResumePresentation() {}

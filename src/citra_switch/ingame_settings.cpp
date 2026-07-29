@@ -15,6 +15,7 @@
 #include "citra_switch/game_settings.h"
 #include "citra_switch/ingame_cheats.h"
 #include "citra_switch/ingame_settings.h"
+#include "citra_switch/input.h"
 #include "citra_switch/layout_editor.h"
 #include "citra_switch/menu_data.h"
 #include "citra_switch/settings_model.h"
@@ -62,15 +63,24 @@ std::vector<SettingRow> VisibleRows(SettingsTab tab, const MenuSettings& s) {
     return rows;
 }
 
-// Same as VisibleRows, plus a synthetic "Edit Screen Layout" action row on the Graphics tab —
-// mirrors the old quick menu's Display-tab EditLayout row, launching the layout editor (which
-// also owns each screen's opacity — see layout_editor.cpp) instead of editing a MenuSettings
-// field. Works with both touch and controller now, hence the plain name.
+// Same as VisibleRows, plus synthetic action/state rows with no MenuSettings field of their own:
+// "Edit Screen Layout" on the Graphics tab (mirrors the old quick menu's Display-tab EditLayout
+// row, launching the layout editor — which also owns each screen's opacity, see layout_editor.cpp
+// — instead of editing a setting), and Movie Throttle Clock / Touch Pointer on the Debug tab
+// (mirror the old quick menu's rows of the same name — see emulation.cpp's
+// Get/SetMovieThrottleClockPercentage and input.h's Is/TogglePointerMode).
 std::vector<SettingRow> RowsForTab(Tab tab, const MenuSettings& s) {
     auto rows = VisibleRows(ToSettingsTab(tab), s);
     if (tab == Tab::Graphics) {
         rows.push_back({SettingRowEditLayout, "Edit Screen Layout", "",
                         "Move, resize, and set the opacity of the top/bottom screens."});
+    } else if (tab == Tab::Debug) {
+        rows.push_back({SettingRowMovieThrottle, "Movie Throttle Clock",
+                        std::to_string(GetMovieThrottleClockPercentage()) + "%",
+                        "Core Clock used while a movie-library cutscene is playing."});
+        rows.push_back({SettingRowPointerMode, "Touch Pointer",
+                        IsPointerModeActive() ? "On" : "Off",
+                        "Enable the virtual touch cursor driven by Touch Pointer Source."});
     }
     return rows;
 }
@@ -247,10 +257,21 @@ bool ShowInGameSettings(PadState& pad) {
         return false;
     }
 
+    // TEMPORARY diagnostics: a report of a crash right around here had no further log output at
+    // all (not even a signal/stack trace), consistent with a hard native crash. These checkpoints
+    // cover the whole first-time-through-the-loop path in one pass so a recurrence pinpoints the
+    // exact failing call without needing another round of user testing. Only the entry/exit
+    // checkpoints (which each fire once regardless) and the first loop iteration's checkpoints
+    // (guarded by first_frame) are logged - not logged every frame after that, since ProbeLog's
+    // 30ms flush-sync sleep would make the whole menu laggy for as long as it stays open.
+    ProbeLog("ingame settings: creating framebuffer");
     Framebuffer fb{};
     framebufferCreate(&fb, nwindowGetDefault(), kScreenW, kScreenH, PIXEL_FORMAT_RGBA_8888, 2);
+    ProbeLog("ingame settings: framebuffer created, making linear");
     framebufferMakeLinear(&fb);
+    ProbeLog("ingame settings: framebuffer linear, constructing canvas");
     Canvas canvas;
+    ProbeLog("ingame settings: canvas constructed, reading menu settings");
 
     MenuSettings before = GetMenuSettings();
     MenuSettings settings = before;
@@ -268,7 +289,33 @@ bool ShowInGameSettings(PadState& pad) {
     bool closed = false;
     bool want_exit = false;
     bool open_layout_editor_after = false;
+    bool first_frame = true; // Gates the loop-body checkpoints below to just the first pass.
+    // A prior crash report tied to docking the console while this screen was open landed in a
+    // frame past the one the checkpoints above cover, with no diagnostic trace of what came
+    // after. appletGetOperationMode() is a cheap poll (no IPC), so this logs only on an actual
+    // dock/undock transition - near-zero overhead the rest of the time, but it will catch the
+    // exact moment of the transition if that hypothesis is right. The frame counter below bounds
+    // the remaining blind spot in general (e.g. if it turns out unrelated to docking) to about
+    // two seconds without making the menu laggy the way logging every frame would.
+    AppletOperationMode last_op_mode = appletGetOperationMode();
+    int frame_counter = 0;
+    ProbeLog("ingame settings: menu settings read, entering loop");
     while (!closed && appletMainLoop()) {
+        const AppletOperationMode op_mode = appletGetOperationMode();
+        if (op_mode != last_op_mode) {
+            ProbeLog(op_mode == AppletOperationMode_Console
+                         ? "ingame settings: operation mode changed to docked"
+                         : "ingame settings: operation mode changed to handheld");
+            last_op_mode = op_mode;
+        }
+        ++frame_counter;
+        if (frame_counter % 120 == 0) {
+            ProbeLog(("ingame settings: heartbeat, frame " + std::to_string(frame_counter)).c_str());
+        }
+
+        if (first_frame) {
+            ProbeLog("ingame settings: first frame, polling input");
+        }
         padUpdate(&pad);
         const u64 down = padGetButtonsDown(&pad);
         const u64 held = padGetButtons(&pad);
@@ -364,6 +411,15 @@ bool ShowInGameSettings(PadState& pad) {
                     if (nav & DirRight) {
                         AdjustGyroAxis(settings, gyro_edit_y, +1);
                     }
+                } else if (current_item == SettingRowMovieThrottle) {
+                    if (nav & DirLeft) {
+                        SetMovieThrottleClockPercentage(GetMovieThrottleClockPercentage() - 1);
+                        MarkGameOverride(OverrideField::MovieThrottleClock);
+                    }
+                    if (nav & DirRight) {
+                        SetMovieThrottleClockPercentage(GetMovieThrottleClockPercentage() + 1);
+                        MarkGameOverride(OverrideField::MovieThrottleClock);
+                    }
                 } else {
                     if (nav & DirLeft) {
                         CycleSetting(settings, current_item, -1);
@@ -387,6 +443,8 @@ bool ShowInGameSettings(PadState& pad) {
                     if (current_item == SettingRowEditLayout) {
                         open_layout_editor_after = true;
                         closed = true;
+                    } else if (current_item == SettingRowPointerMode) {
+                        TogglePointerMode();
                     } else if (IsBooleanSetting(current_item)) {
                         ToggleSetting(settings, current_item);
                     } else {
@@ -400,6 +458,9 @@ bool ShowInGameSettings(PadState& pad) {
             }
         }
 
+        if (first_frame) {
+            ProbeLog("ingame settings: first frame, input polled, drawing");
+        }
         canvas.Clear(kColBg);
         Font& font = GetSharedFont();
         font.Draw(canvas, kContentX, 40, "Settings", 28, kColText);
@@ -419,22 +480,39 @@ bool ShowInGameSettings(PadState& pad) {
                               "Reset", "Cancel");
         }
 
+        if (first_frame) {
+            ProbeLog("ingame settings: first frame, drawn, beginning native framebuffer");
+        }
         u32 stride = 0;
         auto* dst = static_cast<std::uint8_t*>(framebufferBegin(&fb, &stride));
         if (dst != nullptr) {
+            if (first_frame) {
+                ProbeLog("ingame settings: first frame, framebuffer begun, copying pixels");
+            }
             const u32* src = canvas.Data();
             for (int y = 0; y < kScreenH; ++y) {
                 std::memcpy(dst + static_cast<std::size_t>(y) * stride, src + y * kScreenW,
                             static_cast<std::size_t>(kScreenW) * 4);
             }
+            if (first_frame) {
+                ProbeLog("ingame settings: first frame, pixels copied, ending framebuffer");
+            }
             framebufferEnd(&fb);
+        }
+        if (first_frame) {
+            ProbeLog("ingame settings: first frame complete");
+            first_frame = false;
         }
     }
 
+    ProbeLog("ingame settings: loop exited, committing settings");
     CommitMenuSettingsPerGame(before, settings);
     PersistCheats();
+    ProbeLog("ingame settings: settings committed, closing framebuffer");
     framebufferClose(&fb);
+    ProbeLog("ingame settings: framebuffer closed, reclaiming window");
     ReclaimWindowFromMenu();
+    ProbeLog("ingame settings: window reclaimed");
 
     // Mirrors the old quick menu's EditLayout handling: resume first (just done above via
     // ReclaimWindowFromMenu), then let OpenLayoutEditor re-pause and take over — it draws through

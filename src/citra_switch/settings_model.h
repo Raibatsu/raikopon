@@ -58,6 +58,8 @@ enum SettingRowIdx {
     // all fall through to their default case for it, same as any other value BuildSettingRows
     // never produces.
     SettingRowEditLayout,
+    SettingRowMovieThrottle,
+    SettingRowPointerMode,
 };
 
 struct SettingRow {

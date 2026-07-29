@@ -84,8 +84,8 @@ public:
 
     void NotifySurfaceChanged(bool second) override;
 
-    void SuspendPresentation() override {
-        main_present_window.SuspendPresentation();
+    bool SuspendPresentation() override {
+        return main_present_window.SuspendPresentation();
     }
 
     void ResumePresentation() override {

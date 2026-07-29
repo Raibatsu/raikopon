@@ -787,7 +787,13 @@ void System::ApplySettings() {
 
     if (gpu) {
 #ifndef ANDROID
-        gpu->Renderer().UpdateCurrentFramebufferLayout();
+        // Not gpu->Renderer().UpdateCurrentFramebufferLayout() - this can run on the emulated CPU
+        // thread (e.g. our movie-CPU-throttle hook reacting to a guest CRO load/unload) rather
+        // than whichever thread owns the renderer, and with async_gpu_emulation on, touching the
+        // renderer directly from there races the GPU thread's own use of that state. GPU's wrapper
+        // routes through the same async-safe queue/SyncGpuThread path everything else already does
+        // (see layout_editor.cpp's Relayout(), which hit this same class of bug earlier).
+        gpu->UpdateCurrentFramebufferLayout();
 #endif
         auto& settings = gpu->Renderer().Settings();
         settings.bg_color_update_requested = true;

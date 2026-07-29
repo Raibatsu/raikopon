@@ -422,7 +422,12 @@ bool ReleaseWindowForMenu() {
     system.GPU().WaitIdle();
     LOG_ERROR(Frontend, "nwindow handoff: suspending presentation");
     FlushLogSync();
-    system.GPU().Renderer().SuspendPresentation();
+    if (!system.GPU().Renderer().SuspendPresentation()) {
+        LOG_CRITICAL(Frontend, "nwindow handoff: failed to suspend presentation, aborting menu");
+        FlushLogSync();
+        ResumeEmulation();
+        return false;
+    }
     LOG_ERROR(Frontend, "nwindow handoff: window released");
     FlushLogSync();
     return true;

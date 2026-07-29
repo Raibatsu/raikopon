@@ -371,10 +371,12 @@ void PresentWindow::PresentThread(std::stop_token token) {
         present_queue.pop();
         frame_cv.notify_one();
 
-        // By exchanging the lock ownership we take the swapchain lock
-        // before the queue lock goes out of scope. This way the swapchain
-        // lock in WaitPresent is guaranteed to occur after here.
-        std::exchange(lock, std::unique_lock{swapchain_mutex});
+        // Take the swapchain lock before releasing the queue lock (rather than the other way
+        // around) so the swapchain lock in WaitPresent is guaranteed to occur after here. Two
+        // separate locks rather than the previous same-typed exchange trick, since swapchain_mutex
+        // is now a timed_mutex (SuspendPresentation's timeout below) and queue_mutex isn't.
+        std::unique_lock swap_lock{swapchain_mutex};
+        lock.unlock();
 
         const auto copy_start = std::chrono::steady_clock::now();
         const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(copy_start - last_present);
@@ -397,9 +399,9 @@ void PresentWindow::PresentThread(std::stop_token token) {
     }
 }
 
-void PresentWindow::SuspendPresentation() {
+bool PresentWindow::SuspendPresentation() {
     if (presentation_suspended.load(std::memory_order_relaxed)) {
-        return;
+        return true;
     }
 
     // Gate first, then wait for the queue to drain - in that order. EmuThread's pause loop keeps
@@ -421,8 +423,21 @@ void PresentWindow::SuspendPresentation() {
 
     // The queue being empty only proves the present thread has POPPED the last frame, not that
     // it has finished CopyToSwapchain on it - it may still be mid-copy. Taking swapchain_mutex
-    // blocks until that finishes (see PresentThread's lock-exchange comment above).
-    std::scoped_lock lock{swapchain_mutex};
+    // blocks until that finishes (see PresentThread's lock-exchange comment above). That copy is
+    // usually quick, but if the present thread is stuck inside a GPU wait there (e.g. an
+    // acquire/present call that never returns because of a driver-level hang), an unbounded wait
+    // here would just add this thread to the pile instead of surfacing the problem - so this
+    // gives up after a few seconds and ungates instead of hanging forever alongside it.
+    std::unique_lock lock{swapchain_mutex, std::defer_lock};
+    if (!lock.try_lock_for(std::chrono::seconds(5))) {
+        LOG_CRITICAL(Render_Vulkan,
+                     "Suspend: timed out waiting for swapchain_mutex - present thread is likely "
+                     "stuck in a GPU wait. Aborting suspend.");
+        FlushLogSync();
+        std::scoped_lock qlock{queue_mutex};
+        presentation_suspended.store(false, std::memory_order_relaxed);
+        return false;
+    }
     suspended_width = swapchain.GetWidth();
     suspended_height = swapchain.GetHeight();
     LOG_ERROR(Render_Vulkan, "Suspend: swapchain_mutex held, size {}x{}, calling scheduler.Finish()",
@@ -453,6 +468,7 @@ void PresentWindow::SuspendPresentation() {
     next_surface = surface;
     LOG_ERROR(Render_Vulkan, "Presentation suspended, nwindow released");
     FlushLogSync();
+    return true;
 }
 
 void PresentWindow::ResumePresentation() {

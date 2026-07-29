@@ -43,7 +43,7 @@ void Module::Interface::GetMyPresence(Kernel::HLERequestContext& ctx) {
 
 void Module::Interface::GetFriendKeyList(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
-    const u32 unknown = rp.Pop<u32>();
+    rp.Pop<u32>(); // unknown
     const u32 frd_count = rp.Pop<u32>();
 
     std::vector<u8> buffer(sizeof(FriendKey) * frd_count, 0);
@@ -52,8 +52,6 @@ void Module::Interface::GetFriendKeyList(Kernel::HLERequestContext& ctx) {
     rb.Push(ResultSuccess);
     rb.Push<u32>(0); // 0 friends
     rb.PushStaticBuffer(std::move(buffer), 0);
-
-    LOG_WARNING(Service_FRD, "(STUBBED) called, unknown={}, frd_count={}", unknown, frd_count);
 }
 
 void Module::Interface::GetFriendProfile(Kernel::HLERequestContext& ctx) {
