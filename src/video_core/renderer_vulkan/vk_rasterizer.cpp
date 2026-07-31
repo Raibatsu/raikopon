@@ -539,7 +539,7 @@ bool RasterizerVulkan::IsColorTargetSelfHealing(PAddr color_addr) const {
     for (const auto& config : pica.regs.framebuffer_config) {
         if (color_addr == config.address_left1 || color_addr == config.address_left2 ||
             color_addr == config.address_right1 || color_addr == config.address_right2) {
-            return true;
+            return false;
         }
     }
     constexpr u64 kSelfHealWindow = 8;
