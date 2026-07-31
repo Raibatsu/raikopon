@@ -44,6 +44,13 @@ void SetInsertedCartridge(const std::string& path);
 const std::string& GetArticBaseAddress();
 void SetArticBaseAddress(const std::string& address);
 
+// Stable tracks GitHub releases; Experimental tracks GitHub pre-releases. See updater.h.
+enum class UpdateChannel { Stable, Experimental };
+
+// Persisted update-channel preference for the Updates tab.
+UpdateChannel GetUpdateChannel();
+void SetUpdateChannel(UpdateChannel channel);
+
 SystemFileSetupState GetSystemFileSetupState();
 void PrepareSystemFileSetup(SystemFileSetupMode mode);
 

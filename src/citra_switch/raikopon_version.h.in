@@ -1,0 +1,13 @@
+// SPDX-FileCopyrightText: Azahar Emulator Project
+// Copyright(c) 2026: Raibatsu (hello@raibatsu.com)
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+// Generated from CMakeLists.txt's RAIKOPON_VERSION - see the comment there. Do not edit the
+// generated raikopon_version.h directly; edit this .h.in template or the CMake variable instead.
+namespace SwitchFrontend {
+
+constexpr const char* kRaikoponVersion = "@RAIKOPON_VERSION@";
+
+} // namespace SwitchFrontend

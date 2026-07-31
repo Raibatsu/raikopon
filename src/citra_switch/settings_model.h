@@ -18,9 +18,9 @@
 // both can drive the exact same rows/logic instead of each keeping its own copy.
 namespace SwitchFrontend {
 
-enum class SettingsTab { Graphics, Debug, Misc, Controls };
-extern const std::array<std::pair<SettingsTab, const char*>, 4> kSettingsTabs;
-inline constexpr int kNumSettingsTabs = 4;
+enum class SettingsTab { Graphics, Debug, Misc, Controls, Updates };
+extern const std::array<std::pair<SettingsTab, const char*>, 5> kSettingsTabs;
+inline constexpr int kNumSettingsTabs = 5;
 
 enum SettingRowIdx {
     SettingRowResolution,

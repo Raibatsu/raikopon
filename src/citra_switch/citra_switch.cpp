@@ -5,6 +5,7 @@
 #include <array>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <utility>
 #include <switch.h>
@@ -15,6 +16,7 @@
 #include "citra_switch/input.h"
 #include "citra_switch/menu.h"
 #include "citra_switch/layout_editor.h"
+#include "citra_switch/updater.h"
 #include "common/horizon_thread.h"
 
 extern "C" {
@@ -269,11 +271,16 @@ void RunGame(PadState& pad, const std::string& rom) {
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Captured before anything else touches it: the in-app updater needs this to know what file
+    // to overwrite and what to hand back to hbloader on relaunch (see updater.h).
+    SwitchFrontend::SetOwnNroPath((argc > 0 && argv[0] != nullptr) ? argv[0] : std::string{});
+
     const bool have_socket = R_SUCCEEDED(socketInitializeDefault());
     if (have_socket) {
         nxlinkStdio();
     }
-    // Mount the embedded romfs for deko3D shaders
+    // Mount the embedded romfs (CA bundle for the updater's HTTPS requests, deko3D shaders if
+    // that backend is enabled).
     const bool have_romfs = R_SUCCEEDED(romfsInit());
     if (!have_romfs) {
         std::printf("Warning: romfsInit() failed.\n");
@@ -327,3 +334,21 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
+
+namespace SwitchFrontend {
+
+// See updater.h's file comment for why this lives here rather than in updater.cpp: it needs
+// envSetNextLoad (libnx), which can't share a translation unit with updater.cpp's use of
+// common/file_util.h.
+[[noreturn]] void RelaunchSelf() {
+    if (!HasOwnNroPath()) {
+        // Nothing sensible to relaunch into - fall through to a normal process exit rather than
+        // calling envSetNextLoad with an empty path.
+        exit(0);
+    }
+    const std::string& path = GetOwnNroPath();
+    envSetNextLoad(path.c_str(), path.c_str());
+    exit(0);
+}
+
+} // namespace SwitchFrontend

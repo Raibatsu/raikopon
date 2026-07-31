@@ -42,6 +42,8 @@ add_executable(citra_switch
     rail_icons.h
     settings_model.cpp
     settings_model.h
+    updater.cpp
+    updater.h
 )
 
 # oaknut_horizon_jit is pulled in transitively via oaknut
@@ -57,6 +59,21 @@ target_include_directories(citra_switch PRIVATE ${SWITCH_FREETYPE_INCLUDE_DIR})
 # Order matters for the static newlib link: freetype -> png -> bz2 -> z.
 target_link_libraries(citra_switch PRIVATE
     ${SWITCH_FREETYPE} ${SWITCH_PNG} ${SWITCH_BZ2} ${SWITCH_ZLIB})
+
+# GitHub release polling + download for the in-app updater (Updates tab / updater.cpp).
+find_path(SWITCH_CURL_INCLUDE_DIR curl/curl.h REQUIRED)
+find_library(SWITCH_CURL curl REQUIRED)
+find_path(SWITCH_MBEDTLS_INCLUDE_DIR mbedtls/sha256.h REQUIRED)
+find_library(SWITCH_MBEDTLS mbedtls REQUIRED)
+find_library(SWITCH_MBEDX509 mbedx509 REQUIRED)
+find_library(SWITCH_MBEDCRYPTO mbedcrypto REQUIRED)
+target_include_directories(citra_switch PRIVATE
+    ${SWITCH_CURL_INCLUDE_DIR} ${SWITCH_MBEDTLS_INCLUDE_DIR})
+# Order matters for the static newlib link: curl -> mbedtls -> mbedx509 -> mbedcrypto.
+target_link_libraries(citra_switch PRIVATE
+    ${SWITCH_CURL} ${SWITCH_MBEDTLS} ${SWITCH_MBEDX509} ${SWITCH_MBEDCRYPTO})
+# nlohmann/json (vendored, see externals/CMakeLists.txt) for parsing GitHub API responses.
+target_link_libraries(citra_switch PRIVATE json-headers)
 
 # The GLES bring-up path pulls the switch-mesa EGL/GLES driver. It is mutually exclusive with NXVK
 # until NXVK either supports nouveau or Zink (or both).
@@ -82,14 +99,41 @@ if (ENABLE_VULKAN)
 endif()
 
 set(RAIKOPON_NRO_NAME "raikopon")
+# Single source of truth for the app version: feeds both the NACP metadata below and
+# raikopon_version.h (generated), which the in-app updater compares GitHub release tags against.
+# Bump this by hand for every release. Keep it short - the NACP DisplayVersion field must be
+# under 0x10 bytes on real hardware.
+set(RAIKOPON_VERSION "1.5.0")
+
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/raikopon_version.h.in"
+    "${CMAKE_CURRENT_BINARY_DIR}/raikopon_version.h"
+    @ONLY
+)
+target_include_directories(citra_switch PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 nx_generate_nacp(OUTPUT ${RAIKOPON_NRO_NAME}.nacp
     NAME "Raikopon"
     AUTHOR "Azahar Team \& PalindromicBreadLoaf \& Raibatsu"
-    VERSION "1.5.0"
+    VERSION "${RAIKOPON_VERSION}"
 )
 
-# Compile deko3d shaders with uam and pack them into the romfs.
+set(RAIKOPON_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
+file(MAKE_DIRECTORY "${RAIKOPON_ROMFS_DIR}")
+
+# switch-curl links against switch-mbedtls, which (unlike a curl build backed by the Switch's own
+# ssl: service) has no access to a system trust store, so the in-app updater's HTTPS requests need
+# their own CA bundle to verify GitHub's certificate against. Sourced from curl's own official
+# Mozilla CA extraction (https://curl.se/docs/caextract.html) - re-fetch this file periodically
+# from that URL to pick up root rotations; it is not auto-updated by this build.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/cacert.pem"
+    "${RAIKOPON_ROMFS_DIR}/cacert.pem"
+    COPYONLY
+)
+dkp_add_asset_target(raikopon_romfs "${RAIKOPON_ROMFS_DIR}")
+
+# Compile deko3d shaders with uam and pack them into the same romfs.
 # Do note that the Deko3D backend was never finished and currently isn't planned to be.
 if (ENABLE_DEKO3D)
     find_program(UAM_EXE NAMES uam
@@ -97,8 +141,7 @@ if (ENABLE_DEKO3D)
         REQUIRED)
 
     set(DK_SHADER_SRC_DIR "${CMAKE_SOURCE_DIR}/src/video_core/renderer_deko3d/shaders")
-    set(DK_ROMFS_DIR "${CMAKE_CURRENT_BINARY_DIR}/romfs")
-    set(DK_ROMFS_SHADER_DIR "${DK_ROMFS_DIR}/shaders")
+    set(DK_ROMFS_SHADER_DIR "${RAIKOPON_ROMFS_DIR}/shaders")
     file(MAKE_DIRECTORY "${DK_ROMFS_SHADER_DIR}")
 
     set(DK_DKSH_FILES "")
@@ -121,20 +164,13 @@ if (ENABLE_DEKO3D)
     dk_add_shader(ubershader_fsh frag)
 
     add_custom_target(dekopon_shaders DEPENDS ${DK_DKSH_FILES})
-    dkp_add_asset_target(dekopon_romfs "${DK_ROMFS_DIR}")
-    add_dependencies(dekopon_romfs dekopon_shaders)
-    set_property(TARGET dekopon_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK_DKSH_FILES})
-
-    nx_create_nro(citra_switch
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nro"
-        NACP "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nacp"
-        ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
-        ROMFS dekopon_romfs
-    )
-else()
-    nx_create_nro(citra_switch
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nro"
-        NACP "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nacp"
-        ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
-    )
+    add_dependencies(raikopon_romfs dekopon_shaders)
+    set_property(TARGET raikopon_romfs APPEND PROPERTY DKP_ASSET_FILES ${DK_DKSH_FILES})
 endif()
+
+nx_create_nro(citra_switch
+    OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nro"
+    NACP "${CMAKE_CURRENT_BINARY_DIR}/${RAIKOPON_NRO_NAME}.nacp"
+    ICON "${CMAKE_CURRENT_SOURCE_DIR}/icon.jpg"
+    ROMFS raikopon_romfs
+)

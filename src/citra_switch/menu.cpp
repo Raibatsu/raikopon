@@ -30,6 +30,7 @@
 #include "citra_switch/menu_data.h"
 #include "citra_switch/rail_icons.h"
 #include "citra_switch/settings_model.h"
+#include "citra_switch/updater.h"
 
 namespace SwitchFrontend {
 namespace {
@@ -166,6 +167,15 @@ enum ArticRow {
     ArticRowCount,
 };
 
+// Rows on the Updates page. Install only appears once a check has found an update, so the live
+// row count is UpdatesRowInstall (2) until then, UpdatesRowCount (3) after.
+enum UpdatesRow {
+    UpdatesRowChannel,
+    UpdatesRowCheck,
+    UpdatesRowInstall,
+    UpdatesRowCount,
+};
+
 // The folder browser covers the whole screen, rail included.
 constexpr int kBrowseTop = 108;
 constexpr int kBrowseRowH = 44;
@@ -196,11 +206,15 @@ constexpr std::array<std::pair<u64, SwitchFrontend::InputButton>,
 constexpr std::array<const std::uint8_t*, 5> kRailIconMasks{
     RailIcons::kLibrary, RailIcons::kInstall, RailIcons::kSettings, RailIcons::kPaths, nullptr};
 
+// Text fallback for tabs with no bitmap icon (kRailIconMasks entry is nullptr), indexed the same
+// way. Empty string is never reached in practice since every nullptr tab above has an entry here.
+constexpr std::array<const char*, 5> kRailIconFallbackLabels{"", "", "", "", "AB"};
+
 // Draws a nav-rail icon, tinted like text: the mask supplies coverage only.
 void DrawRailIcon(Canvas& canvas, Tab tab, int cx, int cy, u32 color) {
     const std::uint8_t* mask = kRailIconMasks[static_cast<std::size_t>(tab)];
     if (mask == nullptr) {
-        constexpr const char* label = "AB";
+        const char* label = kRailIconFallbackLabels[static_cast<std::size_t>(tab)];
         g_font.Draw(canvas, cx - g_font.Measure(label, 18) / 2, cy + 6, label, 18, color);
         return;
     }
@@ -552,9 +566,10 @@ public:
             const u64 down = padGetButtonsDown(&pad);
             held = padGetButtons(&pad);
 
-            // +/- together exits the app, but will not allow during an install.
-            if (!install_active && (held & (HidNpadButton_Plus | HidNpadButton_Minus)) ==
-                                       (HidNpadButton_Plus | HidNpadButton_Minus)) {
+            // +/- together exits the app, but will not allow during an install or update.
+            if (!install_active && !UpdatesBusy() &&
+                (held & (HidNpadButton_Plus | HidNpadButton_Minus)) ==
+                    (HidNpadButton_Plus | HidNpadButton_Minus)) {
                 Flush();
                 return {MenuAction::Exit, {}};
             }
@@ -570,6 +585,8 @@ public:
             bool done = false;
             if (install_active) {
                 PumpInstall();
+            } else if (UpdatesBusy()) {
+                PumpUpdates();
             } else if (layout_picker_open) {
                 HandleLayoutPicker(down, nav);
             } else if (details_open) {
@@ -611,7 +628,7 @@ public:
                 return result;
             }
 
-            if (!install_active && !details_open && !layout_picker_open) {
+            if (!install_active && !UpdatesBusy() && !details_open && !layout_picker_open) {
                 HandleTouch();
             }
             if (pending_launch) {
@@ -632,9 +649,13 @@ public:
 
     // Releasing the framebuffer hands the nwindow back so the emulator's renderer can claim it for the launched game.
     ~Menu() {
-        // Only reachable with a worker still running if appletMainLoop() bowed out mid-install.
+        // Only reachable with a worker still running if appletMainLoop() bowed out mid-install
+        // or mid-update-check/download.
         if (install_thread.joinable()) {
             install_thread.join();
+        }
+        if (updates_thread.joinable()) {
+            updates_thread.join();
         }
         if (fb_ready) {
             framebufferClose(&fb);
@@ -699,6 +720,25 @@ private:
     InstallResult install_result{};
     std::string install_name;
     bool install_active = false;
+
+    // Settings > Updates sub-tab. The channel itself isn't cached here — it's config-backed and
+    // trivially cheap to read (SwitchFrontend::GetUpdateChannel()), so every draw/handle call
+    // just reads it fresh rather than risking it going stale relative to the config file.
+    int updates_sel = 0;
+    std::string updates_status; // Human-readable outcome of the last check/download, if any.
+    bool updates_status_is_error = false;
+    std::optional<SwitchFrontend::UpdateCheckOutcome> updates_outcome;
+
+    // The check/download worker. Only one of the two runs at a time; both share this state since
+    // they're never active simultaneously (mirrors install_thread/install_done above).
+    std::thread updates_thread;
+    std::atomic<bool> updates_op_done{false};
+    std::atomic<std::size_t> updates_written{0};
+    std::atomic<std::size_t> updates_total{0};
+    bool updates_checking = false;
+    bool updates_downloading = false;
+    SwitchFrontend::UpdateCheckOutcome updates_check_result{};
+    SwitchFrontend::DownloadResult updates_download_result{};
 
     void Rescan() {
         games = ScanGames();
@@ -958,6 +998,131 @@ private:
         }
     }
 
+    // True while either the update check or the update download worker is running.
+    bool UpdatesBusy() const {
+        return updates_checking || updates_downloading;
+    }
+
+    void StartUpdateCheck() {
+        if (UpdatesBusy()) {
+            return;
+        }
+        updates_status.clear();
+        updates_outcome.reset();
+        updates_op_done = false;
+        updates_checking = true;
+        const SwitchFrontend::UpdateChannel channel = SwitchFrontend::GetUpdateChannel();
+        updates_thread = std::thread([this, channel] {
+            updates_check_result = SwitchFrontend::CheckForUpdate(channel);
+            updates_op_done = true;
+        });
+    }
+
+    void StartUpdateDownload() {
+        if (UpdatesBusy() || !updates_outcome ||
+            updates_outcome->result != SwitchFrontend::UpdateCheckResult::UpdateAvailable) {
+            return;
+        }
+        updates_written = 0;
+        updates_total = updates_outcome->info.nro_size;
+        updates_op_done = false;
+        updates_downloading = true;
+        const SwitchFrontend::UpdateInfo info = updates_outcome->info;
+        updates_thread = std::thread([this, info] {
+            updates_download_result = SwitchFrontend::DownloadAndInstallUpdate(
+                info, [this](std::size_t written, std::size_t total) {
+                    updates_written = written;
+                    updates_total = total;
+                });
+            updates_op_done = true;
+        });
+    }
+
+    // Called every frame while a check or download worker is running.
+    void PumpUpdates() {
+        if (!updates_op_done) {
+            return;
+        }
+        updates_thread.join();
+        if (updates_checking) {
+            updates_checking = false;
+            updates_outcome = updates_check_result;
+            switch (updates_check_result.result) {
+            case SwitchFrontend::UpdateCheckResult::UpdateAvailable:
+                updates_status = "Update available: " + updates_check_result.info.tag_name;
+                updates_status_is_error = false;
+                break;
+            case SwitchFrontend::UpdateCheckResult::UpToDate:
+                updates_status = "You're already on the latest version.";
+                updates_status_is_error = false;
+                break;
+            case SwitchFrontend::UpdateCheckResult::NoReleaseFound:
+                updates_status = "No release found on this channel.";
+                updates_status_is_error = true;
+                break;
+            case SwitchFrontend::UpdateCheckResult::NetworkError:
+                updates_status = "Network error" +
+                                  (updates_check_result.diagnostic.empty()
+                                       ? std::string{"."}
+                                       : (": " + updates_check_result.diagnostic));
+                updates_status_is_error = true;
+                break;
+            case SwitchFrontend::UpdateCheckResult::ParseError:
+                updates_status = "Couldn't read the release info.";
+                updates_status_is_error = true;
+                break;
+            }
+        } else if (updates_downloading) {
+            updates_downloading = false;
+            switch (updates_download_result) {
+            case SwitchFrontend::DownloadResult::Success:
+                ShowUpdateInstalledModal();
+                break;
+            case SwitchFrontend::DownloadResult::NetworkError:
+                updates_status = "Download failed - check your connection and try again.";
+                updates_status_is_error = true;
+                break;
+            case SwitchFrontend::DownloadResult::ChecksumMismatch:
+                updates_status = "Checksum didn't match - try checking for updates again.";
+                updates_status_is_error = true;
+                break;
+            case SwitchFrontend::DownloadResult::ReplaceFailed:
+                updates_status = "Downloaded and verified, but couldn't replace the app.";
+                updates_status_is_error = true;
+                break;
+            }
+        }
+    }
+
+    // Blocks on a single-button (A only, no cancel) acknowledgement that the update installed,
+    // then relaunches into it. Never returns.
+    [[noreturn]] void ShowUpdateInstalledModal() {
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            if (down & HidNpadButton_A) {
+                break;
+            }
+            Draw();
+            DrawUpdateInstalledModal(canvas);
+            Present();
+        }
+        SwitchFrontend::RelaunchSelf();
+    }
+
+    void DrawUpdateInstalledModal(Canvas& c) {
+        constexpr int w = 620;
+        constexpr int h = 176;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+        g_font.Draw(c, x + 24, y + 40, "Update installed", 24, kColAccent);
+        g_font.Draw(c, x + 24, y + 78, "Raikopon needs to restart to finish updating.", 18,
+                    kColText);
+        DrawHint(c, x + 24, y + h - 38, "A", "Restart now");
+    }
+
     // Blocks on a yes/no prompt.
     bool ConfirmInstall(const CiaEntry& cia) {
         u16 installed_version = 0;
@@ -1063,6 +1228,9 @@ private:
     bool HandleSettings(u64 down, u32 nav) {
         if (settings_tab == SettingsTab::Controls) {
             return HandleControlsTab(down, nav);
+        }
+        if (settings_tab == SettingsTab::Updates) {
+            return HandleUpdatesTab(down, nav);
         }
 
         if (settings_reset_confirm) {
@@ -1351,6 +1519,63 @@ private:
         return false;
     }
 
+    // Row count on screen right now: Install only shows up once a check has found something to
+    // install.
+    int UpdatesRowCountLive() const {
+        return (updates_outcome &&
+                updates_outcome->result == SwitchFrontend::UpdateCheckResult::UpdateAvailable)
+                   ? UpdatesRowCount
+                   : UpdatesRowInstall;
+    }
+
+    void ActivateUpdates() {
+        if (updates_sel == UpdatesRowChannel) {
+            const auto next =
+                SwitchFrontend::GetUpdateChannel() == SwitchFrontend::UpdateChannel::Stable
+                    ? SwitchFrontend::UpdateChannel::Experimental
+                    : SwitchFrontend::UpdateChannel::Stable;
+            SwitchFrontend::SetUpdateChannel(next);
+            // A check result from one channel must not leak into the other.
+            updates_outcome.reset();
+            updates_status.clear();
+            return;
+        }
+        if (updates_sel == UpdatesRowCheck) {
+            StartUpdateCheck();
+            return;
+        }
+        if (updates_sel == UpdatesRowInstall) {
+            StartUpdateDownload();
+        }
+    }
+
+    bool HandleUpdatesTab(u64 down, u32 nav) {
+        if (down & HidNpadButton_L) {
+            SwitchSettingsTab(-1);
+            return false;
+        }
+        if (down & HidNpadButton_R) {
+            SwitchSettingsTab(+1);
+            return false;
+        }
+
+        const int count = UpdatesRowCountLive();
+        updates_sel = std::clamp(updates_sel, 0, count - 1);
+        if (nav & DirUp) {
+            updates_sel = std::max(0, updates_sel - 1);
+        }
+        if (nav & DirDown) {
+            updates_sel = std::min(count - 1, updates_sel + 1);
+        }
+        if (down & HidNpadButton_A) {
+            ActivateUpdates();
+        }
+        if (down & HidNpadButton_B) {
+            EnterRail();
+        }
+        return false;
+    }
+
     void PickFolder(int row) {
         const std::string& current = row == PathRowUserDir ? paths.user_dir : paths.roms_dir;
         const std::optional<std::string> picked = BrowseForFolder(current);
@@ -1468,6 +1693,18 @@ private:
                     remap_sel = row;
                 } else {
                     remap_capturing = true;
+                }
+            }
+        } else if (tab == Tab::Settings && settings_tab == SettingsTab::Updates) {
+            constexpr int row_top = kSettingsTop;
+            constexpr int row_stride = 78;
+            const int row = (ty - row_top) / row_stride;
+            const int count = UpdatesRowCountLive();
+            if (ty >= row_top && row >= 0 && row < count) {
+                if (updates_sel == row) {
+                    ActivateUpdates();
+                } else {
+                    updates_sel = row;
                 }
             }
         } else if (tab == Tab::Settings) {
@@ -1841,6 +2078,85 @@ private:
         DrawHint(c, hx, hy, "B", "Cancel");
     }
 
+    // Body of the Settings > Updates sub-tab: row cards only, matching DrawControlsTab's shape —
+    // the header, tab bar, footer description, and hint bar are all drawn by DrawSettingsPage.
+    void DrawUpdatesTab(Canvas& c, bool content_focus) {
+        const int x = kContentX + 24;
+        const int w = kContentW - 48;
+
+        const int count = UpdatesRowCountLive();
+        constexpr int row_top = kSettingsTop;
+        constexpr int row_h = 68;
+        constexpr int row_stride = 78;
+        for (int i = 0; i < count; ++i) {
+            const int y = row_top + i * row_stride;
+            const bool on = i == updates_sel;
+            if (on) {
+                c.FillRoundRect(x, y, w, row_h, 10,
+                                content_focus ? kColSurfaceHi : kColSurface);
+                c.FillRoundRect(x, y + 8, 4, row_h - 16, 2,
+                                content_focus ? kColAccent : kColBadge);
+            }
+
+            const char* label = "";
+            std::string value;
+            u32 value_color = on && content_focus ? kColAccent : kColTextDim;
+            switch (i) {
+            case UpdatesRowChannel:
+                label = "Update Channel";
+                value = SwitchFrontend::GetUpdateChannel() == SwitchFrontend::UpdateChannel::Stable
+                            ? "Stable"
+                            : "Experimental";
+                break;
+            case UpdatesRowCheck:
+                label = "Check for Updates";
+                value = updates_status.empty() ? "Not checked yet" : updates_status;
+                if (!updates_status.empty() && updates_status_is_error) {
+                    value_color = kColError;
+                }
+                break;
+            default:
+                label = "Install Update";
+                value = updates_outcome ? updates_outcome->info.tag_name : "";
+                break;
+            }
+            g_font.Draw(c, x + 20, y + 27, label, 21, kColText);
+            g_font.Draw(c, x + 20, y + 52, g_font.Truncate(value, 17, w - 44), 17, value_color);
+        }
+    }
+
+    void DrawUpdateProgress(Canvas& c) {
+        const std::size_t written = updates_written.load();
+        const std::size_t total = updates_total.load();
+        constexpr int w = 560;
+        constexpr int h = 136;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        if (updates_checking) {
+            g_font.Draw(c, x + 24, y + 42, "Checking for updates...", 20, kColText);
+            g_font.Draw(c, x + 24, y + 76, "Don't close Raikopon or turn off the console", 18,
+                        kColTextDim);
+            return;
+        }
+
+        g_font.Draw(c, x + 24, y + 42, "Downloading update...", 20, kColText);
+        const int bar_x = x + 24;
+        const int bar_y = y + 64;
+        const int bar_w = w - 48;
+        c.FillRoundRect(bar_x, bar_y, bar_w, 10, 5, kColRail);
+        const int fill =
+            total == 0 ? 0 : static_cast<int>(static_cast<u64>(bar_w) * written / total);
+        c.FillRoundRect(bar_x, bar_y, std::clamp(fill, 0, bar_w), 10, 5, kColAccent);
+
+        g_font.Draw(c, bar_x, bar_y + 36, FormatSize(written) + " / " + FormatSize(total), 18,
+                    kColTextDim);
+        const char* warn = "Don't close Raikopon or turn off the console";
+        g_font.Draw(c, x + w - 24 - g_font.Measure(warn, 18), bar_y + 36, warn, 18, kColTextDim);
+    }
+
     void Draw() {
         Canvas& c = canvas;
         c.Clear(kColBg);
@@ -1866,6 +2182,9 @@ private:
         }
         if (install_active) {
             DrawInstallProgress(c);
+        }
+        if (UpdatesBusy()) {
+            DrawUpdateProgress(c);
         }
     }
 
@@ -2196,6 +2515,21 @@ private:
                                     {.chip = "Y"},
                                     {.text = " to reset to default."}});
             }
+        } else if (settings_tab == SettingsTab::Updates) {
+            DrawUpdatesTab(c, content_focus);
+            const char* desc = "";
+            switch (updates_sel) {
+            case UpdatesRowChannel:
+                desc = "Experimental tracks pre-releases and may be less stable than Stable.";
+                break;
+            case UpdatesRowCheck:
+                desc = "Checks the selected channel on GitHub for a newer version.";
+                break;
+            default:
+                desc = "Downloads and verifies the update before installing it.";
+                break;
+            }
+            g_font.Draw(c, x + 20, footer_y + 16, desc, 18, kColTextDim);
         } else {
             auto rows = BuildSettingRows(settings_tab, settings);
             const int count = static_cast<int>(rows.size());
@@ -2288,6 +2622,21 @@ private:
                 hx += DrawHint(c, hx, hy, "L/R", "Tab") + 22;
                 hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             }
+            DrawHint(c, hx, hy, "+ -", "Exit");
+        } else if (settings_tab == SettingsTab::Updates) {
+            const char* action = "Select";
+            if (updates_sel == UpdatesRowChannel) {
+                action = "Switch";
+            } else if (updates_sel == UpdatesRowCheck) {
+                action = "Check";
+            } else if (updates_sel == UpdatesRowInstall) {
+                action = "Install";
+            }
+            int hx = kContentX + 24;
+            const int hy = kContentBottom + (kHintH - 26) / 2;
+            hx += DrawHint(c, hx, hy, "A", action) + 22;
+            hx += DrawHint(c, hx, hy, "L/R", "Tab") + 22;
+            hx += DrawHint(c, hx, hy, "B", "Menu") + 22;
             DrawHint(c, hx, hy, "+ -", "Exit");
         } else {
             const auto rows = BuildSettingRows(settings_tab, settings);

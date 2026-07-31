@@ -118,6 +118,8 @@ layout_cycle_mask =
 movie_throttle_clock_percentage =
 # Last address used for Artic Base or the Artic Setup Tool.
 last_artic_base_addr =
+# In-app updater channel: 0 = Stable (GitHub releases), 1 = Experimental (GitHub pre-releases).
+update_channel = 0
 
 [Controls]
 # Use input streamed by the real 3DS while connected to Artic Base (0, default).

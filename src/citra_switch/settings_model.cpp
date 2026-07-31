@@ -10,11 +10,12 @@
 
 namespace SwitchFrontend {
 
-const std::array<std::pair<SettingsTab, const char*>, 4> kSettingsTabs{{
+const std::array<std::pair<SettingsTab, const char*>, 5> kSettingsTabs{{
     {SettingsTab::Graphics, "Graphics"},
     {SettingsTab::Debug, "Debug"},
     {SettingsTab::Misc, "Misc"},
     {SettingsTab::Controls, "Controls"},
+    {SettingsTab::Updates, "Updates"},
 }};
 
 const char* RegionName(int region) {
@@ -204,6 +205,7 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
              "Screen layouts to swap between when tapping screen-swap key."},
         };
     case SettingsTab::Controls:
+    case SettingsTab::Updates:
         return {};
     }
     return {};

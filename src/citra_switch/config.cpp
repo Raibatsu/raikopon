@@ -57,6 +57,7 @@ SwitchFrontend::SwitchPaths s_paths;
 std::string s_active_user_dir;
 std::string s_inserted_cartridge;
 std::string s_artic_base_address;
+SwitchFrontend::UpdateChannel s_update_channel = SwitchFrontend::UpdateChannel::Stable;
 
 // Reads/Writes the SD-card config file
 class Config {
@@ -205,6 +206,9 @@ private:
         }
         s_artic_base_address =
             Common::StripSpaces(config->Get("Switch", "last_artic_base_addr", ""));
+        s_update_channel = config->GetInteger("Switch", "update_channel", 0) == 1
+                               ? SwitchFrontend::UpdateChannel::Experimental
+                               : SwitchFrontend::UpdateChannel::Stable;
         Settings::values.use_artic_base_controller = config->GetBoolean(
             "Controls", Settings::values.use_artic_base_controller.GetLabel(), false);
 
@@ -301,6 +305,8 @@ private:
         ss << "scan_recursive = " << (s_paths.scan_recursive ? "true" : "false") << '\n';
         ss << "inserted_cartridge = " << s_inserted_cartridge << '\n';
         ss << "last_artic_base_addr = " << s_artic_base_address << '\n';
+        ss << "update_channel = "
+           << (s_update_channel == SwitchFrontend::UpdateChannel::Experimental ? 1 : 0) << '\n';
         ss << "pointer_source = " << static_cast<int>(SwitchFrontend::GetPointerSource()) << '\n';
         ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
         ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
@@ -389,6 +395,15 @@ const std::string& GetArticBaseAddress() {
 
 void SetArticBaseAddress(const std::string& address) {
     s_artic_base_address = Common::StripSpaces(address);
+    SaveConfig();
+}
+
+UpdateChannel GetUpdateChannel() {
+    return s_update_channel;
+}
+
+void SetUpdateChannel(UpdateChannel channel) {
+    s_update_channel = channel;
     SaveConfig();
 }
 
