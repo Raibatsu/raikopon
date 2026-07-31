@@ -671,10 +671,6 @@ const Pica::PicaCore& GPU::PicaCore() const {
     return impl->pica;
 }
 
-Pica::DebugContext& GPU::DebugContext() {
-    return *Pica::g_debug_context;
-}
-
 GraphicsDebugger& GPU::Debugger() {
     return impl->gpu_debugger;
 }

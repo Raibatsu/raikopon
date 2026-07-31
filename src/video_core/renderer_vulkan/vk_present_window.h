@@ -79,6 +79,10 @@ public:
         return presentation_suspended.load(std::memory_order_relaxed);
     }
 
+    vk::Format GetSurfaceFormat() const noexcept {
+        return swapchain.GetSurfaceFormat().format;
+    }
+
 private:
     void PresentThread(std::stop_token token);
 

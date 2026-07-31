@@ -176,7 +176,6 @@ private:
     DescriptorUpdateQueue update_queue;
     RasterizerVulkan rasterizer;
     std::unique_ptr<PresentWindow> secondary_present_window_ptr;
-
     DescriptorHeap present_heap;
     vk::UniquePipelineLayout present_pipeline_layout;
     std::array<vk::Pipeline, PRESENT_PIPELINES> present_pipelines;
@@ -217,6 +216,10 @@ private:
     VideoCore::LoadCallbackStage loading_stage{};
     std::size_t loading_current = 0;
     std::size_t loading_total = 0;
+
+    bool isSecondaryWindow;
+    bool secondaryWindowEnabled;
+    bool screenRendered;
 };
 
 } // namespace Vulkan

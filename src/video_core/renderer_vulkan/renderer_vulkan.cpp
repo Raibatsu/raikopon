@@ -38,7 +38,6 @@
 #include <vector>
 
 #include <vk_mem_alloc.h>
-
 #if defined(__APPLE__) && !defined(HAVE_LIBRETRO)
 #include "common/apple_utils.h"
 #endif
@@ -266,23 +265,29 @@ void RendererVulkan::PrepareDraw(Frame* frame, const Layout::FramebufferLayout& 
 
 void RendererVulkan::RenderToWindow(PresentWindow& window, const Layout::FramebufferLayout& layout,
                                     bool flipped) {
-    Frame* frame = window.GetRenderFrame();
+    if (!Settings::values.use_skip_duplicate_frames.GetValue() ||
+        Core::PerfStats::game_frames_updated) {
+        Frame* frame = window.GetRenderFrame();
 
-    if (layout.width != frame->width || layout.height != frame->height) {
-        window.WaitPresent();
-        scheduler.Finish();
-        window.RecreateFrame(frame, layout.width, layout.height);
+        if (layout.width != frame->width || layout.height != frame->height) {
+            window.WaitPresent();
+            scheduler.Finish();
+            window.RecreateFrame(frame, layout.width, layout.height);
+        }
+
+        clear_color.float32[0] = Settings::values.bg_red.GetValue();
+        clear_color.float32[1] = Settings::values.bg_green.GetValue();
+        clear_color.float32[2] = Settings::values.bg_blue.GetValue();
+        clear_color.float32[3] = 1.0f;
+
+        DrawScreens(frame, layout, flipped);
+        scheduler.Flush(frame->render_ready);
+        window.Present(frame);
+        if ((secondaryWindowEnabled && isSecondaryWindow) || (!secondaryWindowEnabled)) {
+            Core::PerfStats::game_frames_updated = false;
+            screenRendered = true;
+        }
     }
-
-    clear_color.float32[0] = Settings::values.bg_red.GetValue();
-    clear_color.float32[1] = Settings::values.bg_green.GetValue();
-    clear_color.float32[2] = Settings::values.bg_blue.GetValue();
-    clear_color.float32[3] = 1.0f;
-
-    DrawScreens(frame, layout, flipped);
-    scheduler.Flush(frame->render_ready);
-
-    window.Present(frame);
 }
 
 void RendererVulkan::LoadFBToScreenInfo(const Pica::FramebufferConfig& framebuffer,
@@ -1017,6 +1022,11 @@ void RendererVulkan::ConfigureFramebufferTexture(TextureInfo& texture,
 }
 
 void RendererVulkan::FillScreen(Common::Vec3<u8> color, const TextureInfo& texture) {
+    // When loading some 3GX extensions, FillScreen may be called before texture image is available
+    if (!texture.image) {
+        return;
+    }
+
     const vk::ClearColorValue clear_color = {
         .float32 =
             std::array{
@@ -2028,9 +2038,28 @@ void RendererVulkan::SwapBuffers() {
         return;
     }
     system.perf_stats->StartSwap();
+    screenRendered = false;
+#ifndef ANDROID
+    if (Settings::values.layout_option.GetValue() == Settings::LayoutOption::SeparateWindows) {
+        ASSERT(secondary_window);
+        secondaryWindowEnabled = true;
+    } else {
+        secondaryWindowEnabled = false;
+    }
+#endif
+
+#ifdef ANDROID
+    if (secondary_window) {
+        secondaryWindowEnabled = true;
+    } else {
+        secondaryWindowEnabled = false;
+    }
+#endif
+
     const Layout::FramebufferLayout& layout = render_window.GetFramebufferLayout();
     PrepareRendertarget();
     RenderScreenshot();
+    isSecondaryWindow = false;
     RenderToWindow(main_present_window, layout, false);
 #ifndef ANDROID
     if (Settings::values.layout_option.GetValue() == Settings::LayoutOption::SeparateWindows) {
@@ -2040,6 +2069,7 @@ void RendererVulkan::SwapBuffers() {
             secondary_present_window_ptr = std::make_unique<PresentWindow>(
                 *secondary_window, instance, scheduler, IsLowRefreshRate());
         }
+        isSecondaryWindow = true;
         RenderToWindow(*secondary_present_window_ptr, secondary_layout, false);
         secondary_window->PollEvents();
     }
@@ -2052,10 +2082,14 @@ void RendererVulkan::SwapBuffers() {
             secondary_present_window_ptr = std::make_unique<PresentWindow>(
                 *secondary_window, instance, scheduler, IsLowRefreshRate());
         }
+        isSecondaryWindow = true;
         RenderToWindow(*secondary_present_window_ptr, secondary_layout, false);
         secondary_window->PollEvents();
     }
 #endif
+    if (!screenRendered) {
+        scheduler.Finish();
+    }
 
     system.perf_stats->EndSwap();
     rasterizer.TickFrame();
@@ -2184,6 +2218,15 @@ void RendererVulkan::RenderScreenshotWithStagingCopy() {
 
     // Copy backing image data to the QImage screenshot buffer
     std::memcpy(settings.screenshot_bits, alloc_info.pMappedData, staging_buffer_info.size);
+
+    // QImage::Format_RGB32 expects BGRA byte order. If the swapchain format is RGBA,
+    // swap R and B channels so the screenshot colors are correct.
+    if (main_present_window.GetSurfaceFormat() == vk::Format::eR8G8B8A8Unorm) {
+        u8* pixels = static_cast<u8*>(settings.screenshot_bits);
+        for (u32 i = 0; i < width * height; i++) {
+            std::swap(pixels[i * 4 + 0], pixels[i * 4 + 2]);
+        }
+    }
 
     // Destroy allocated resources
     vmaDestroyBuffer(instance.GetAllocator(), staging_buffer, allocation);
@@ -2339,6 +2382,15 @@ bool RendererVulkan::TryRenderScreenshotWithHostMemory() {
 
     // Ensure the copy is fully completed before saving the screenshot
     scheduler.Finish();
+
+    // QImage::Format_RGB32 expects BGRA byte order. If the swapchain format is RGBA,
+    // swap R and B channels so the screenshot colors are correct.
+    if (main_present_window.GetSurfaceFormat() == vk::Format::eR8G8B8A8Unorm) {
+        u8* pixels = static_cast<u8*>(settings.screenshot_bits);
+        for (u32 i = 0; i < width * height; i++) {
+            std::swap(pixels[i * 4 + 0], pixels[i * 4 + 2]);
+        }
+    }
 
     // Image data has been copied directly to host memory
     device.destroyFramebuffer(frame.framebuffer);

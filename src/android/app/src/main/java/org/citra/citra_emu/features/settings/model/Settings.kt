@@ -104,6 +104,7 @@ class Settings {
         const val SECTION_RENDERER = "Renderer"
         const val SECTION_LAYOUT = "Layout"
         const val SECTION_UTILITY = "Utility"
+        const val SECTION_NETWORK = "WebService"
         const val SECTION_AUDIO = "Audio"
         const val SECTION_DEBUG = "Debugging"
         const val SECTION_THEME = "Theme"
@@ -142,6 +143,7 @@ class Settings {
         const val HOTKEY_QUICKSAVE = "hotkey_quickload"
         const val HOTKEY_QUICKLOAD = "hotkey_quickpause"
         const val HOTKEY_TURBO_LIMIT = "hotkey_turbo_limit"
+        const val HOTKEY_BUTTON_COMBO = "hotkey_button_combo"
 
         val buttonKeys = listOf(
             KEY_BUTTON_A,
@@ -209,7 +211,8 @@ class Settings {
             HOTKEY_PAUSE_OR_RESUME,
             HOTKEY_QUICKSAVE,
             HOTKEY_QUICKLOAD,
-            HOTKEY_TURBO_LIMIT
+            HOTKEY_TURBO_LIMIT,
+            HOTKEY_BUTTON_COMBO
         )
         val hotkeyTitles = listOf(
             R.string.controller_hotkey_enable_button,
@@ -219,7 +222,8 @@ class Settings {
             R.string.emulation_toggle_pause,
             R.string.emulation_quicksave,
             R.string.emulation_quickload,
-            R.string.turbo_limit_hotkey
+            R.string.turbo_limit_hotkey,
+            R.string.button_combo
         )
 
         // TODO: Move these in with the other setting keys in GenerateSettingKeys.cmake
@@ -241,10 +245,12 @@ class Settings {
                     SECTION_CONTROLS,
                     SECTION_RENDERER,
                     SECTION_LAYOUT,
+                    SECTION_NETWORK,
                     SECTION_STORAGE,
                     SECTION_UTILITY,
                     SECTION_AUDIO,
-                    SECTION_DEBUG
+                    SECTION_DEBUG,
+                    SECTION_MISC
                 )
         }
     }
