@@ -75,9 +75,14 @@ std::vector<SettingRow> RowsForTab(Tab tab, const MenuSettings& s) {
         rows.push_back({SettingRowEditLayout, "Edit Screen Layout", "",
                         "Move, resize, and set the opacity of the top/bottom screens."});
     } else if (tab == Tab::Debug) {
-        rows.push_back({SettingRowMovieThrottle, "Movie Throttle Clock",
-                        std::to_string(GetMovieThrottleClockPercentage()) + "%",
-                        "Core Clock used while a movie-library cutscene is playing."});
+        // Inserted right after CPU Clock (rather than appended at the end) since it's the same
+        // kind of setting - the Core Clock percentage, just for while a cutscene is playing.
+        const auto cpu_clock_it = std::find_if(
+            rows.begin(), rows.end(), [](const SettingRow& r) { return r.item == SettingRowCpuClock; });
+        rows.insert(cpu_clock_it == rows.end() ? rows.end() : cpu_clock_it + 1,
+                    {SettingRowMovieThrottle, "Movie Throttle Clock",
+                     std::to_string(GetMovieThrottleClockPercentage()) + "%",
+                     "Core Clock used while a movie-library cutscene is playing."});
         rows.push_back({SettingRowPointerMode, "Touch Pointer",
                         IsPointerModeActive() ? "On" : "Off",
                         "Enable the virtual touch cursor driven by Touch Pointer Source."});
