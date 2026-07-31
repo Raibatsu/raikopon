@@ -1696,6 +1696,7 @@ void RendererVulkan::SetLoadingProgress(VideoCore::LoadCallbackStage stage, std:
     loading_current = current;
     loading_total = total;
     loading_active = stage != VideoCore::LoadCallbackStage::Complete;
+    Core::PerfStats::game_frames_updated = true;
     SwapBuffers();
 }
 
