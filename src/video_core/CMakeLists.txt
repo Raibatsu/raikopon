@@ -72,6 +72,8 @@ add_library(video_core STATIC EXCLUDE_FROM_ALL
     right_eye_disabler.cpp
     right_eye_disabler.h
     shader/debug_data.h
+    shader/generator/fs_config_uniform.cpp
+    shader/generator/fs_config_uniform.h
     shader/generator/glsl_fs_shader_gen.cpp
     shader/generator/glsl_fs_shader_gen.h
     shader/generator/glsl_shader_decompiler.cpp

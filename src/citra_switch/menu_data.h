@@ -88,6 +88,7 @@ struct MenuSettings {
     bool async_shader_compilation{};
     bool use_disk_shader_cache{};
     bool use_hw_shader{};
+    bool use_ubershaders{};
     bool disable_pipeline_fast_path{};
     bool skip_slow_draw{};
     bool skip_texture_copy{};

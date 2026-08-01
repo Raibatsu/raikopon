@@ -30,6 +30,7 @@ enum SettingRowIdx {
     SettingRowAsyncShaders,
     SettingRowDiskShaderCache,
     SettingRowHwShader,
+    SettingRowUbershaders,
     SettingRowTextureFilter,
     SettingRowLinearFiltering,
     SettingRowIntegerScaling,

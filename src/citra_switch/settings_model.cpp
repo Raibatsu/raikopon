@@ -156,6 +156,9 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
              "Drastically reduces stuttering in-game by keeping compiled shaders on disk."},
             {SettingRowHwShader, "Hardware Shader", s.use_hw_shader ? "On" : "Off",
              "Emulate shaders more efficiently on GPU."},
+            {SettingRowUbershaders, "Ubershaders", s.use_ubershaders ? "On" : "Off",
+             "Render draws whose shader is still compiling with a generic shader instead of "
+             "skipping them, removing screen bleed during shader compilation."},
             {SettingRowEnableCompileBoost, "Enable Compile Boost",
              s.enable_compile_boost ? "On" : "Off",
              "Dramatically speeds up shader compiling speed but reduces GPU performance during "
@@ -250,6 +253,7 @@ bool IsBooleanSetting(SettingRowIdx item) {
     case SettingRowAsyncShaders:
     case SettingRowDiskShaderCache:
     case SettingRowHwShader:
+    case SettingRowUbershaders:
     case SettingRowLinearFiltering:
     case SettingRowIntegerScaling:
     case SettingRowShowFps:
@@ -289,6 +293,9 @@ void ToggleSetting(MenuSettings& s, SettingRowIdx item) {
         break;
     case SettingRowHwShader:
         s.use_hw_shader = !s.use_hw_shader;
+        break;
+    case SettingRowUbershaders:
+        s.use_ubershaders = !s.use_ubershaders;
         break;
     case SettingRowLinearFiltering:
         s.filter_mode = !s.filter_mode;

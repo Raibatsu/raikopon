@@ -156,6 +156,7 @@ private:
         ReadSetting("Renderer", Settings::values.async_shader_compilation);
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
         ReadSetting("Renderer", Settings::values.use_hw_shader);
+        ReadSetting("Renderer", Settings::values.use_ubershaders);
         ReadSetting("Renderer", Settings::values.disable_pipeline_fast_path);
         ReadSetting("Renderer", Settings::values.skip_slow_draw);
         ReadSetting("Renderer", Settings::values.skip_texture_copy);
@@ -263,6 +264,7 @@ private:
         ss << "use_disk_shader_cache = " << (v.use_disk_shader_cache.GetValue() ? "true" : "false")
            << '\n';
         ss << "use_hw_shader = " << (v.use_hw_shader.GetValue() ? "true" : "false") << '\n';
+        ss << "use_ubershaders = " << (v.use_ubershaders.GetValue() ? "true" : "false") << '\n';
         ss << "disable_pipeline_fast_path = "
            << (v.disable_pipeline_fast_path.GetValue() ? "true" : "false") << '\n';
         ss << "skip_slow_draw = " << (v.skip_slow_draw.GetValue() ? "true" : "false") << '\n';

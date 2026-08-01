@@ -499,6 +499,7 @@ MenuSettings GetMenuSettings() {
         .async_shader_compilation = v.async_shader_compilation.GetValue(),
         .use_disk_shader_cache = v.use_disk_shader_cache.GetValue(),
         .use_hw_shader = v.use_hw_shader.GetValue(),
+        .use_ubershaders = v.use_ubershaders.GetValue(),
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetValue(),
         .skip_slow_draw = v.skip_slow_draw.GetValue(),
         .skip_texture_copy = v.skip_texture_copy.GetValue(),
@@ -539,6 +540,7 @@ MenuSettings DefaultMenuSettings() {
         .async_shader_compilation = v.async_shader_compilation.GetDefault(),
         .use_disk_shader_cache = v.use_disk_shader_cache.GetDefault(),
         .use_hw_shader = v.use_hw_shader.GetDefault(),
+        .use_ubershaders = v.use_ubershaders.GetDefault(),
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetDefault(),
         .skip_slow_draw = v.skip_slow_draw.GetDefault(),
         .skip_texture_copy = v.skip_texture_copy.GetDefault(),
@@ -576,6 +578,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.async_shader_compilation = s.async_shader_compilation;
     v.use_disk_shader_cache = s.use_disk_shader_cache;
     v.use_hw_shader = s.use_hw_shader;
+    v.use_ubershaders = s.use_ubershaders;
     v.disable_pipeline_fast_path = s.disable_pipeline_fast_path;
     v.skip_slow_draw = s.skip_slow_draw;
     v.skip_texture_copy = s.skip_texture_copy;

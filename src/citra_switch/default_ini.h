@@ -35,6 +35,7 @@ async_shader_compilation =
 use_disk_shader_cache =
 # Use hardware-accelerated PICA shaders instead of the software shader interpreter (1, default).
 use_hw_shader =
+use_ubershaders =
 disable_pipeline_fast_path =
 skip_slow_draw = false
 skip_texture_copy = false

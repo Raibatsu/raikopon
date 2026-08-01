@@ -402,7 +402,8 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceCustomBorderColorFeaturesEXT, vk::PhysicalDeviceIndexTypeUint8FeaturesEXT,
         vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT,
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT,
-        vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR>();
+        vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR,
+        vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
     const vk::StructureChain properties_chain =
         physical_device
             .getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties,
@@ -475,6 +476,10 @@ bool Instance::CreateDevice() {
     const bool has_fragment_shader_barycentric =
         add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, is_moltenvk,
                       "the PerVertexKHR attribute is not supported by MoltenVK");
+    // Dynamic blend state: lets one pipeline cover every blend mode, collapsing the pipeline
+    // permutation count (huge win for shader-compile stutter, esp. the generic ubershader).
+    const bool has_extended_dynamic_state3 =
+        add_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
 
     const auto family_properties = physical_device.getQueueFamilyProperties();
     if (family_properties.empty()) {
@@ -533,6 +538,7 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT{},
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT{},
         vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR{},
+        vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT{},
     };
 
 #define PROP_GET(structName, prop, property) property = properties_chain.get<structName>().prop;
@@ -582,6 +588,25 @@ bool Instance::CreateDevice() {
                  extended_dynamic_state)
     } else {
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+    }
+
+    // EDS3: we make blend equation + write-mask dynamic (the many-combo fields). Require both; if
+    // either is missing, fall back to baking blend into the pipeline (extended_dynamic_state3 stays
+    // false). blend_enable stays static, so we don't need its dynamic feature.
+    if (has_extended_dynamic_state3 &&
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
+            .extendedDynamicState3ColorBlendEquation &&
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
+            .extendedDynamicState3ColorWriteMask) {
+        extended_dynamic_state3 = true;
+        auto& eds3 = device_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
+        eds3.extendedDynamicState3ColorBlendEquation = true;
+        eds3.extendedDynamicState3ColorWriteMask = true;
+        LOG_INFO(Render_Vulkan, "EDS3 dynamic blend ENABLED (blend excluded from pipeline key)");
+    } else {
+        extended_dynamic_state3 = false;
+        device_chain.unlink<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
+        LOG_INFO(Render_Vulkan, "EDS3 dynamic blend UNAVAILABLE (blend baked into pipelines)");
     }
 
     if (has_custom_border_color) {

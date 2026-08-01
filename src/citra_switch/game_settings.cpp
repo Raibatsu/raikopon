@@ -157,6 +157,9 @@ GameOverrides ReadOverridesFile(std::uint64_t program_id) {
     if (has("use_hw_shader")) {
         overrides.use_hw_shader = ini.GetBoolean(kSection, "use_hw_shader", true);
     }
+    if (has("use_ubershaders")) {
+        overrides.use_ubershaders = ini.GetBoolean(kSection, "use_ubershaders", true);
+    }
     if (has("filter_mode")) {
         overrides.filter_mode = ini.GetBoolean(kSection, "filter_mode", true);
     }
@@ -212,7 +215,8 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
                          overrides.cpu_clock_percentage || overrides.enable_compile_boost ||
                          overrides.resolution_factor || overrides.use_vsync ||
                          overrides.async_shader_compilation || overrides.use_disk_shader_cache ||
-                         overrides.use_hw_shader || overrides.filter_mode ||
+                         overrides.use_hw_shader || overrides.use_ubershaders ||
+                         overrides.filter_mode ||
                          overrides.use_integer_scaling || overrides.disable_pipeline_fast_path ||
                          overrides.skip_slow_draw || overrides.skip_texture_copy ||
                          overrides.skip_cpu_write || overrides.top_screen_opacity ||
@@ -259,6 +263,7 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
     write_bool("async_shader_compilation", overrides.async_shader_compilation);
     write_bool("use_disk_shader_cache", overrides.use_disk_shader_cache);
     write_bool("use_hw_shader", overrides.use_hw_shader);
+    write_bool("use_ubershaders", overrides.use_ubershaders);
     write_bool("filter_mode", overrides.filter_mode);
     write_bool("use_integer_scaling", overrides.use_integer_scaling);
     write_bool("disable_pipeline_fast_path", overrides.disable_pipeline_fast_path);
@@ -399,6 +404,10 @@ void BeginGameOverrides(std::uint64_t program_id) {
         v.use_hw_shader.SetGlobal(false);
         v.use_hw_shader = *s_active.use_hw_shader;
     }
+    if (s_active.use_ubershaders) {
+        v.use_ubershaders.SetGlobal(false);
+        v.use_ubershaders = *s_active.use_ubershaders;
+    }
     if (s_active.filter_mode) {
         v.filter_mode.SetGlobal(false);
         v.filter_mode = *s_active.filter_mode;
@@ -495,6 +504,9 @@ void BeginFieldOverride(OverrideField field) {
     case OverrideField::HwShader:
         TakeCustom(v.use_hw_shader);
         break;
+    case OverrideField::Ubershaders:
+        TakeCustom(v.use_ubershaders);
+        break;
     case OverrideField::LinearFiltering:
         TakeCustom(v.filter_mode);
         break;
@@ -586,6 +598,9 @@ void MarkGameOverride(OverrideField field) {
         break;
     case OverrideField::HwShader:
         s_active.use_hw_shader = v.use_hw_shader.GetValue();
+        break;
+    case OverrideField::Ubershaders:
+        s_active.use_ubershaders = v.use_ubershaders.GetValue();
         break;
     case OverrideField::LinearFiltering:
         s_active.filter_mode = v.filter_mode.GetValue();
@@ -692,6 +707,11 @@ void CommitMenuSettingsPerGame(const MenuSettings& before, const MenuSettings& a
         BeginFieldOverride(OverrideField::HwShader);
         v.use_hw_shader = after.use_hw_shader;
         MarkGameOverride(OverrideField::HwShader);
+    }
+    if (after.use_ubershaders != before.use_ubershaders) {
+        BeginFieldOverride(OverrideField::Ubershaders);
+        v.use_ubershaders = after.use_ubershaders;
+        MarkGameOverride(OverrideField::Ubershaders);
     }
     if (after.filter_mode != before.filter_mode) {
         BeginFieldOverride(OverrideField::LinearFiltering);

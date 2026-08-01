@@ -47,6 +47,7 @@ foreach(KEY IN ITEMS
     "async_shader_compilation"
     "async_presentation"
     "use_hw_shader"
+    "use_ubershaders"
     "use_disk_shader_cache"
     "shaders_accurate_mul"
     "use_vsync"

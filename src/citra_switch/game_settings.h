@@ -40,6 +40,7 @@ struct GameOverrides {
     std::optional<bool> async_shader_compilation;
     std::optional<bool> use_disk_shader_cache;
     std::optional<bool> use_hw_shader;
+    std::optional<bool> use_ubershaders;
     std::optional<bool> filter_mode;
     std::optional<bool> use_integer_scaling;
     std::optional<bool> disable_pipeline_fast_path;
@@ -79,6 +80,7 @@ enum class OverrideField {
     AsyncShaderCompilation,
     DiskShaderCache,
     HwShader,
+    Ubershaders,
     LinearFiltering,
     IntegerScaling,
     DisablePipelineFastPath,

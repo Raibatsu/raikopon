@@ -36,9 +36,18 @@ vk::ShaderStageFlagBits MakeShaderStage(std::size_t index) {
 }
 
 u64 StaticPipelineInfo::OptimizedHash(const Instance& instance) const {
+    // With EDS3 the blend equation (factors/ops) and write-mask are set dynamically, so they must
+    // NOT key the pipeline -- otherwise every blend combo would still be a distinct pipeline,
+    // defeating the point. Keep only the baked bits: blend_enable (feeds static logicOpEnable) and
+    // logic_op.
+    const u64 blend_hash =
+        instance.IsExtendedDynamicState3Supported()
+            ? Common::HashCombine(static_cast<u64>(blending.blend_enable),
+                                  static_cast<u64>(blending.logic_op))
+            : Common::ComputeStructHash64(blending);
     u64 info_hash = Common::HashCombine(
         shader_ids[0], shader_ids[1], shader_ids[2], Common::ComputeStructHash64(vertex_layout),
-        Common::ComputeStructHash64(attachments), Common::ComputeStructHash64(blending));
+        Common::ComputeStructHash64(attachments), blend_hash);
 
     if (!instance.IsExtendedDynamicStateSupported()) {
         info_hash = Common::HashCombine(info_hash, Common::ComputeStructHash64(rasterization),
@@ -307,7 +316,7 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
         .pScissors = &scissor,
     };
 
-    boost::container::static_vector<vk::DynamicState, 14> dynamic_states = {
+    boost::container::static_vector<vk::DynamicState, 17> dynamic_states = {
         vk::DynamicState::eViewport,           vk::DynamicState::eScissor,
         vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
         vk::DynamicState::eStencilReference,   vk::DynamicState::eBlendConstants,
@@ -321,6 +330,17 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
             vk::DynamicState::eStencilOpEXT,       vk::DynamicState::eStencilTestEnableEXT,
         };
         dynamic_states.insert(dynamic_states.end(), extended.begin(), extended.end());
+    }
+
+    if (instance.IsExtendedDynamicState3Supported()) {
+        // Blend equation (factors + ops) and write-mask become dynamic -- these are the many-combo
+        // fields that otherwise explode the pipeline permutation count. blend_enable stays static
+        // (only 2 variants, and it feeds the static logicOpEnable so it must stay baked).
+        constexpr std::array eds3 = {
+            vk::DynamicState::eColorBlendEquationEXT,
+            vk::DynamicState::eColorWriteMaskEXT,
+        };
+        dynamic_states.insert(dynamic_states.end(), eds3.begin(), eds3.end());
     }
 
     const vk::PipelineDynamicStateCreateInfo dynamic_info = {

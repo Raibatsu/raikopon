@@ -91,6 +91,10 @@ private:
     /// Upload the uniform blocks to the uniform buffer object
     void UploadUniforms(bool accelerate_draw);
 
+    /// Packs the current PICA fragment state into the ubershader's fs_config UBO and streams it,
+    /// setting the dynamic offset for set0/binding6. Only needed when the ubershader FS is bound.
+    void UploadFsConfig();
+
     /// Generic draw function for DrawTriangles and AccelerateDrawBatch
     bool Draw(bool accelerate, bool is_indexed);
 
@@ -149,6 +153,10 @@ private:
     bool async_shaders{false};
     std::unordered_map<PAddr, u64> color_target_last_frame;
     u64 render_frame_index{0};
+    // Set by an accelerated draw whose specialized FS pipeline isn't ready yet; consumed by the
+    // ensuing software-vertex fallback draw, which then renders with the always-ready ubershader FS
+    // instead of skipping (which caused the shader-compile screen bleed).
+    bool ubershader_fallback_pending{false};
 };
 
 } // namespace Vulkan

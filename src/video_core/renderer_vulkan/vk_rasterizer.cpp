@@ -16,6 +16,8 @@
 #include "core/memory.h"
 #include "video_core/pica/pica_core.h"
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
+#include "video_core/shader/generator/fs_config_uniform.h"
+#include "video_core/shader/generator/pica_fs_config.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -55,6 +57,41 @@ struct DrawParams {
     // which corresponds to eR32G32Sfloat
     const u64 max_size = instance.MaxTexelBufferElements() * 8;
     return std::min(max_size, TEXTURE_BUFFER_SIZE);
+}
+
+struct DiagBufferSlot {
+    const char* name;
+    PAddr addr;
+};
+
+std::array<DiagBufferSlot, 8> DiagAllBufferSlots(const Pica::PicaCore& pica) {
+    const auto& top = pica.regs.framebuffer_config[0];
+    const auto& bottom = pica.regs.framebuffer_config[1];
+    return {{
+        {"top-left1", top.address_left1},
+        {"top-left2", top.address_left2},
+        {"top-right1", top.address_right1},
+        {"top-right2", top.address_right2},
+        {"bottom-left1", bottom.address_left1},
+        {"bottom-left2", bottom.address_left2},
+        {"bottom-right1", bottom.address_right1},
+        {"bottom-right2", bottom.address_right2},
+    }};
+}
+
+// Unlike the narrow "is this the currently scanned-out address" check, this matches
+// against ALL known top/bottom buffer slots (active AND back), so it also catches
+// draws/blits that target a screen buffer before it becomes the active scan-out target.
+const char* DiagClassifyAddress(const Pica::PicaCore& pica, PAddr addr) {
+    if (addr == 0) {
+        return nullptr;
+    }
+    for (const auto& slot : DiagAllBufferSlots(pica)) {
+        if (slot.addr == addr) {
+            return slot.name;
+        }
+    }
+    return nullptr;
 }
 
 } // Anonymous namespace
@@ -122,6 +159,8 @@ RasterizerVulkan::RasterizerVulkan(Memory::MemorySystem& memory, Pica::PicaCore&
     update_queue.AddTexelBuffer(buffer_set, 3, *texture_lf_view);
     update_queue.AddTexelBuffer(buffer_set, 4, *texture_rg_view);
     update_queue.AddTexelBuffer(buffer_set, 5, *texture_rgba_view);
+    update_queue.AddBuffer(buffer_set, 6, uniform_buffer.Handle(), 0,
+                           sizeof(Pica::Shader::FSConfigUniformData));
 
     const auto texture_set = pipeline_cache.Acquire(DescriptorHeapType::Texture);
     Surface& null_surface = res_cache.GetSurface(VideoCore::NULL_SURFACE_ID);
@@ -496,16 +535,23 @@ bool RasterizerVulkan::AccelerateDrawBatchInternal(bool is_indexed) {
         SetupIndexArray();
     }
 
-    const PAddr color_addr = regs.framebuffer.framebuffer.GetColorBufferPhysicalAddress();
-    const bool self_healing = IsColorTargetSelfHealing(color_addr);
-    const PipelineWaitMode wait_mode = !async_shaders
-                                           ? PipelineWaitMode::Blocking
-                                       : !self_healing
-                                           ? PipelineWaitMode::Blocking
-                                       : regs.pipeline.num_vertices <= 6
-                                           ? PipelineWaitMode::Bounded
-                                           : PipelineWaitMode::Async;
-    if (!pipeline_cache.BindPipeline(pipeline_info, wait_mode)) {
+    // With async shaders, never wait: check readiness instantly (Async). If the specialized FS
+    // pipeline isn't ready yet, don't skip the draw (which leaves stale content that bleeds onto a
+    // screen) -- flag it and return false so the command processor falls back to the software-vertex
+    // path, which renders it with the always-ready ubershader FS. The specialized pipeline keeps
+    // compiling in the background and later frames take this fast accelerated path again.
+    const PipelineWaitMode wait_mode =
+        async_shaders ? PipelineWaitMode::Async : PipelineWaitMode::Blocking;
+
+    const bool bind_ok = pipeline_cache.BindPipeline(pipeline_info, wait_mode);
+    if (!bind_ok) {
+        if (Settings::values.use_ubershaders.GetValue()) {
+            // Route to the software-vertex path so the draw renders with the always-ready ubershader
+            // instead of skipping (which bleeds). See Draw()'s do_ubershader handling.
+            ubershader_fallback_pending = true;
+            return false;
+        }
+        // Ubershaders off (A/B): original behaviour -- skip the draw (may bleed during compiles).
         return true;
     }
 
@@ -539,7 +585,7 @@ bool RasterizerVulkan::IsColorTargetSelfHealing(PAddr color_addr) const {
     for (const auto& config : pica.regs.framebuffer_config) {
         if (color_addr == config.address_left1 || color_addr == config.address_left2 ||
             color_addr == config.address_right1 || color_addr == config.address_right2) {
-            return false;
+            return true;
         }
     }
     constexpr u64 kSelfHealWindow = 8;
@@ -599,6 +645,14 @@ void RasterizerVulkan::DrawTriangles() {
 
 bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     MICROPROFILE_SCOPE(Vulkan_Drawing);
+
+    // Consume the ubershader fallback flag once per draw. It's set only by an accelerated attempt
+    // whose specialized FS wasn't ready; the ensuing software-vertex draw (accelerate=false) picks
+    // it up here. Clearing it at the top of every Draw also prevents a stale flag from leaking into
+    // an unrelated later software draw.
+    const bool do_ubershader = !accelerate && ubershader_fallback_pending;
+    ubershader_fallback_pending = false;
+
     SyncDrawState();
 
     const bool shadow_rendering = regs.framebuffer.IsShadowRendering();
@@ -634,12 +688,32 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
         fs_data_dirty = true;
     }
 
+    // Sync and bind the shader. Done before the texture/LUT/uniform work below so the ubershader
+    // bail-out underneath can decide with a complete pipeline key.
+    pipeline_cache.UseFragmentShader(regs, user_config);
+
+    // Ubershader bail-out. When the specialized pipeline isn't ready this draw is going to be
+    // re-issued through the software-vertex path, which repeats every sync below from scratch --
+    // so abandon it here, before the texture binds, LUT streaming, uniform uploads and descriptor
+    // set acquisition, instead of at the bottom in AccelerateDrawBatchInternal. On a cold boot
+    // almost every draw takes this path, and doing that work twice per draw was the fallback's
+    // dominant cost. The background compile is still queued by the probe, exactly as before.
+    if (accelerate && async_shaders && Settings::values.use_ubershaders.GetValue() &&
+        !pipeline_cache.IsPipelineReady(pipeline_info)) {
+        ubershader_fallback_pending = true;
+        return false;
+    }
+
     // Sync and bind the texture surfaces
     SyncTextureUnits(framebuffer);
     SyncUtilityTextures(framebuffer);
 
-    // Sync and bind the shader
-    pipeline_cache.UseFragmentShader(regs, user_config);
+    // Fallback: the accelerated attempt found the specialized FS not ready, so render this draw
+    // (now on the software-vertex path) with the always-ready ubershader FS instead of skipping.
+    if (do_ubershader) {
+        pipeline_cache.UseUbershaderFragmentShader();
+        UploadFsConfig();
+    }
 
     // Sync the LUTs within the texture buffer
     SyncAndUploadLUTs();
@@ -665,19 +739,25 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
     if (accelerate) {
         succeeded = AccelerateDrawBatchInternal(is_indexed);
     } else {
-        pipeline_cache.BindPipeline(pipeline_info, PipelineWaitMode::Blocking);
+        // The ubershader fallback pipeline is expensive to build on this driver (no dynamic blend /
+        // pipeline-library, so the whole ubershader is baked per blend/format variant). Build it
+        // ASYNC so it never blocks the frame: if it isn't ready yet, skip this one draw (brief,
+        // self-resolving) rather than stalling ~1s. Real software-vertex draws still block as before.
+        const PipelineWaitMode wait =
+            do_ubershader ? PipelineWaitMode::Async : PipelineWaitMode::Blocking;
+        if (pipeline_cache.BindPipeline(pipeline_info, wait)) {
+            const u32 vertex_count = static_cast<u32>(vertex_batch.size());
+            const u32 vertex_size = vertex_count * sizeof(HardwareVertex);
+            const auto [buffer, offset, _] = stream_buffer.Map(vertex_size, sizeof(HardwareVertex));
 
-        const u32 vertex_count = static_cast<u32>(vertex_batch.size());
-        const u32 vertex_size = vertex_count * sizeof(HardwareVertex);
-        const auto [buffer, offset, _] = stream_buffer.Map(vertex_size, sizeof(HardwareVertex));
+            std::memcpy(buffer, vertex_batch.data(), vertex_size);
+            stream_buffer.Commit(vertex_size);
 
-        std::memcpy(buffer, vertex_batch.data(), vertex_size);
-        stream_buffer.Commit(vertex_size);
-
-        scheduler.Record([this, offset = offset, vertex_count](vk::CommandBuffer cmdbuf) {
-            cmdbuf.bindVertexBuffers(0, stream_buffer.Handle(), offset);
-            cmdbuf.draw(vertex_count, 1, 0, 0);
-        });
+            scheduler.Record([this, offset = offset, vertex_count](vk::CommandBuffer cmdbuf) {
+                cmdbuf.bindVertexBuffers(0, stream_buffer.Handle(), offset);
+                cmdbuf.draw(vertex_count, 1, 0, 0);
+            });
+        }
     }
 
     if (using_color_fb) {
@@ -818,16 +898,49 @@ void RasterizerVulkan::ClearAll(bool flush) {
     res_cache.ClearAll(flush);
 }
 
+namespace {
+bool DiagIsScanOut(const Pica::PicaCore& pica, PAddr addr) {
+    return DiagClassifyAddress(pica, addr) != nullptr;
+}
+} // namespace
+
 bool RasterizerVulkan::AccelerateDisplayTransfer(const Pica::DisplayTransferConfig& config) {
-    return res_cache.AccelerateDisplayTransfer(config);
+    const PAddr out_addr = config.GetPhysicalOutputAddress();
+    const bool diag_targets_scan_out = DiagIsScanOut(pica, out_addr);
+    const bool ok = res_cache.AccelerateDisplayTransfer(config);
+    if (diag_targets_scan_out) {
+        LOG_WARNING(Render_Vulkan,
+                    "SCREENDIAG DisplayTransfer -> scan-out out_addr=0x{:08x} in_addr=0x{:08x} "
+                    "ok={} thread=0x{:x}",
+                    out_addr, config.GetPhysicalInputAddress(), ok,
+                    std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    }
+    return ok;
 }
 
 bool RasterizerVulkan::AccelerateTextureCopy(const Pica::DisplayTransferConfig& config) {
-    return res_cache.AccelerateTextureCopy(config);
+    const PAddr out_addr = config.GetPhysicalOutputAddress();
+    const bool diag_targets_scan_out = DiagIsScanOut(pica, out_addr);
+    const bool ok = res_cache.AccelerateTextureCopy(config);
+    if (diag_targets_scan_out) {
+        LOG_WARNING(Render_Vulkan,
+                    "SCREENDIAG TextureCopy -> scan-out out_addr=0x{:08x} in_addr=0x{:08x} ok={} "
+                    "thread=0x{:x}",
+                    out_addr, config.GetPhysicalInputAddress(), ok,
+                    std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    }
+    return ok;
 }
 
 bool RasterizerVulkan::AccelerateFill(const Pica::MemoryFillConfig& config) {
-    return res_cache.AccelerateFill(config);
+    const PAddr start_addr = config.GetStartAddress();
+    const bool diag_targets_scan_out = DiagIsScanOut(pica, start_addr);
+    const bool ok = res_cache.AccelerateFill(config);
+    if (diag_targets_scan_out) {
+        LOG_WARNING(Render_Vulkan, "SCREENDIAG Fill -> scan-out addr=0x{:08x} ok={} thread=0x{:x}",
+                    start_addr, ok, std::hash<std::thread::id>{}(std::this_thread::get_id()));
+    }
+    return ok;
 }
 
 bool RasterizerVulkan::AccelerateDisplay(const Pica::FramebufferConfig& config,
@@ -854,6 +967,70 @@ bool RasterizerVulkan::AccelerateDisplay(const Pica::FramebufferConfig& config,
     }
 
     Surface& src_surface = res_cache.GetSurface(src_surface_id);
+
+    // Cross-screen bleed guard. When the top and bottom scan-out framebuffers transiently overlap
+    // in memory (seen during area-load stalls), a single GPU surface backs both screens, so
+    // sampling it here shows one screen's pixels on the other -- the "bottom bleeds onto top"
+    // artifact. Detect that the resolved surface's memory span covers a buffer belonging to BOTH
+    // screens and, if so, keep this screen's previous frame instead of presenting the shared
+    // (bleeding) surface. Only fires on the actual overlap, which is rare and transient (and
+    // coincides with a present stall, so the hold is invisible) -- steady-state rendering and
+    // async shader compilation are untouched.
+    {
+        const PAddr s_addr = src_surface.addr;
+        const PAddr s_end = src_surface.end;
+        const auto& top_cfg = pica.regs.framebuffer_config[0];
+        const auto& bot_cfg = pica.regs.framebuffer_config[1];
+        const auto in_range = [&](PAddr a) { return a != 0 && a >= s_addr && a < s_end; };
+        const bool covers_top = in_range(top_cfg.address_left1) || in_range(top_cfg.address_left2) ||
+                                in_range(top_cfg.address_right1) || in_range(top_cfg.address_right2);
+        const bool covers_bot = in_range(bot_cfg.address_left1) || in_range(bot_cfg.address_left2) ||
+                                in_range(bot_cfg.address_right1) || in_range(bot_cfg.address_right2);
+        if (covers_top && covers_bot && screen_info.image_view) {
+            static u64 diag_hold = 0;
+            if (++diag_hold % 60 == 1) {
+                LOG_WARNING(Render_Vulkan,
+                            "SCREENDIAG bleed-guard HELD screen (buffers overlap) req_addr=0x{:08x} "
+                            "surface [0x{:08x}..0x{:08x}) count={}",
+                            framebuffer_addr, s_addr, s_end, diag_hold);
+            }
+            // Leave screen_info untouched -> holds this screen's last good frame. Returning true
+            // keeps the caller from falling back to its own reset-to-blank path.
+            return true;
+        }
+
+        // Combat-bleed hunt: detect when the GPU image resolved for THIS screen is the same image
+        // the OTHER screen used on its most recent resolve -- i.e. the surface cache handed one
+        // screen an image whose pixels belong to the other (content contamination with no address
+        // or view-alias signal). is_bottom is decided from which config's addresses match.
+        const auto img = reinterpret_cast<std::uintptr_t>(static_cast<VkImage>(src_surface.Image()));
+        const bool is_bottom =
+            framebuffer_addr == bot_cfg.address_left1 || framebuffer_addr == bot_cfg.address_left2 ||
+            framebuffer_addr == bot_cfg.address_right1 || framebuffer_addr == bot_cfg.address_right2;
+        static std::array<std::uintptr_t, 2> last_img{};
+        const u32 role = is_bottom ? 1 : 0;
+        if (img != 0 && img == last_img[1 - role]) {
+            static u64 diag_recycle = 0;
+            if (++diag_recycle % 30 == 1) {
+                LOG_CRITICAL(Render_Vulkan,
+                            "SCREENDIAG RECYCLE this={} shares img=0x{:x} with other screen; "
+                            "req_addr=0x{:08x} surface [0x{:08x}..0x{:08x}) count={}",
+                            is_bottom ? "bottom" : "top", img, framebuffer_addr, s_addr, s_end,
+                            diag_recycle);
+            }
+        }
+        last_img[role] = img;
+
+        static u64 diag_disp = 0;
+        if (++diag_disp % 200 == 1) {
+            LOG_WARNING(Render_Vulkan,
+                        "SCREENDIAG display {} req_addr=0x{:08x} active_fb={} surface "
+                        "[0x{:08x}..0x{:08x}) size={} img=0x{:x} covers(top={},bot={})",
+                        is_bottom ? "bottom" : "top", framebuffer_addr, config.active_fb, s_addr,
+                        s_end, src_surface.size, img, covers_top, covers_bot);
+        }
+    }
+
     const u32 scaled_width = src_surface.GetScaledWidth();
     const u32 scaled_height = src_surface.GetScaledHeight();
 
@@ -1052,6 +1229,15 @@ void RasterizerVulkan::UploadUniforms(bool accelerate_draw) {
     }
 
     uniform_buffer.Commit(used_bytes);
+}
+
+void RasterizerVulkan::UploadFsConfig() {
+    const Pica::Shader::FSConfig fs_config{regs};
+    const Pica::Shader::FSConfigUniformData data = Pica::Shader::BuildFSConfigUniform(fs_config);
+    auto [ptr, offset, invalidate] = uniform_buffer.Map(sizeof(data), uniform_buffer_alignment);
+    std::memcpy(ptr, &data, sizeof(data));
+    uniform_buffer.Commit(sizeof(data));
+    pipeline_cache.UpdateFsConfigRange(static_cast<u32>(offset));
 }
 
 void RasterizerVulkan::SwitchDiskResources(u64 title_id) {

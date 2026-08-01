@@ -552,6 +552,9 @@ struct Values {
     SwitchableSetting<bool> async_shader_compilation{false, Keys::async_shader_compilation};
     SwitchableSetting<bool> async_presentation{true, Keys::async_presentation};
     SwitchableSetting<bool> use_hw_shader{true, Keys::use_hw_shader};
+    // When true, a draw whose specialized shader is still compiling renders with the generic
+    // ubershader (no bleed) instead of skipping. Toggle off to A/B test perf without it.
+    SwitchableSetting<bool> use_ubershaders{true, Keys::use_ubershaders};
     SwitchableSetting<bool> use_disk_shader_cache{true, Keys::use_disk_shader_cache};
     SwitchableSetting<bool> use_skip_duplicate_frames{true, Keys::use_skip_duplicate_frames};
     SwitchableSetting<bool> shaders_accurate_mul{true, Keys::shaders_accurate_mul};

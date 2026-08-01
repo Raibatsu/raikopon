@@ -23,6 +23,8 @@ set(SHADER_FILES
     vulkan_present.vert
     vulkan_present_anaglyph.frag
     vulkan_present_interlaced.frag
+    vulkan_ubershader.vert
+    vulkan_ubershader.frag
     vulkan_blit_depth_stencil.frag
     vulkan_cursor.frag
     vulkan_cursor.vert

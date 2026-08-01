@@ -15,6 +15,7 @@
 #include "common/shader_compile_stats.h"
 #include "core/core.h"
 #include "core/loader/loader.h"
+#include "video_core/host_shaders/vulkan_ubershader_frag.h"
 #include "video_core/pica/shader_setup.h"
 #include "video_core/renderer_vulkan/pica_to_vk.h"
 #include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
@@ -59,7 +60,7 @@ AttribLoadFlags MakeAttribLoadFlag(Pica::PipelineRegs::VertexAttributeFormat for
     }
 }
 
-constexpr std::array<vk::DescriptorSetLayoutBinding, 6> BUFFER_BINDINGS = {{
+constexpr std::array<vk::DescriptorSetLayoutBinding, 7> BUFFER_BINDINGS = {{
     {0, vk::DescriptorType::eUniformBufferDynamic, 1, vk::ShaderStageFlagBits::eVertex},
     {1, vk::DescriptorType::eUniformBufferDynamic, 1,
      vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eGeometry},
@@ -67,6 +68,9 @@ constexpr std::array<vk::DescriptorSetLayoutBinding, 6> BUFFER_BINDINGS = {{
     {3, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment},
     {4, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment},
     {5, vk::DescriptorType::eUniformTexelBuffer, 1, vk::ShaderStageFlagBits::eFragment},
+    // fs_config UBO for the ubershader (unused by specialized shaders). Dynamic -> 4th dynamic
+    // offset, ordered by (set,binding) so its offset is index 3 in the offsets array.
+    {6, vk::DescriptorType::eUniformBufferDynamic, 1, vk::ShaderStageFlagBits::eFragment},
 }};
 
 template <u32 NumTex0>
@@ -118,7 +122,9 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
           DescriptorHeap{instance, scheduler.GetMasterSemaphore(), UTILITY_BINDINGS, 32}},
       trivial_vertex_shader{
           instance, vk::ShaderStageFlagBits::eVertex,
-          GLSL::GenerateTrivialVertexShader(instance.IsShaderClipDistanceSupported(), true)} {
+          GLSL::GenerateTrivialVertexShader(instance.IsShaderClipDistanceSupported(), true)},
+      ubershader_fragment_shader{instance, vk::ShaderStageFlagBits::eFragment,
+                                 std::string{HostShaders::VULKAN_UBERSHADER_FRAG}} {
     if (compile_pacer) {
         // Below 200 pending this behaves exactly as the flat 150ms already confirmed working for
         // normal-sized bursts. Only shrinks toward the 20ms floor once a backlog is deep enough
@@ -426,6 +432,18 @@ void PipelineCache::SwitchDiskCache(u64 title_id, const std::atomic_bool& stop_l
     }
 }
 
+bool PipelineCache::IsPipelineReady(PipelineInfo& info) {
+    for (u32 i = 0; i < MAX_SHADER_STAGES; i++) {
+        info.state.shader_ids[i] = shader_hashes[i];
+    }
+
+    GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
+    if (pipeline->IsDone()) {
+        return true;
+    }
+    return pipeline->TryBuild(PipelineWaitMode::Async, nullptr);
+}
+
 bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode) {
     MICROPROFILE_SCOPE(Vulkan_Bind);
 
@@ -446,13 +464,19 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
 
     const bool is_dirty = scheduler.IsStateDirty(StateFlags::Pipeline);
     const bool pipeline_dirty = (current_pipeline != pipeline) || is_dirty;
-    scheduler.Record([this, is_dirty, pipeline_dirty, pipeline,
+    const bool eds3_blend = instance.IsExtendedDynamicState3Supported();
+    const u16 eds3_write_mask = eds3_blend ? info.GetFinalColorWriteMask(instance) : u16{0};
+    const u16 current_eds3_write_mask =
+        eds3_blend ? current_info.GetFinalColorWriteMask(instance) : u16{0};
+    scheduler.Record([this, is_dirty, pipeline_dirty, pipeline, eds3_blend, eds3_write_mask,
+                      current_eds3_write_mask,
                       current_dynamic = current_info.dynamic_info, dynamic = info.dynamic_info,
                       descriptor_sets = bound_descriptor_sets, offsets = offsets,
                       current_rasterization = current_info.state.rasterization,
                       current_depth_stencil = current_info.state.depth_stencil,
                       rasterization = info.state.rasterization,
-                      depth_stencil = info.state.depth_stencil](vk::CommandBuffer cmdbuf) {
+                      depth_stencil = info.state.depth_stencil, blending = info.state.blending,
+                      current_blending = current_info.state.blending](vk::CommandBuffer cmdbuf) {
         if (dynamic.viewport != current_dynamic.viewport || is_dirty) {
             const vk::Viewport vk_viewport = {
                 .x = static_cast<f32>(dynamic.viewport.left),
@@ -544,6 +568,27 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
                                        PicaToVK::StencilOp(depth_stencil.stencil_pass_op),
                                        PicaToVK::StencilOp(depth_stencil.stencil_depth_fail_op),
                                        PicaToVK::CompareFunc(depth_stencil.stencil_compare_op));
+            }
+        }
+
+        if (eds3_blend) {
+            if (blending.value != current_blending.value || is_dirty) {
+                const vk::ColorBlendEquationEXT eq = {
+                    .srcColorBlendFactor = PicaToVK::BlendFunc(blending.src_color_blend_factor),
+                    .dstColorBlendFactor = PicaToVK::BlendFunc(blending.dst_color_blend_factor),
+                    .colorBlendOp = PicaToVK::BlendEquation(blending.color_blend_eq),
+                    .srcAlphaBlendFactor = PicaToVK::BlendFunc(blending.src_alpha_blend_factor),
+                    .dstAlphaBlendFactor = PicaToVK::BlendFunc(blending.dst_alpha_blend_factor),
+                    .alphaBlendOp = PicaToVK::BlendEquation(blending.alpha_blend_eq),
+                };
+                cmdbuf.setColorBlendEquationEXT(0, eq);
+            }
+            // Compare against the *final* mask, not blending.color_write_mask: GetFinalColorWriteMask
+            // forces it to 0 under emulated logic-op NoOp, so two draws can share a raw mask while
+            // needing different final masks. Comparing the raw field would leave a stale one bound.
+            if (eds3_write_mask != current_eds3_write_mask || is_dirty) {
+                cmdbuf.setColorWriteMaskEXT(
+                    0, static_cast<vk::ColorComponentFlags>(eds3_write_mask));
             }
         }
 
@@ -652,6 +697,14 @@ void PipelineCache::UseFragmentShader(const Pica::RegsInternal& regs,
         current_shaders[ProgramType::FS] = (*res).second;
         shader_hashes[ProgramType::FS] = (*res).first;
     }
+}
+
+void PipelineCache::UseUbershaderFragmentShader() {
+    // Fixed sentinel hash so ubershader pipelines cache separately from specialized FS pipelines
+    // (which use real ComputeHash64 values). One module handles all fragment state via fs_config.
+    constexpr u64 kUbershaderFsHash = 0x0BE70000'00000001ull;
+    current_shaders[ProgramType::FS] = &ubershader_fragment_shader;
+    shader_hashes[ProgramType::FS] = kUbershaderFsHash;
 }
 
 bool PipelineCache::IsCacheValid(std::span<const u8> data) const {

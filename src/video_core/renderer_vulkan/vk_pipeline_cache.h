@@ -39,7 +39,10 @@ enum class DescriptorHeapType : u32 {
 class PipelineCache {
     static constexpr u32 NumRasterizerSets = 3;
     static constexpr u32 NumDescriptorHeaps = 3;
-    static constexpr u32 NumDynamicOffsets = 3;
+    // 4 dynamic UBOs in set 0: b0 vs-pica, b1 vs, b2 fs, b6 fs_config (ubershader). Vulkan orders
+    // dynamic offsets by (set,binding), so fs_config's offset lives at index 3.
+    static constexpr u32 NumDynamicOffsets = 4;
+    static constexpr u32 FsConfigOffsetIndex = 3;
 
 public:
     explicit PipelineCache(const Instance& instance, Scheduler& scheduler,
@@ -57,6 +60,12 @@ public:
     /// Sets the dynamic offset for the uniform buffer at binding
     void UpdateRange(u8 binding, u32 offset) {
         offsets[binding] = offset;
+    }
+
+    /// Sets the dynamic offset for the ubershader fs_config UBO (set0/binding6 -> offset index 3).
+    /// Kept separate from UpdateRange because binding number != dynamic-offset index here.
+    void UpdateFsConfigRange(u32 offset) {
+        offsets[FsConfigOffsetIndex] = offset;
     }
 
     /// Loads the driver pipeline cache and the disk shader cache
@@ -84,6 +93,11 @@ public:
     /// Binds a pipeline using the provided information
     bool BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode = PipelineWaitMode::Async);
 
+    /// Readiness probe for @p info's pipeline with no side effects on the command buffer. Queues the
+    /// background build exactly like an Async BindPipeline would, but records nothing and touches no
+    /// descriptor state, so a caller that is about to abandon the draw doesn't pay for it.
+    bool IsPipelineReady(PipelineInfo& info);
+
     Pica::Shader::Generator::ExtraVSConfig CalcExtraConfig(
         const Pica::Shader::Generator::PicaVSConfig& config);
 
@@ -102,6 +116,11 @@ public:
 
     /// Binds a fragment shader generated from PICA state
     void UseFragmentShader(const Pica::RegsInternal& regs, const Pica::Shader::UserConfig& user);
+
+    /// Binds the generic PICA fragment ubershader (one pre-compiled module handling all fragment
+    /// state via the fs_config UBO). Always ready, so a draw whose specialized FS is still compiling
+    /// can render immediately instead of skipping (avoids the shader-compile screen bleed).
+    void UseUbershaderFragmentShader();
 
     /// Gets the current program ID
     u64 GetProgramID() const {
@@ -177,6 +196,7 @@ private:
     std::array<Shader*, MAX_SHADER_STAGES> current_shaders;
 
     Shader trivial_vertex_shader;
+    Shader ubershader_fragment_shader;
 
     u64 current_program_id{0};
     std::vector<std::shared_ptr<ShaderDiskCache>> disk_caches;

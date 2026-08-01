@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <vk_mem_alloc.h>
@@ -212,6 +213,76 @@ void RendererVulkan::PrepareRendertarget() {
 
         LoadFBToScreenInfo(framebuffer, screen_infos[i], i == 1);
     }
+
+    static std::array<std::uintptr_t, 3> diag_view{};
+    static u64 diag_frame = 0;
+    ++diag_frame;
+
+    std::array<PAddr, 3> diag_addr{};
+    for (u32 i = 0; i < 3; i++) {
+        const u32 fb_id = i == 2 ? 1 : 0;
+        const auto& framebuffer = framebuffer_config[fb_id];
+        bool right_eye = (i == 1);
+        if (framebuffer.address_right1 == 0 || framebuffer.address_right2 == 0) {
+            right_eye = false;
+        }
+        diag_addr[i] = framebuffer.active_fb == 0
+                          ? (right_eye ? framebuffer.address_right1 : framebuffer.address_left1)
+                          : (right_eye ? framebuffer.address_right2 : framebuffer.address_left2);
+        diag_view[i] = reinterpret_cast<std::uintptr_t>(
+            static_cast<VkImageView>(screen_infos[i].image_view));
+    }
+
+    if (diag_frame % 300 == 1) {
+        LOG_WARNING(Render_Vulkan,
+                    "SCREENDIAG snapshot frame={} top-l addr=0x{:08x} view=0x{:x} | top-r "
+                    "addr=0x{:08x} view=0x{:x} | bottom addr=0x{:08x} view=0x{:x}",
+                    diag_frame, diag_addr[0], diag_view[0], diag_addr[1], diag_view[1],
+                    diag_addr[2], diag_view[2]);
+    }
+
+    for (u32 a = 0; a < 3; a++) {
+        for (u32 b = a + 1; b < 3; b++) {
+            if (diag_view[a] != 0 && diag_view[a] == diag_view[b]) {
+                LOG_CRITICAL(Render_Vulkan,
+                            "SCREENDIAG ALIAS frame={} screen{}==screen{} view=0x{:x} "
+                            "addr{}=0x{:08x} addr{}=0x{:08x}",
+                            diag_frame, a, b, diag_view[a], a, diag_addr[a], b, diag_addr[b]);
+            }
+        }
+    }
+
+    // Raw top-vs-bottom buffer-address collision across the FULL slot set (active + back), not
+    // just whichever slot is currently active. If a top buffer address ever equals a bottom
+    // buffer address, the two screens are literally sharing memory -> guaranteed bleed. This
+    // catches in-game collisions the image_view alias check above misses (that check only sees
+    // the currently-bound surface, which lags a frame behind the game writing the back buffer).
+    const std::array<std::pair<const char*, PAddr>, 4> diag_top_slots{{
+        {"top-l1", framebuffer_config[0].address_left1},
+        {"top-l2", framebuffer_config[0].address_left2},
+        {"top-r1", framebuffer_config[0].address_right1},
+        {"top-r2", framebuffer_config[0].address_right2},
+    }};
+    const std::array<std::pair<const char*, PAddr>, 4> diag_bottom_slots{{
+        {"bot-l1", framebuffer_config[1].address_left1},
+        {"bot-l2", framebuffer_config[1].address_left2},
+        {"bot-r1", framebuffer_config[1].address_right1},
+        {"bot-r2", framebuffer_config[1].address_right2},
+    }};
+    for (const auto& [tname, taddr] : diag_top_slots) {
+        if (taddr == 0) {
+            continue;
+        }
+        for (const auto& [bname, baddr] : diag_bottom_slots) {
+            if (baddr != 0 && taddr == baddr) {
+                LOG_CRITICAL(Render_Vulkan,
+                            "SCREENDIAG ADDR-COLLIDE frame={} {}==0x{:08x} {} top_active_fb={} "
+                            "bottom_active_fb={}",
+                            diag_frame, tname, taddr, bname,
+                            framebuffer_config[0].active_fb, framebuffer_config[1].active_fb);
+            }
+        }
+    }
 }
 
 void RendererVulkan::PrepareDraw(Frame* frame, const Layout::FramebufferLayout& layout) {
@@ -286,6 +357,14 @@ void RendererVulkan::RenderToWindow(PresentWindow& window, const Layout::Framebu
         if ((secondaryWindowEnabled && isSecondaryWindow) || (!secondaryWindowEnabled)) {
             Core::PerfStats::game_frames_updated = false;
             screenRendered = true;
+        }
+    } else {
+        static u64 diag_skip_count = 0;
+        if (++diag_skip_count % 60 == 1) {
+            LOG_WARNING(Render_Vulkan,
+                        "SCREENDIAG present skipped (dup-frame) count={} thread=0x{:x}",
+                        diag_skip_count,
+                        std::hash<std::thread::id>{}(std::this_thread::get_id()));
         }
     }
 }
