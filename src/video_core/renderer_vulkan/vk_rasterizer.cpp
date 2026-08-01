@@ -543,14 +543,25 @@ bool RasterizerVulkan::AccelerateDrawBatchInternal(bool is_indexed) {
     const PipelineWaitMode wait_mode =
         async_shaders ? PipelineWaitMode::Async : PipelineWaitMode::Blocking;
 
-    const bool bind_ok = pipeline_cache.BindPipeline(pipeline_info, wait_mode);
-    if (!bind_ok) {
-        if (Settings::values.use_ubershaders.GetValue()) {
-            // Route to the software-vertex path so the draw renders with the always-ready ubershader
-            // instead of skipping (which bleeds). See Draw()'s do_ubershader handling.
+    bool bind_ok = pipeline_cache.BindPipeline(pipeline_info, wait_mode);
+    if (!bind_ok && Settings::values.use_ubershaders.GetValue()) {
+        // HARDWARE ubershader: the specialized FS isn't compiled yet, so swap it for the generic
+        // ubershader FS and re-bind on this SAME hardware pipeline (game's programmable VS + GS +
+        // ubershader FS). Stays on the GPU vertex path -- no CPU LoadVertices cost -- and the
+        // pipeline just links two already-cached shader stages (progVS is compiling for the
+        // specialized pipeline anyway; the ubershader FS compiles to SASS once), so it's cheap.
+        pipeline_cache.UseUbershaderFragmentShader();
+        UploadFsConfig();
+        bind_ok = pipeline_cache.BindPipeline(pipeline_info, wait_mode);
+        if (!bind_ok) {
+            // Even the hardware-ubershader pipeline isn't ready (first occurrence, still linking).
+            // Drop to the software-vertex ubershader as a last resort so the draw still renders
+            // (no bleed) instead of skipping. Rare and transient -- see Draw()'s do_ubershader.
             ubershader_fallback_pending = true;
             return false;
         }
+    }
+    if (!bind_ok) {
         // Ubershaders off (A/B): original behaviour -- skip the draw (may bleed during compiles).
         return true;
     }
