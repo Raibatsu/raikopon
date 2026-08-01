@@ -39,6 +39,7 @@ enum SettingRowIdx {
     SettingRowCpuClock,
     SettingRowNew3ds,
     SettingRowCpuJit,
+    SettingRowFastmem,
     SettingRowRegion,
     SettingRowLanguage,
     SettingRowPointerSource,

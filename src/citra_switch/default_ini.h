@@ -11,6 +11,8 @@ constexpr const char* sConfigFile = R"(
 [Core]
 # Whether to use the dynarmic JIT (1, default) or the dyncom interpreter (0).
 use_cpu_jit =
+# Alias guest RAM into a host arena so the JIT skips page-table walks (true, default).
+fastmem =
 # CPU clock speed as a percentage of the real 3DS (5 - 400, default 100).
 cpu_clock_percentage =
 # Disabled by default to reduce CPU overhead.

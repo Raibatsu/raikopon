@@ -516,6 +516,7 @@ MenuSettings GetMenuSettings() {
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue()),
         .is_new_3ds = v.is_new_3ds.GetValue(),
         .use_cpu_jit = v.use_cpu_jit.GetValue(),
+        .fastmem = v.fastmem.GetValue(),
         .region_value = static_cast<int>(v.region_value.GetValue()),
         .language = static_cast<int>(
             Service::CFG::GetModule(Core::System::GetInstance())->GetSystemLanguage()),
@@ -557,6 +558,7 @@ MenuSettings DefaultMenuSettings() {
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetDefault()),
         .is_new_3ds = v.is_new_3ds.GetDefault(),
         .use_cpu_jit = v.use_cpu_jit.GetDefault(),
+        .fastmem = v.fastmem.GetDefault(),
         .region_value = static_cast<int>(v.region_value.GetDefault()),
         // Console/NAND setting and compile-time-fixed backend respectively — not reset.
         .language = static_cast<int>(
@@ -596,6 +598,7 @@ void SetMenuSettings(const MenuSettings& s) {
     v.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage, 5, 400);
     v.is_new_3ds = s.is_new_3ds;
     v.use_cpu_jit = s.use_cpu_jit;
+    v.fastmem = s.fastmem;
     v.region_value = std::clamp(s.region_value, -1, 6);
     SetPointerSource(static_cast<PointerSource>(
         std::clamp(s.pointer_source, 0, NumPointerSources - 1)));

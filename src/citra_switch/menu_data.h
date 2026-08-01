@@ -105,6 +105,7 @@ struct MenuSettings {
     int cpu_clock_percentage{};   // 5..400.
     bool is_new_3ds{};
     bool use_cpu_jit{};
+    bool fastmem{};
     int region_value{};           // -1 = auto, 0..6 per SMDH region order.
     int language{};               // 3DS system language, 0..11.
     int graphics_api{};           // Active graphics API backend.

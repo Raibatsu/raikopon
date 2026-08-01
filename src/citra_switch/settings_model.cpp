@@ -171,6 +171,9 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
              "Change the emulated CPU clock. Most games play well at 100%."},
             {SettingRowCpuJit, "CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off",
              "Do not disable this unless explicitly needed. Huge performance drops."},
+            {SettingRowFastmem, "Fastmem", s.fastmem ? "On" : "Off",
+             "Alias guest RAM into a host arena so the JIT skips page-table walks. Disable if a "
+             "game runs worse or misbehaves with it on."},
             {SettingRowPointerSource, "Touch Pointer Source",
              PointerSourceName(static_cast<PointerSource>(s.pointer_source)),
              "For those who don't want to use touch screen, use a virtual cursor."},
@@ -260,6 +263,7 @@ bool IsBooleanSetting(SettingRowIdx item) {
     case SettingRowDisableRightEye:
     case SettingRowNew3ds:
     case SettingRowCpuJit:
+    case SettingRowFastmem:
     case SettingRowPreloadTextures:
     case SettingRowDumpTextures:
     case SettingRowDisablePipelineFastPath:
@@ -315,6 +319,9 @@ void ToggleSetting(MenuSettings& s, SettingRowIdx item) {
     case SettingRowCpuJit:
         s.use_cpu_jit = !s.use_cpu_jit;
         break;
+    case SettingRowFastmem:
+        s.fastmem = !s.fastmem;
+        break;
     case SettingRowPreloadTextures:
         s.preload_textures = !s.preload_textures;
         break;
@@ -360,6 +367,7 @@ bool IsPerGameEditable(SettingRowIdx item) {
     // be made a per-game override at all — flipping it in-game would either do nothing or leak
     // into the global default for every other title.
     case SettingRowCpuJit:
+    case SettingRowFastmem:
     case SettingRowAsyncGpu:
     case SettingRowStrictGpuSync:
     // R3 Screen Layouts opens its own multi-select picker in the library (OpenLayoutPicker),

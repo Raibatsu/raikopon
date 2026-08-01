@@ -365,13 +365,11 @@ std::unique_ptr<Dynarmic::A32::Jit> ARM_Dynarmic::MakeJit() {
         config.page_table = &current_page_table->GetPointerArray();
         // On Switch the application's page table is mirrored into a 4 GiB host arena.
         // Point the JIT at it so loads and stores skip the page-table walk. A fault
-        // recompiles the block onto the page-table path above. Zero elsewhere.
-        // TEMPORARILY DISABLED: fastmem is experimental and regressing performance in many games.
-        // Leaving fastmem_pointer unset makes the JIT always use the page-table path. Re-enable by
-        // uncommenting.
-        // if (const std::uintptr_t fastmem_base = memory.GetFastmemBase(*current_page_table)) {
-        //     config.fastmem_pointer = fastmem_base;
-        // }
+        // recompiles the block onto the page-table path above. Zero elsewhere. Gated by the
+        // fastmem setting: when off, the arena isn't created and GetFastmemBase returns 0.
+        if (const std::uintptr_t fastmem_base = memory.GetFastmemBase(*current_page_table)) {
+            config.fastmem_pointer = fastmem_base;
+        }
     }
     config.coprocessors[15] = std::make_shared<DynarmicCP15>(cp15_state);
     config.define_unpredictable_behaviour = true;
