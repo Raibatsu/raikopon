@@ -92,7 +92,11 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     : instance{instance_}, scheduler{scheduler_}, renderpass_cache{renderpass_cache_},
       update_queue{update_queue_},
 #ifdef __SWITCH__
-      num_worker_threads{1},
+      // Two compile cores are available (0 and 1; core 2 is the CPU JIT, core 3 is avoided). With a
+      // single worker, pipeline builds (each up to ~1.3s of NAK compile) ran strictly serially on
+      // one core while the other sat idle. Two workers lets them run on both compile cores in
+      // parallel, roughly halving the wall-clock of the cold-boot compile burst.
+      num_worker_threads{2},
 #else
       num_worker_threads{std::max(std::thread::hardware_concurrency(), 2U) / 2},
 #endif
