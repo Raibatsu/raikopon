@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string_view>
@@ -16,6 +17,7 @@
 #include "citra_switch/config.h"
 #include "citra_switch/updater.h"
 #include "common/file_util.h"
+#include "common/string_util.h"
 #include "raikopon_version.h"
 
 namespace SwitchFrontend {
@@ -26,6 +28,12 @@ constexpr const char* kRepoOwner = "Raibatsu";
 constexpr const char* kRepoName = "raikopon";
 constexpr const char* kNroAssetName = "raikopon.nro";
 constexpr const char* kChecksumAssetName = "raikopon.nro.sha256";
+// Fixed staging suffix, matching the shape a working reference implementation
+// (shodowlo/NX-torrent-player's app/update.cpp) uses for the same purpose. An earlier version of
+// this code used a timestamp-suffixed name instead, worked around a symptom that was later traced
+// to a missing fsdevCommitDevice() call rather than anything to do with filename reuse - see
+// FinishInstall()'s comment.
+constexpr const char* kStagingSuffix = ".new";
 constexpr const char* kUserAgent = "raikopon-updater";
 // switch-curl links against switch-mbedtls, which has no OS trust-store access - see the comment
 // on the romfs packaging in CMakeLists.txt for where this file comes from.
@@ -262,17 +270,77 @@ const std::string& GetOwnNroPath() {
     return s_own_nro_path;
 }
 
+std::string GetUpdateStagingPath() {
+    if (!HasOwnNroPath()) {
+        return {};
+    }
+    const std::string_view parent = FileUtil::GetParentPath(s_own_nro_path);
+    return std::string(parent) + "/" + kNroAssetName + kStagingSuffix;
+}
+
+bool FinishInstall() {
+    if (!HasOwnNroPath()) {
+        return false;
+    }
+    // Overwriting the file this very process is currently running from is safe in principle: an
+    // NRO's contents are read into memory once at process start and never re-read from disk
+    // afterward, so changing the file on disk has no effect on the code currently executing. Only
+    // the *next* process to load this path (this same one, via RelaunchSelf() immediately after a
+    // successful call here) sees the new bytes.
+    //
+    // Requires the caller to have already called UnmountRomfsForSelfReplace(): the embedded romfs
+    // partition is mounted directly out of this same .nro's own asset section, and hardware testing
+    // confirmed (via a rename() that failed with errno 5/EIO, only while romfs was still mounted)
+    // that this holds a handle on the file open, which makes even a plain rename() of it fail.
+    // Uses a rename-away/rename-in/delete-backup sequence rather than a delete-then-overwrite - the
+    // same shape a working reference implementation (shodowlo/NX-torrent-player's app/update.cpp)
+    // uses for exactly this step.
+    const std::string backup_path = s_own_nro_path + ".old";
+    const std::string staging_path = GetUpdateStagingPath();
+    std::remove(backup_path.c_str()); // stale backup from an earlier failed attempt, if any
+    if (std::rename(s_own_nro_path.c_str(), backup_path.c_str()) != 0) {
+        return false;
+    }
+    if (std::rename(staging_path.c_str(), s_own_nro_path.c_str()) != 0) {
+        // Try to put the old binary back rather than leaving the app unable to boot at all.
+        std::rename(backup_path.c_str(), s_own_nro_path.c_str());
+        return false;
+    }
+    std::remove(backup_path.c_str());
+    return true;
+}
+
 UpdateCheckOutcome CheckForUpdate(UpdateChannel channel) {
     UpdateCheckOutcome outcome;
 
-    std::string url =
-        std::string("https://api.github.com/repos/") + kRepoOwner + "/" + kRepoName;
-    url += channel == UpdateChannel::Stable ? "/releases/latest" : "/releases";
+    // Local test-server override, for iterating on the updater without burning GitHub's
+    // unauthenticated API quota (60 requests/hour/IP - trivial to exhaust while testing, since
+    // every relaunch during a test session can trigger another check). If
+    // sdmc:/switch/dekopon/update_test_url.txt exists and contains a URL, fetch that instead of
+    // GitHub and treat the response as a single release object - same shape CheckForUpdate already
+    // expects for the Stable channel (a small local HTTP server, e.g. `python -m http.server`,
+    // serving a hand-written release.json alongside the .nro/.sha256 is enough - no need to mimic
+    // GitHub's API beyond that one JSON shape). TESTING ONLY: inert unless that file exists, never
+    // touched by the real release process, and channel selection is ignored while it's active
+    // (there's only one release to offer from a folder of static files).
+    std::string test_url;
+    FileUtil::ReadFileToString(true, "sdmc:/switch/dekopon/update_test_url.txt", test_url);
+    test_url = Common::StripSpaces(test_url);
+    const bool use_test_server = !test_url.empty();
+
+    std::string url;
+    if (use_test_server) {
+        url = test_url;
+    } else {
+        url = std::string("https://api.github.com/repos/") + kRepoOwner + "/" + kRepoName;
+        url += channel == UpdateChannel::Stable ? "/releases/latest" : "/releases";
+    }
 
     std::string body;
     long status = 0;
     std::string error;
-    const bool transport_ok = HttpGetString(url, true, body, status, &error);
+    // No point sending GitHub's Accept header to a plain local file server.
+    const bool transport_ok = HttpGetString(url, !use_test_server, body, status, &error);
     if (!transport_ok || status < 200 || status >= 300) {
         outcome.result = UpdateCheckResult::NetworkError;
         outcome.diagnostic = transport_ok ? "HTTP " + std::to_string(status) : error;
@@ -282,7 +350,7 @@ UpdateCheckOutcome CheckForUpdate(UpdateChannel channel) {
     try {
         const nlohmann::json parsed = nlohmann::json::parse(body);
         nlohmann::json release;
-        if (channel == UpdateChannel::Stable) {
+        if (use_test_server || channel == UpdateChannel::Stable) {
             release = parsed;
         } else {
             if (!parsed.is_array()) {
@@ -348,11 +416,10 @@ DownloadResult DownloadAndInstallUpdate(
     }
     EnsureCurlInitialized();
 
-    const std::string_view parent = FileUtil::GetParentPath(s_own_nro_path);
-    const std::string temp_path = std::string(parent) + "/raikopon.nro.download";
+    const std::string temp_path = GetUpdateStagingPath();
 
-    // 1. Download the .nro fully into the temp file (same directory as the live .nro, so the
-    //    replace below is an atomic same-filesystem rename, not a copy+delete).
+    // 1. Download the .nro fully into the temp file (same directory as the live .nro, so
+    //    FinishInstall()'s later rename is same-filesystem).
     {
         FileUtil::IOFile out(temp_path, "wb");
         if (!out.IsOpen()) {
@@ -427,11 +494,8 @@ DownloadResult DownloadAndInstallUpdate(
         return DownloadResult::ChecksumMismatch;
     }
 
-    // 4. Verified - atomic replace of the live .nro.
-    if (!FileUtil::Rename(temp_path, s_own_nro_path)) {
-        FileUtil::Delete(temp_path);
-        return DownloadResult::ReplaceFailed;
-    }
+    // 4. Verified. Not installed yet - the caller shows a confirmation modal first, then calls
+    //    FinishInstall() to actually replace the live .nro.
     return DownloadResult::Success;
 }
 

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -31,6 +32,7 @@
 #include "citra_switch/rail_icons.h"
 #include "citra_switch/settings_model.h"
 #include "citra_switch/updater.h"
+#include "raikopon_version.h"
 
 namespace SwitchFrontend {
 namespace {
@@ -561,6 +563,26 @@ public:
             ShowPopup(g_pending_popup);
             g_pending_popup.clear();
         }
+        // At most once per process (RunMenu() below constructs a fresh Menu every time control
+        // returns here from a game, so a plain member flag would re-fire this on every such visit -
+        // a static local covers that), and additionally rate-limited to once every 15 minutes via a
+        // config-persisted timestamp, so a run of app relaunches (e.g. several restart-required
+        // settings changes back to back) doesn't burn through GitHub's 60-requests/hour-per-IP
+        // unauthenticated API quota. Fire-and-forget: runs on the same worker thread/PumpUpdates()
+        // path as a manual Settings > Updates check, so it costs nothing extra and a manual check
+        // while this is still in flight is naturally refused by UpdatesBusy() rather than racing it.
+        static bool checked_for_update_this_process = false;
+        if (!checked_for_update_this_process) {
+            checked_for_update_this_process = true;
+            constexpr std::time_t kAutoCheckCooldownSeconds = 15 * 60;
+            const std::time_t now = std::time(nullptr);
+            const std::time_t last = SwitchFrontend::GetLastAutoUpdateCheckTime();
+            if (now - last >= kAutoCheckCooldownSeconds) {
+                SwitchFrontend::SetLastAutoUpdateCheckTime(now);
+                boot_update_check_pending = true;
+                StartUpdateCheck();
+            }
+        }
         while (appletMainLoop()) {
             padUpdate(&pad);
             const u64 down = padGetButtonsDown(&pad);
@@ -673,6 +695,9 @@ private:
     int settings_sel = 0;
     int settings_scroll = 0;
     bool settings_armed = false;
+    // Set while settings_armed is true and the armed row is a RequiresRestart row whose value
+    // actually changed this arm session, so unarming knows whether to prompt for a restart.
+    bool armed_row_changed_needs_restart = false;
     SettingsTab settings_tab = SettingsTab::Graphics;
     bool gyro_edit_y = false;
     int paths_sel = 0;
@@ -739,6 +764,10 @@ private:
     bool updates_downloading = false;
     SwitchFrontend::UpdateCheckOutcome updates_check_result{};
     SwitchFrontend::DownloadResult updates_download_result{};
+    // True from the moment the automatic boot-time check is kicked off (see the Rescan() call
+    // site) until PumpUpdates() consumes its result, so a manual check started from the Updates
+    // tab doesn't also pop the boot notification a second time.
+    bool boot_update_check_pending = false;
 
     void Rescan() {
         games = ScanGames();
@@ -1072,6 +1101,18 @@ private:
                 updates_status_is_error = true;
                 break;
             }
+            if (boot_update_check_pending) {
+                boot_update_check_pending = false;
+                // Silent for every other outcome (up to date, no release, network/parse error) -
+                // a boot-time check failing shouldn't interrupt the user with anything they didn't
+                // ask for. The Updates tab already shows updates_status for whoever goes looking.
+                if (updates_check_result.result ==
+                    SwitchFrontend::UpdateCheckResult::UpdateAvailable) {
+                    ShowPopup("Version " + updates_check_result.info.tag_name +
+                                  " is available. Visit Settings > Updates to install it.",
+                              "Update available", kColAccent);
+                }
+            }
         } else if (updates_downloading) {
             updates_downloading = false;
             switch (updates_download_result) {
@@ -1094,9 +1135,10 @@ private:
         }
     }
 
-    // Blocks on a single-button (A only, no cancel) acknowledgement that the update installed,
-    // then relaunches into it. Never returns.
-    [[noreturn]] void ShowUpdateInstalledModal() {
+    // Blocks on a single-button (A only, no cancel) acknowledgement that the update downloaded,
+    // then installs it and relaunches. Only returns (without relaunching) if the install itself
+    // fails - the caller falls back to the normal updates_status error display in that case.
+    void ShowUpdateInstalledModal() {
         while (appletMainLoop()) {
             padUpdate(pad_state);
             const u64 down = padGetButtonsDown(pad_state);
@@ -1107,7 +1149,20 @@ private:
             DrawUpdateInstalledModal(canvas);
             Present();
         }
-        SwitchFrontend::RelaunchSelf();
+        // UnmountRomfsForSelfReplace() first - hardware-confirmed required (romfs is mounted
+        // straight out of this same .nro's embedded asset section, and leaving it mounted makes
+        // the rename below fail with an I/O error). FinishInstall() then renames the verified
+        // download directly onto the .nro this process is currently running from - safe because
+        // Horizon reads an NRO's contents into memory once at process start and never re-reads the
+        // file afterward. RelaunchSelf() immediately after is what actually loads the new bytes.
+        SwitchFrontend::UnmountRomfsForSelfReplace();
+        if (SwitchFrontend::FinishInstall()) {
+            SwitchFrontend::RelaunchSelf();
+        }
+        // Only reached on failure - romfs needs to come back since this process keeps running.
+        SwitchFrontend::RemountRomfsAfterFailedSelfReplace();
+        updates_status = "Downloaded and verified, but couldn't install it. Try again.";
+        updates_status_is_error = true;
     }
 
     void DrawUpdateInstalledModal(Canvas& c) {
@@ -1117,10 +1172,9 @@ private:
         const int y = (kScreenH - h) / 2;
         c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
         c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
-        g_font.Draw(c, x + 24, y + 40, "Update installed", 24, kColAccent);
-        g_font.Draw(c, x + 24, y + 78, "Raikopon needs to restart to finish updating.", 18,
-                    kColText);
-        DrawHint(c, x + 24, y + h - 38, "A", "Restart now");
+        g_font.Draw(c, x + 24, y + 40, "Update downloaded", 24, kColAccent);
+        g_font.Draw(c, x + 24, y + 78, "Press A to install and restart.", 18, kColText);
+        DrawHint(c, x + 24, y + h - 38, "A", "Install now");
     }
 
     // Blocks on a yes/no prompt.
@@ -1174,6 +1228,27 @@ private:
             }
             Draw();
             DrawConfirmClearShaderCache(canvas, game);
+            Present();
+        }
+        return false;
+    }
+
+    // Blocks on a yes/no prompt shown right after a restart-required setting (Async GPU, Fastmem,
+    // Region, …) changes — see SwitchFrontend::RequiresRestart. Returns true if the user wants to
+    // restart now; the caller is responsible for flushing the changed setting to config.ini before
+    // relaunching, since RelaunchSelf() re-execs the .nro and only the on-disk config survives that.
+    bool ConfirmRestart(const char* label) {
+        while (appletMainLoop()) {
+            padUpdate(pad_state);
+            const u64 down = padGetButtonsDown(pad_state);
+            if (down & HidNpadButton_A) {
+                return true;
+            }
+            if (down & HidNpadButton_B) {
+                return false;
+            }
+            Draw();
+            DrawConfirmRestart(canvas, label);
             Present();
         }
         return false;
@@ -1291,9 +1366,19 @@ private:
             }
             if (changed) {
                 settings_dirty = true;
+                if (RequiresRestart(current_item)) {
+                    armed_row_changed_needs_restart = true;
+                }
             }
             if (down & (HidNpadButton_A | HidNpadButton_B)) {
                 settings_armed = false;
+                if (armed_row_changed_needs_restart) {
+                    armed_row_changed_needs_restart = false;
+                    if (ConfirmRestart(rows[settings_sel].label)) {
+                        FlushSettings();
+                        SwitchFrontend::RelaunchSelf();
+                    }
+                }
             }
             return false;
         }
@@ -1323,9 +1408,15 @@ private:
             if (IsBooleanSetting(current_item)) {
                 ToggleSetting(settings, current_item);
                 settings_dirty = true;
+                if (RequiresRestart(current_item) &&
+                    ConfirmRestart(rows[settings_sel].label)) {
+                    FlushSettings();
+                    SwitchFrontend::RelaunchSelf();
+                }
             } else {
                 settings_armed = true;
                 gyro_edit_y = false;
+                armed_row_changed_needs_restart = false;
             }
         }
         if (down & HidNpadButton_B) {
@@ -2357,6 +2448,27 @@ private:
         DrawHint(c, hx, hy, "B", "Cancel");
     }
 
+    void DrawConfirmRestart(Canvas& c, const char* label) {
+        constexpr int w = 620;
+        constexpr int h = 176;
+        const int x = (kScreenW - w) / 2;
+        const int y = (kScreenH - h) / 2;
+        c.FillRect(0, 0, kScreenW, kScreenH, MakeColor(0x10, 0x11, 0x13, 0xC0));
+        c.RoundBorder(x, y, w, h, 14, 2, kColBadge, kColSurface);
+
+        g_font.Draw(c, x + 24, y + 40, "Restart required", 24, kColAccent);
+        g_font.Draw(c, x + 24, y + 78,
+                    g_font.Truncate(std::string(label) + " won't take effect until Raikopon "
+                                                           "restarts.",
+                                    18, w - 48),
+                    18, kColText);
+
+        int hx = x + 24;
+        const int hy = y + h - 38;
+        hx += DrawHint(c, hx, hy, "A", "Restart now") + 22;
+        DrawHint(c, hx, hy, "B", "Later");
+    }
+
     void DrawPopup(Canvas& c, const std::string& message, const char* title = "Can't launch",
                    u32 title_color = kColError) {
         constexpr int w = 620;
@@ -2492,7 +2604,13 @@ private:
     }
 
     void DrawSettingsPage(Canvas& c) {
-        DrawHeader(c, "");
+        // Shows the running build's version in the existing header-subtitle slot, right where
+        // you'd look to compare against what Check for Updates reports - added specifically so
+        // testing/debugging an update doesn't require memorizing (or guessing) which of several
+        // differently-versioned builds is actually running.
+        DrawHeader(c, settings_tab == SettingsTab::Updates
+                         ? std::string("v") + SwitchFrontend::kRaikoponVersion
+                         : "");
         DrawSettingsTabBar(c);
         const bool content_focus = focus == Focus::Content;
         const int x = kContentX + 24;

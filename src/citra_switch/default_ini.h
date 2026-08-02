@@ -123,6 +123,11 @@ movie_throttle_clock_percentage =
 last_artic_base_addr =
 # In-app updater channel: 0 = Stable (GitHub releases), 1 = Experimental (GitHub pre-releases).
 update_channel = 0
+# Unix timestamp of the last automatic (boot-time) update check; 0 = never. Rate-limits that check
+# to once every 15 minutes regardless of how many times the app is relaunched, since GitHub's
+# unauthenticated API quota is only 60 requests/hour per source IP. Manual checks from the Updates
+# tab ignore this.
+last_auto_update_check = 0
 
 [Controls]
 # Use input streamed by the real 3DS while connected to Artic Base (0, default).

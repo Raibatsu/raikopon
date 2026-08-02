@@ -103,7 +103,7 @@ set(RAIKOPON_NRO_NAME "raikopon")
 # raikopon_version.h (generated), which the in-app updater compares GitHub release tags against.
 # Bump this by hand for every release. Keep it short - the NACP DisplayVersion field must be
 # under 0x10 bytes on real hardware.
-set(RAIKOPON_VERSION "1.5.0")
+set(RAIKOPON_VERSION "1.6.0")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/raikopon_version.h.in"

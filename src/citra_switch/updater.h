@@ -60,21 +60,70 @@ enum class DownloadResult {
     Success,
     NetworkError,
     ChecksumMismatch,
-    ReplaceFailed, // Verified, but the final rename onto the live .nro failed.
+    // Reserved: no current path returns this (the old "rename straight onto the live .nro" step
+    // this used to describe was removed - see GetUpdateStagingPath()'s comment for why - and
+    // nothing since replaces it with a comparable synchronous failure). Kept so DownloadResult's
+    // set of values doesn't shift under any external code and switches over it stay exhaustive.
+    ReplaceFailed,
 };
 
-// Downloads info.nro_download_url to a temp file next to the running .nro, verifies it against
-// info.sha256_download_url's content, and only on success atomically replaces the running .nro.
-// `progress` is invoked with (bytes_so_far, total_bytes) from the calling (worker) thread. On any
-// failure the temp file is deleted before returning - there is no resume; the caller must restart
-// the whole check-then-download flow from scratch. Blocking - run on a worker thread.
+// Downloads info.nro_download_url to GetUpdateStagingPath(), verifies it against
+// info.sha256_download_url's content, and leaves it there (does NOT touch the live .nro - call
+// FinishInstall() for that once the user confirms). `progress` is invoked with (bytes_so_far,
+// total_bytes) from the calling (worker) thread. On any failure the staged file is deleted before
+// returning - there is no resume; the caller must restart the whole check-then-download flow from
+// scratch. Blocking - run on a worker thread.
 DownloadResult DownloadAndInstallUpdate(
     const UpdateInfo& info, const std::function<void(std::size_t, std::size_t)>& progress);
 
-// Ends the process and asks hbloader to load the just-replaced .nro next. Never returns on
-// success (aborts instead if HasOwnNroPath() is false). Only call this after a successful
-// DownloadAndInstallUpdate, once the user has dismissed the "update installed" prompt.
+// Where DownloadAndInstallUpdate() stages a verified download - <dir>/raikopon.nro.new, same
+// directory as the live .nro (required for FileUtil::Rename's same-filesystem guarantee). A fixed
+// name, not one unique per download cycle: an earlier version of this code used a
+// timestamp-suffixed name (and a whole separate staging-boot/relaunch dance around it) to work
+// around what looked like Horizon refusing to replace the file the current process is running
+// from - that turned out to be a misdiagnosis (see FinishInstall()'s comment for what was actually
+// going on), so there's no reason left to avoid a fixed name.
+std::string GetUpdateStagingPath();
+
+// Renames GetOwnNroPath() aside and renames GetUpdateStagingPath() onto it - i.e. actually
+// installs a download that DownloadAndInstallUpdate() already verified. The caller MUST call
+// UnmountRomfsForSelfReplace() first (see its comment for why - hardware-confirmed, not optional).
+// Safe to call while this process is still running from GetOwnNroPath(): Horizon loads an NRO's
+// contents into memory once at process start and never re-reads the file afterward, so overwriting
+// the file on disk doesn't touch the already-running in-memory code - only the *next* process to
+// load that path (this same one, immediately after, via RelaunchSelf()) sees the new bytes. Pure
+// file I/O, safe to call from the core side (no libnx dependency). Returns false on I/O failure
+// (destination still has the old binary, restored from the backup if the second rename is what
+// failed; the staged .new file is left alone so the user can retry from the Updates tab without
+// re-downloading).
+//
+// The caller relaunches immediately after a successful call here - RelaunchSelf(), not a second
+// hop into some intermediate path. There's nothing left to reload except the file that was just
+// written.
+bool FinishInstall();
+
+// Unmounts the embedded romfs partition before FinishInstall() touches the live .nro. Must be
+// called first - hardware-confirmed: romfs is mounted directly out of the running .nro's own
+// embedded asset section, and leaving it mounted makes even a plain rename() of that file fail
+// with errno 5 (I/O error). Implemented in citra_switch.cpp (needs libnx's romfsExit()).
+void UnmountRomfsForSelfReplace();
+
+// Only needed if FinishInstall() fails after UnmountRomfsForSelfReplace() already ran - remounts
+// romfs so the still-running process (no relaunch happens on a failed install) keeps working HTTPS
+// (the CA bundle lives in romfs) for a retry.
+void RemountRomfsAfterFailedSelfReplace();
+
+// Ends the process and asks hbloader to load `path` next. `path` must end in .nro - libnx's
+// envSetNextLoad() docs say so explicitly. An empty path means "just exit, don't load anything" -
+// used for a plain return to whatever launched this process. Never returns on success (aborts
+// instead if HasOwnNroPath() is false when a non-empty path is used - RelaunchSelf() below only
+// ever reaches that state via GetOwnNroPath(), which already requires HasOwnNroPath()).
 // Implemented in citra_switch.cpp - see the file comment above for why.
+[[noreturn]] void RelaunchInto(const std::string& path);
+
+// Equivalent to RelaunchInto(GetOwnNroPath()) - reloads the current .nro from disk. Used both
+// after a successful FinishInstall() (to boot into the just-installed update) and for every other
+// restart-required case (a settings change, the dekopon folder having moved, ...).
 [[noreturn]] void RelaunchSelf();
 
 } // namespace SwitchFrontend

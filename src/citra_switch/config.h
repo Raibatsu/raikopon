@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <ctime>
 #include <string>
 
 // Facade between the <switch.h> main() and the Azahar core.
@@ -50,6 +51,14 @@ enum class UpdateChannel { Stable, Experimental };
 // Persisted update-channel preference for the Updates tab.
 UpdateChannel GetUpdateChannel();
 void SetUpdateChannel(UpdateChannel channel);
+
+// Unix timestamp of the last automatic (boot-time) update check, or 0 if none has run yet.
+// Persisted (not just in-memory) so the cooldown survives across relaunches - GitHub's
+// unauthenticated API quota is 60 requests/hour per source IP, and a check on every single boot
+// burns through that fast during, e.g., a run of settings changes that each restart the app. A
+// manual check from the Updates tab is never subject to this - only the automatic boot-time one.
+std::time_t GetLastAutoUpdateCheckTime();
+void SetLastAutoUpdateCheckTime(std::time_t time);
 
 SystemFileSetupState GetSystemFileSetupState();
 void PrepareSystemFileSetup(SystemFileSetupMode mode);

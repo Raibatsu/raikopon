@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <ctime>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -58,6 +59,7 @@ std::string s_active_user_dir;
 std::string s_inserted_cartridge;
 std::string s_artic_base_address;
 SwitchFrontend::UpdateChannel s_update_channel = SwitchFrontend::UpdateChannel::Stable;
+std::time_t s_last_auto_update_check = 0;
 
 // Reads/Writes the SD-card config file
 class Config {
@@ -211,6 +213,8 @@ private:
         s_update_channel = config->GetInteger("Switch", "update_channel", 0) == 1
                                ? SwitchFrontend::UpdateChannel::Experimental
                                : SwitchFrontend::UpdateChannel::Stable;
+        s_last_auto_update_check =
+            static_cast<std::time_t>(config->GetInteger("Switch", "last_auto_update_check", 0));
         Settings::values.use_artic_base_controller = config->GetBoolean(
             "Controls", Settings::values.use_artic_base_controller.GetLabel(), false);
 
@@ -311,6 +315,8 @@ private:
         ss << "last_artic_base_addr = " << s_artic_base_address << '\n';
         ss << "update_channel = "
            << (s_update_channel == SwitchFrontend::UpdateChannel::Experimental ? 1 : 0) << '\n';
+        ss << "last_auto_update_check = " << static_cast<long long>(s_last_auto_update_check)
+           << '\n';
         ss << "pointer_source = " << static_cast<int>(SwitchFrontend::GetPointerSource()) << '\n';
         ss << "gyro_sensitivity_x = " << SwitchFrontend::GetGyroSensitivityX() << '\n';
         ss << "gyro_sensitivity_y = " << SwitchFrontend::GetGyroSensitivityY() << '\n';
@@ -408,6 +414,15 @@ UpdateChannel GetUpdateChannel() {
 
 void SetUpdateChannel(UpdateChannel channel) {
     s_update_channel = channel;
+    SaveConfig();
+}
+
+std::time_t GetLastAutoUpdateCheckTime() {
+    return s_last_auto_update_check;
+}
+
+void SetLastAutoUpdateCheckTime(std::time_t time) {
+    s_last_auto_update_check = time;
     SaveConfig();
 }
 

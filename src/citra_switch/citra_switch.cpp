@@ -268,6 +268,20 @@ void RunGame(PadState& pad, const std::string& rom) {
     SwitchFrontend::DestroyWindow();
 }
 
+// Plain-file diagnostic for RelaunchInto() below, used instead of the structured logger because a
+// relaunch triggered before Bootstrap() brings logging up needs somewhere to write, and instead of
+// stdout/nxlink because not every user has that connected. Appends one line, opening/closing the
+// file each call so every line is flushed to the SD card immediately - deliberately not batched,
+// since the whole point is surviving a crash on the very next line. sdmc:/switch/dekopon/ is
+// expected to already exist by this point on any install that has ever fully booted before; if it
+// somehow doesn't, this just silently no-ops rather than crashing on the fopen failure.
+void DebugLogUpdateStaging(const std::string& line) {
+    if (FILE* f = std::fopen("sdmc:/switch/dekopon/update_staging_debug.log", "a")) {
+        std::fprintf(f, "%s\n", line.c_str());
+        std::fclose(f);
+    }
+}
+
 } // namespace
 
 int main(int argc, char* argv[]) {
@@ -337,18 +351,70 @@ int main(int argc, char* argv[]) {
 
 namespace SwitchFrontend {
 
+// Must be called before FinishInstall() touches the live .nro. romfsInit() (main(), above) mounts
+// the embedded romfs partition directly out of that same file's embedded asset section, which
+// hardware testing showed keeps a handle open that makes even a plain rename() of the file fail
+// with errno 5 (I/O error) - lives here rather than in updater.cpp because it needs libnx's
+// romfsExit(), same reason as RelaunchInto() below. Safe to call even if romfs was never
+// successfully mounted (main()'s have_romfs check failing is already treated as non-fatal there).
+void UnmountRomfsForSelfReplace() {
+    romfsExit();
+}
+
+// Only needed if FinishInstall() fails after UnmountRomfsForSelfReplace() already ran - the
+// process keeps running (no relaunch happens on failure), so romfs (the updater's own CA bundle,
+// among other things) needs to come back for the rest of this session, most immediately so the
+// user can retry the update check without HTTPS silently breaking underneath them.
+void RemountRomfsAfterFailedSelfReplace() {
+    if (R_FAILED(romfsInit())) {
+        std::printf("Warning: romfsInit() failed on remount after a failed self-replace.\n");
+    }
+}
+
 // See updater.h's file comment for why this lives here rather than in updater.cpp: it needs
 // envSetNextLoad (libnx), which can't share a translation unit with updater.cpp's use of
 // common/file_util.h.
-[[noreturn]] void RelaunchSelf() {
-    if (!HasOwnNroPath()) {
-        // Nothing sensible to relaunch into - fall through to a normal process exit rather than
-        // calling envSetNextLoad with an empty path.
-        exit(0);
+[[noreturn]] void RelaunchInto(const std::string& path) {
+    // Logged unconditionally, before anything else - if what follows is what's fatal (not just a
+    // failure Result), this line is the only evidence this was even reached. See
+    // DebugLogUpdateStaging's comment for why this is a raw file write, not the structured logger.
+    DebugLogUpdateStaging("RelaunchInto(\"" + path + "\")");
+    // Root cause of an earlier version of the update-install crash: fsdev's sdmc: mount doesn't
+    // auto-commit writes to the physical SD card (libnx's own doc on fsdevCommitDevice - "This
+    // should be used after each file-close where file-writing was done... not used automatically
+    // at device unmount"). Committed unconditionally, even for a plain "return to hbmenu" exit
+    // (path empty, no envSetNextLoad call below) - the updater's install flow depends on this:
+    // FinishInstall()'s rename must reach the physical card before this process exits and
+    // RelaunchSelf() asks the loader to re-read this same path fresh. Cheap and correct regardless
+    // of what triggered the relaunch.
+    const Result commit_rc = fsdevCommitDevice("sdmc");
+    if (R_FAILED(commit_rc)) {
+        char commit_line[64];
+        std::snprintf(commit_line, sizeof(commit_line), "fsdevCommitDevice failed: 0x%08X",
+                      commit_rc);
+        DebugLogUpdateStaging(commit_line);
     }
-    const std::string& path = GetOwnNroPath();
-    envSetNextLoad(path.c_str(), path.c_str());
+    if (!path.empty()) {
+        const Result rc = envSetNextLoad(path.c_str(), path.c_str());
+        // Checked (previously wasn't - a silently-failing envSetNextLoad here is indistinguishable
+        // from hbloader crashing outright, which is exactly the .download-extension bug this
+        // caught).
+        char result_line[64];
+        std::snprintf(result_line, sizeof(result_line), "envSetNextLoad result: 0x%08X", rc);
+        DebugLogUpdateStaging(result_line);
+        if (R_FAILED(rc)) {
+            std::printf("envSetNextLoad(\"%s\") failed: 0x%08X\n", path.c_str(), rc);
+        }
+    }
+    // Flushes the structured logger too, on top of the raw debug-log writes above (which already
+    // write-and-close on every call). Safe to call unconditionally, even if logging was never
+    // started - resetting a null s_config is a no-op and Log::Stop() is idempotent.
+    SwitchFrontend::Shutdown();
     exit(0);
+}
+
+[[noreturn]] void RelaunchSelf() {
+    RelaunchInto(HasOwnNroPath() ? GetOwnNroPath() : std::string{});
 }
 
 } // namespace SwitchFrontend
