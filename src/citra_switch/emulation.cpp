@@ -27,6 +27,7 @@
 #include "core/core.h"
 #include "core/frontend/applets/default_applets.h"
 #include "core/loader/loader.h"
+#include "core/perf_stats.h"
 #include "video_core/gpu.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
@@ -256,6 +257,7 @@ void EmuThread(std::string path) {
         while (!s_stop) {
             if (s_layout_update_pending.exchange(false, std::memory_order_acq_rel)) {
                 system.GPU().UpdateCurrentFramebufferLayout();
+                Core::PerfStats::game_frames_updated = true;
             }
             if (s_paused.load(std::memory_order_relaxed)) {
                 {
