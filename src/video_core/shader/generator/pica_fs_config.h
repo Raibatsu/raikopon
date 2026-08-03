@@ -410,6 +410,13 @@ struct FSConfig {
         texture.ApplyProfile(profile);
     }
 
+    /// Applies the profile, then zeroes state that the fragment shader is never generated from once
+    /// the device supports the corresponding feature natively (blend/logic-op factors, texture wrap
+    /// modes). This collapses draws that differ only in that dead state onto one FSConfig -> one
+    /// generated shader, instead of a fresh variant (and compile) per draw. Only fields proven dead
+    /// for the given profile are cleared, so the generated shader and its output are unchanged.
+    void Canonicalize(const Profile& profile);
+
     bool operator==(const FSConfig& other) const noexcept {
         return std::memcmp(this, &other, sizeof(FSConfig)) == 0;
     }

@@ -7,6 +7,7 @@
 // Refer to the license.txt file included.
 
 #include <array>
+#include <cstdio>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -431,6 +432,13 @@ bool Rename(const std::string& srcFullPath, const std::string& destFullPath) {
             return true;
         }
     }
+#elif defined(__SWITCH__)
+    if (std::remove(destFullPath.c_str()) != 0) {
+        LOG_WARNING(Common_Filesystem, "pre-rename remove {} failed: {}", destFullPath,
+                    GetLastErrorMsg());
+    }
+    if (rename(srcFullPath.c_str(), destFullPath.c_str()) == 0)
+        return true;
 #else
     if (rename(srcFullPath.c_str(), destFullPath.c_str()) == 0)
         return true;

@@ -6,6 +6,75 @@
 
 namespace Pica::Shader {
 
+namespace {
+using TevOperation = Pica::TexturingRegs::TevStageConfig::Operation;
+
+constexpr bool TevOpUsesSource2(TevOperation op) {
+    return op != TevOperation::Replace;
+}
+constexpr bool TevOpUsesSource3(TevOperation op) {
+    return op == TevOperation::Lerp || op == TevOperation::MultiplyThenAdd ||
+           op == TevOperation::AddThenMultiply;
+}
+
+void CanonicalizeTevStage(TevStageConfigRaw& stage) {
+    const TevOperation color_op = static_cast<TevOperation>(stage.ops_raw & 0xF);
+    const TevOperation alpha_op = static_cast<TevOperation>((stage.ops_raw >> 16) & 0xF);
+
+    if (!TevOpUsesSource2(color_op)) {
+        stage.sources_raw &= ~(0xFu << 4);    // color_source2
+        stage.modifiers_raw &= ~(0xFu << 4);  // color_modifier2
+    }
+    if (!TevOpUsesSource3(color_op)) {
+        stage.sources_raw &= ~(0xFu << 8);    // color_source3
+        stage.modifiers_raw &= ~(0xFu << 8);  // color_modifier3
+    }
+
+    if (color_op == TevOperation::Dot3_RGBA) {
+        // Alpha is taken from the color dot product: no alpha inputs are read and alpha_op is
+        // ignored entirely.
+        stage.sources_raw &= ~(0xFFFu << 16);                              // alpha_source1/2/3
+        stage.modifiers_raw &= ~((0x7u << 12) | (0x7u << 16) | (0x7u << 20)); // alpha_modifier1/2/3
+        stage.ops_raw &= ~(0xFu << 16);                                   // alpha_op
+    } else {
+        if (!TevOpUsesSource2(alpha_op)) {
+            stage.sources_raw &= ~(0xFu << 20);   // alpha_source2
+            stage.modifiers_raw &= ~(0x7u << 16); // alpha_modifier2
+        }
+        if (!TevOpUsesSource3(alpha_op)) {
+            stage.sources_raw &= ~(0xFu << 24);   // alpha_source3
+            stage.modifiers_raw &= ~(0x7u << 20); // alpha_modifier3
+        }
+    }
+}
+} // namespace
+
+void FSConfig::Canonicalize(const Profile& profile) {
+    ApplyProfile(profile);
+
+    // These fields feed fixed-function/ApplyProfile emulation but are never read by the shader
+    // generators once the device supports the feature natively, so they're dead state in the
+    // generated shader. Clear them (only where provably dead for this profile) so draws differing
+    // solely in this state share one config.
+    if (profile.has_logic_op) {
+        // logic_op (already resolved by ApplyProfile) is what the generator reads; the requested_
+        // copy is only consumed by ApplyProfile when the device lacks native logic op.
+        framebuffer.requested_logic_op = {};
+    }
+    if (profile.is_vulkan || profile.has_blend_minmax_factor) {
+        // Blend factors only matter for min/max emulation, which native min/max blending disables.
+        framebuffer.requested_rgb_blend = {};
+        framebuffer.requested_alpha_blend = {};
+    }
+    if (profile.has_custom_border_color) {
+        // Wrap modes only feed border-color emulation; with native custom border color ApplyProfile
+        // ignores them and the generator samples via texture_border_color instead.
+        for (auto& wrap : texture.requested_wrap) {
+            wrap = {};
+        }
+    }
+}
+
 FramebufferConfig::FramebufferConfig(const Pica::RegsInternal& regs) {
     const auto& output_merger = regs.framebuffer.output_merger;
     scissor_test_mode.Assign(regs.rasterizer.scissor_test.mode);
@@ -69,11 +138,7 @@ TextureConfig::TextureConfig(const Pica::TexturingRegs& regs) {
         tev_stages[i].modifiers_raw = tev_stage.modifiers_raw;
         tev_stages[i].ops_raw = tev_stage.ops_raw;
         tev_stages[i].scales_raw = tev_stage.scales_raw;
-        if (tev_stage.color_op == Pica::TexturingRegs::TevStageConfig::Operation::Dot3_RGBA) {
-            tev_stages[i].sources_raw &= 0xFFF;
-            tev_stages[i].modifiers_raw &= 0xFFF;
-            tev_stages[i].ops_raw &= 0xF;
-        }
+        CanonicalizeTevStage(tev_stages[i]);
     }
 }
 
