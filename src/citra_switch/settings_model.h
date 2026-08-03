@@ -99,4 +99,5 @@ void ToggleSetting(MenuSettings& s, SettingRowIdx item);
 // them out of BuildSettingRows' result entirely rather than showing a dead-end row.
 bool IsPerGameEditable(SettingRowIdx item);
 
+bool RequiresRestart(SettingRowIdx item);
 } // namespace SwitchFrontend

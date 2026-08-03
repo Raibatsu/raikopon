@@ -134,9 +134,8 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
              "Change the resolution the game is played at. 1x is 400x240."},
             {SettingRowVSync, "VSync", s.use_vsync ? "On" : "Off",
              "Reduces screen tearing at the cost of increased input latency."},
-            {SettingRowAsyncGpu, "Async GPU (needs restart)", s.async_gpu_emulation ? "On" : "Off",
-             "Runs GPU command processing on its own thread in parallel with the CPU. Faster, "
-             "but takes effect on next launch."},
+            {SettingRowAsyncGpu, "Async GPU", s.async_gpu_emulation ? "On" : "Off",
+             "Runs GPU command processing on its own thread in parallel with the CPU. Faster."},
             {SettingRowStrictGpuSync, "Strict GPU Sync", s.strict_gpu_sync ? "On" : "Off",
              "Waits for the GPU thread to catch up every frame instead of letting it lag behind. "
              "Only matters with Async GPU on."},
@@ -157,8 +156,8 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
             {SettingRowHwShader, "Hardware Shader", s.use_hw_shader ? "On" : "Off",
              "Emulate shaders more efficiently on GPU."},
             {SettingRowUbershaders, "Ubershaders", s.use_ubershaders ? "On" : "Off",
-             "Render draws whose shader is still compiling with a generic shader instead of "
-             "skipping them, removing screen bleed during shader compilation."},
+             "Renders draws with a generic shader instead of skipping them, removing screen "
+             "bleed."},
             {SettingRowEnableCompileBoost, "Enable Compile Boost",
              s.enable_compile_boost ? "On" : "Off",
              "Dramatically speeds up shader compiling speed but reduces GPU performance during "
@@ -172,8 +171,7 @@ std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s)
             {SettingRowCpuJit, "CPU JIT (dynarmic)", s.use_cpu_jit ? "On" : "Off",
              "Do not disable this unless explicitly needed. Huge performance drops."},
             {SettingRowFastmem, "Fastmem", s.fastmem ? "On" : "Off",
-             "Alias guest RAM into a host arena so the JIT skips page-table walks. Disable if a "
-             "game runs worse or misbehaves with it on."},
+             "Aliases guest RAM so the CPU JIT skips page-table walks. Disable if unstable."},
             {SettingRowPointerSource, "Touch Pointer Source",
              PointerSourceName(static_cast<PointerSource>(s.pointer_source)),
              "For those who don't want to use touch screen, use a virtual cursor."},
@@ -376,6 +374,24 @@ bool IsPerGameEditable(SettingRowIdx item) {
         return false;
     default:
         return true;
+    }
+}
+
+bool RequiresRestart(SettingRowIdx item) {
+    switch (item) {
+    // All read once at boot (System::Init / GPU thread / dynarmic JIT setup) — changing them
+    // mid-session has no effect until Raikopon restarts. Custom Textures/Preload/Dump and R3
+    // Layouts are excluded from IsPerGameEditable for unrelated reasons and don't belong here.
+    case SettingRowNew3ds:
+    case SettingRowRegion:
+    case SettingRowLanguage:
+    case SettingRowCpuJit:
+    case SettingRowFastmem:
+    case SettingRowAsyncGpu:
+    case SettingRowStrictGpuSync:
+        return true;
+    default:
+        return false;
     }
 }
 
