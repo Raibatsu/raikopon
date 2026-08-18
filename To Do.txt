@@ -4,3 +4,4 @@
 * Mods and Cheats are still untested.
 * Horrible performance in some games, even though they aren't using CPU or GPU to 100%.
 * Probably base UI on plutonium by XorTroll for stability.
+* Add custom bezel/mask overlay support.
