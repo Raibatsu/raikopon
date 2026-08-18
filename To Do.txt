@@ -1,0 +1,6 @@
+* FPS font and Building Pipelines font looks broken. Needs to be fixed.
+* Sometimes cover art does not render or it renders in grey blocks.
+* The left rail in main menu UI sometimes does not display properly when moving between screens.
+* Mods and Cheats are still untested.
+* Horrible performance in some games, even though they aren't using CPU or GPU to 100%.
+* Probably base UI on plutonium by XorTroll for stability.
