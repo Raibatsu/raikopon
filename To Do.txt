@@ -2,6 +2,8 @@
 * Sometimes cover art does not render or it renders in grey blocks.
 * The left rail in main menu UI sometimes does not display properly when moving between screens.
 * Mods and Cheats are still untested.
+* Single screen mods are broken.
+* Multi-key combination is bugged for Cycle Screen Layout. 
 * Horrible performance in some games, even though they aren't using CPU or GPU to 100%.
 * Probably base UI on plutonium by XorTroll for stability.
 * Add custom bezel/mask overlay support.
