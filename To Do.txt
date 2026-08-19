@@ -4,7 +4,9 @@
 * Mods and Cheats are still untested.
 * Single screen mods are broken.
 * Multi-key combination is bugged for Cycle Screen Layout. 
+* Add per-game control layout.
 * Horrible performance in some games, even though they aren't using CPU or GPU to 100%.
 * Probably base UI on plutonium by XorTroll for stability.
 * Add custom bezel/mask overlay support.
 * Add multiplayer rooms support.
+* Add .3gx plugin support.
