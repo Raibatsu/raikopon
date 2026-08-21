@@ -10,3 +10,4 @@
 * Add custom bezel/mask overlay support.
 * Add multiplayer rooms support.
 * Add .3gx plugin support.
+* Add amiibo support.
