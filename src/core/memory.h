@@ -253,7 +253,17 @@ enum : VAddr {
     /// Area where 3GX plugin framebuffers are stored
     PLUGIN_3GX_FB_VADDR = 0x06000000,
     PLUGIN_3GX_FB_SIZE = 0x000A9000,
-    PLUGIN_3GX_FB_VADDR_END = PLUGIN_3GX_FB_VADDR + PLUGIN_3GX_FB_SIZE
+    PLUGIN_3GX_FB_VADDR_END = PLUGIN_3GX_FB_VADDR + PLUGIN_3GX_FB_SIZE,
+
+    /// Small backing block for the fake kernel-object addresses (0xFFFF9000/0xFFFF9004) that
+    /// some 3GX plugin frameworks (e.g. CTRPluginFramework) read directly, expecting the
+    /// real Luma3DS kernel's linear-mapped KThread/KProcess objects to live there. Its base
+    /// virtual address is chosen dynamically per plugin load (see Plugin3GXKernelShimAddress),
+    /// since it must be placed right after the plugin's own heap block to avoid colliding with it.
+    PLUGIN_KERNEL_SHIM_SIZE = 0x00001000,
+    PLUGIN_KERNEL_SHIM_PROCESS_OFFSET = 0x000,
+    PLUGIN_KERNEL_SHIM_THREAD_OFFSET = 0x100,
+    PLUGIN_KERNEL_SHIM_THREAD_TLS_OFFSET = 0x094,
 };
 
 enum class FlushMode {
@@ -712,6 +722,10 @@ public:
 
     /// Returns a reference to the framebuffer address of the currently loaded 3GX plugin.
     PAddr& Plugin3GXFramebufferAddress();
+
+    /// Returns a reference to the fake kernel-object shim's base virtual address for the
+    /// currently loaded 3GX plugin's process (0 if no plugin is loaded).
+    VAddr& Plugin3GXKernelShimAddress();
 
     void RegisterWatchpoint(const Kernel::Process& process, VAddr addr, u32 size);
 

@@ -7,6 +7,7 @@
 #include <SPIRV/GlslangToSpv.h>
 #include <glslang/Include/ResourceLimits.h>
 #include <glslang/Public/ShaderLang.h>
+#include <spirv-tools/optimizer.hpp>
 #include "common/assert.h"
 #include "common/literals.h"
 #include "common/logging/log.h"
@@ -247,6 +248,45 @@ std::vector<u32> CompileGLSL(std::string_view code, vk::ShaderStageFlagBits stag
     }
 
     return out_code;
+}
+
+void OptimizeSpirv(std::vector<u32>& code, vk::ShaderStageFlagBits stage) {
+    if (Settings::values.disable_spirv_optimizer.GetValue()) {
+        return;
+    }
+
+    const auto optimize_start = std::chrono::steady_clock::now();
+    const size_t original_words = code.size();
+
+    // Matches vk_platform.h's TargetVulkanApiVersion (VK_API_VERSION_1_1), same as the SPIR-V 1.3
+    // target glslang uses for the GLSL path in CompileGLSL above.
+    thread_local spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+    thread_local bool optimizer_ready = false;
+    if (!optimizer_ready) {
+        optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&,
+                                        const char* message) {
+            LOG_INFO(Render_Vulkan, "spirv-opt: {}", message);
+        });
+        optimizer.RegisterSizePasses();
+        optimizer_ready = true;
+    }
+
+    std::vector<u32> optimized;
+    if (!optimizer.Run(code.data(), code.size(), &optimized)) {
+        LOG_WARNING(Render_Vulkan, "spirv-opt failed on {} shader, using unoptimized SPIR-V",
+                    StageName(stage));
+        return;
+    }
+    code = std::move(optimized);
+
+    const auto optimize_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - optimize_start);
+    LOG_INFO(Render_Vulkan, "spirv-opt ({} shader): {} -> {} words in {}ms", StageName(stage),
+             original_words, code.size(), optimize_elapsed.count());
+    if (optimize_elapsed > kSlowShaderCompileThreshold) {
+        LOG_WARNING(Render_Vulkan, "spirv-opt ({} shader) took {}ms", StageName(stage),
+                    optimize_elapsed.count());
+    }
 }
 
 vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {

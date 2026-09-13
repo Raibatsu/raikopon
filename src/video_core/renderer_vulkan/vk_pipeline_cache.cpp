@@ -8,6 +8,7 @@
 
 #include "common/common_paths.h"
 #include "common/file_util.h"
+#include "common/gpu_frame_log.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/scope_exit.h"
@@ -177,10 +178,26 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
     }
 
     BuildLayout();
+
+    // The two always-resident shaders get their shader-object equivalent here, synchronously (no
+    // async-compile interaction to worry about, unlike the programmable VS/FS/GS created in
+    // vk_shader_disk_cache.cpp's worker lambdas -- see docs/SHADER_OBJECT_HANDOFF.md item 3).
+    // trivial_vertex_shader's nextStage covers both possibilities (a fixed geometry shader may or
+    // may not follow it, depending on UseFixedGeometryShader vs UseTrivialGeometryShader) even
+    // though DrawTriangles() currently always pairs it with UseTrivialGeometryShader -- matches
+    // every other vertex shader's nextStage so this doesn't rely on that pairing never changing.
+    // ubershader_fragment_shader is always the last stage, so its next_stage is empty.
+    if (instance.IsShaderObjectSupported()) {
+        trivial_vertex_shader.CreateShaderObject(
+            vk::ShaderStageFlagBits::eVertex,
+            vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment,
+            descriptor_set_layouts);
+        ubershader_fragment_shader.CreateShaderObject(vk::ShaderStageFlagBits::eFragment, {},
+                                                      descriptor_set_layouts);
+    }
 }
 
 void PipelineCache::BuildLayout() {
-    std::array<vk::DescriptorSetLayout, NumRasterizerSets> descriptor_set_layouts;
     descriptor_set_layouts[0] = descriptor_heaps[0].Layout();
     descriptor_set_layouts[1] = descriptor_heaps[1].Layout();
     descriptor_set_layouts[2] = descriptor_heaps[2].Layout();
@@ -195,14 +212,19 @@ void PipelineCache::BuildLayout() {
 }
 
 PipelineCache::~PipelineCache() {
+    WaitForCompileWorkers();
+    SaveDriverPipelineDiskCache();
+}
+
+void PipelineCache::WaitForCompileWorkers() {
     pipeline_workers.WaitForRequests();
     shader_workers.WaitForRequests();
     priority_workers.WaitForRequests();
-    SaveDriverPipelineDiskCache();
 }
 
 void PipelineCache::LoadCache(const std::atomic_bool& stop_loading,
                               const VideoCore::DiskResourceLoadCallback& callback) {
+    WaitForCompileWorkers();
     LoadDriverPipelineDiskCache(stop_loading, callback);
     LoadDiskCache(stop_loading, callback);
 }
@@ -250,6 +272,11 @@ void PipelineCache::SwitchCache(u64 title_id, const std::atomic_bool& stop_loadi
     }
 
     LOG_INFO(Render_Vulkan, "Switching pipeline cache to title_id={:016X}", title_id);
+
+    // GraphicsPipeline jobs retain pointers into the current ShaderDiskCache and a raw handle to
+    // driver_pipeline_cache. Finish them before replacing the driver cache or allowing
+    // SwitchDiskCache to erase the old manager.
+    WaitForCompileWorkers();
 
     // Save current driver cache, update program ID and load the new driver cache
     SaveDriverPipelineDiskCache();
@@ -436,9 +463,27 @@ void PipelineCache::SwitchDiskCache(u64 title_id, const std::atomic_bool& stop_l
     }
 }
 
+bool PipelineCache::AreShaderObjectsReady() const {
+    for (Shader* shader : current_shaders) {
+        if (shader && (!shader->IsDone() || !shader->ShaderObjectHandle())) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool PipelineCache::IsPipelineReady(PipelineInfo& info) {
     for (u32 i = 0; i < MAX_SHADER_STAGES; i++) {
         info.state.shader_ids[i] = shader_hashes[i];
+    }
+
+    if (instance.IsShaderObjectSupported()) {
+        // Every currently-selected shader already queued its own compile (and, once done, its own
+        // shader object) from the Use*Shader call that selected it -- nothing left to kick off
+        // here. Deliberately does NOT fall through to GetPipeline(): doing so would build a classic
+        // GraphicsPipeline for this exact combo, recreating the vkCreateGraphicsPipelines cost
+        // Tier 3 exists to eliminate. See docs/SHADER_OBJECT_HANDOFF.md item 3.
+        return AreShaderObjectsReady();
     }
 
     GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
@@ -455,56 +500,175 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
         info.state.shader_ids[i] = shader_hashes[i];
     }
 
-    GraphicsPipeline* const pipeline = curr_disk_cache->GetPipeline(info);
-    Common::ThreadWorker* const bounded_priority_worker =
-        wait_mode == PipelineWaitMode::Bounded ? &priority_workers : nullptr;
-    if (!pipeline->IsDone()) {
-        const Common::PaceUrgentScope urgent{
-            wait_mode == PipelineWaitMode::Async ? nullptr : compile_pacer};
-        if (!pipeline->TryBuild(wait_mode, bounded_priority_worker)) {
+    // Every shader (trivial or programmable VS, specialized or ubershader FS, fixed GS when used)
+    // creates its own shader object once its compile finishes -- see vk_shader_disk_cache.cpp's
+    // three Use*Shader worker lambdas and BuildLayout() for the two always-resident shaders. When
+    // supported, skip the GraphicsPipeline/pipeline-object machinery entirely and bind shader
+    // objects directly instead. See docs/SHADER_OBJECT_HANDOFF.md item 3. UNVERIFIED: whether
+    // alternating vkCmdBindPipeline and vkCmdBindShadersEXT within the same command buffer/frame
+    // (unavoidable while both paths coexist) has any state-interaction gotcha -- flagged since
+    // item 2's prototype, still needs broader hardware verification now that far more shader
+    // combinations take this path, not just the one narrow pairing already tested.
+    bool use_shader_objects = false;
+    if (instance.IsShaderObjectSupported()) {
+        use_shader_objects = AreShaderObjectsReady();
+        if (!use_shader_objects && wait_mode != PipelineWaitMode::Async) {
+            // Bounded/Blocking: wait on the individual shader compiles (there's no separate
+            // "pipeline build" step to wait on under shader objects) then re-check.
+            constexpr std::chrono::microseconds kBoundedWaitBudget{1500};
+            bool all_ready = true;
+            for (Shader* shader : current_shaders) {
+                if (!shader) {
+                    continue;
+                }
+                if (wait_mode == PipelineWaitMode::Blocking) {
+                    shader->WaitDone();
+                } else if (!shader->WaitDoneFor(kBoundedWaitBudget)) {
+                    all_ready = false;
+                    break;
+                }
+            }
+            use_shader_objects = all_ready && AreShaderObjectsReady();
+        }
+    }
+
+    GraphicsPipeline* pipeline = nullptr;
+    if (!use_shader_objects) {
+        if (instance.IsShaderObjectSupported()) {
+            // Shader objects are supported but this combo isn't ready under the given wait_mode
+            // (Async: instantaneous check failed; Bounded: budget exceeded) -- bail out the same
+            // way the classic path does when a pipeline isn't ready, rather than falling back to
+            // building a classic GraphicsPipeline. The caller already has a retry/fallback chain
+            // for exactly this (see RasterizerVulkan::AccelerateDrawBatchInternal/Draw), which
+            // would otherwise never get exercised on a shader-object-capable device.
             return false;
+        }
+        pipeline = curr_disk_cache->GetPipeline(info);
+        Common::ThreadWorker* const bounded_priority_worker =
+            wait_mode == PipelineWaitMode::Bounded ? &priority_workers : nullptr;
+        if (!pipeline->IsDone()) {
+            const Common::PaceUrgentScope urgent{
+                wait_mode == PipelineWaitMode::Async ? nullptr : compile_pacer};
+            if (!pipeline->TryBuild(wait_mode, bounded_priority_worker)) {
+                return false;
+            }
         }
     }
 
     const bool is_dirty = scheduler.IsStateDirty(StateFlags::Pipeline);
     const bool pipeline_dirty = (current_pipeline != pipeline) || is_dirty;
+    // True when the shader-object bind actually needs to be (re)issued: either this is the first
+    // shader-object draw after a classic-pipeline-bound one (shader_objects_bound false), the
+    // bound VS/GS/FS combo differs from last time, or state was reset. Doesn't matter when
+    // !use_shader_objects -- only read inside that branch below.
+    const bool shaders_dirty =
+        !shader_objects_bound || bound_shaders != current_shaders || is_dirty;
     const bool eds3_blend = instance.IsExtendedDynamicState3Supported();
     const u16 eds3_write_mask = eds3_blend ? info.GetFinalColorWriteMask(instance) : u16{0};
     const u16 current_eds3_write_mask =
         eds3_blend ? current_info.GetFinalColorWriteMask(instance) : u16{0};
-    scheduler.Record([this, is_dirty, pipeline_dirty, pipeline, eds3_blend, eds3_write_mask,
-                      current_eds3_write_mask,
+    const bool dynamic_logic_op = instance.IsDynamicLogicOpSupported();
+    // Matches the static .logicOpEnable formula GraphicsPipeline::Build() uses when this isn't
+    // dynamic -- native logic op only makes sense with blend disabled, and only when the driver
+    // doesn't need it emulated via blend factors instead.
+    const bool needs_logic_op_emulation = instance.NeedsLogicOpEmulation();
+    const bool dynamic_vertex_input = instance.IsVertexInputDynamicStateSupported();
+    // Explicit VK_NULL_HANDLE for an absent stage (geometry, almost always) unbinds any shader
+    // object left over from a previous draw that did use one -- vkCmdBindShadersEXT only touches
+    // the stages named in the call, so an omitted stage would otherwise keep whatever was bound
+    // last, silently reusing a stale geometry shader.
+    const vk::ShaderEXT vertex_shader_object =
+        use_shader_objects ? current_shaders[ProgramType::VS]->ShaderObjectHandle() : vk::ShaderEXT{};
+    const vk::ShaderEXT geometry_shader_object =
+        use_shader_objects && current_shaders[ProgramType::GS]
+            ? current_shaders[ProgramType::GS]->ShaderObjectHandle()
+            : vk::ShaderEXT{};
+    const vk::ShaderEXT fragment_shader_object =
+        use_shader_objects ? current_shaders[ProgramType::FS]->ShaderObjectHandle() : vk::ShaderEXT{};
+    scheduler.Record([this, is_dirty, pipeline_dirty, shaders_dirty, pipeline, use_shader_objects,
+                      vertex_shader_object, geometry_shader_object, fragment_shader_object,
+                      eds3_blend, eds3_write_mask,
+                      current_eds3_write_mask, dynamic_logic_op, needs_logic_op_emulation,
+                      dynamic_vertex_input,
                       current_dynamic = current_info.dynamic_info, dynamic = info.dynamic_info,
                       descriptor_sets = bound_descriptor_sets, offsets = offsets,
                       current_rasterization = current_info.state.rasterization,
                       current_depth_stencil = current_info.state.depth_stencil,
                       rasterization = info.state.rasterization,
                       depth_stencil = info.state.depth_stencil, blending = info.state.blending,
-                      current_blending = current_info.state.blending](vk::CommandBuffer cmdbuf) {
-        if (dynamic.viewport != current_dynamic.viewport || is_dirty) {
-            const vk::Viewport vk_viewport = {
-                .x = static_cast<f32>(dynamic.viewport.left),
-                .y = static_cast<f32>(dynamic.viewport.top),
-                .width = static_cast<f32>(dynamic.viewport.GetWidth()),
-                .height = static_cast<f32>(dynamic.viewport.GetHeight()),
-                .minDepth = 0.f,
-                .maxDepth = 1.f,
-            };
-            cmdbuf.setViewport(0, vk_viewport);
+                      current_blending = current_info.state.blending,
+                      vertex_layout = info.state.vertex_layout,
+                      current_vertex_layout =
+                          current_info.state.vertex_layout](vk::CommandBuffer cmdbuf) {
+        // The pipeline object no longer encodes any particular vertex layout when this is
+        // supported (see StaticPipelineInfo::OptimizedHash), so this must be (re)supplied
+        // whenever it actually differs from what's currently bound -- not gated on pipeline_dirty,
+        // since a shared pipeline can still see a different layout draw-to-draw.
+        if (dynamic_vertex_input && (vertex_layout != current_vertex_layout || is_dirty)) {
+            EmitVertexInput(cmdbuf, instance, vertex_layout);
         }
 
-        if (dynamic.scissor != current_dynamic.scissor || is_dirty) {
-            const vk::Rect2D scissor = {
-                .offset{
-                    .x = static_cast<s32>(dynamic.scissor.left),
-                    .y = static_cast<s32>(dynamic.scissor.bottom),
-                },
-                .extent{
-                    .width = dynamic.scissor.GetWidth(),
-                    .height = dynamic.scissor.GetHeight(),
-                },
-            };
-            cmdbuf.setScissor(0, scissor);
+        if (use_shader_objects) {
+            // Shader objects have no pipeline to declare viewportCount/scissorCount from, so the
+            // count must be (re)established via the WithCount variant -- confirmed against the
+            // Vulkan registry: vk.xml's VK_EXT_shader_object <require> block lists
+            // vkCmdSetViewportWithCountEXT/vkCmdSetScissorWithCountEXT specifically, not the plain
+            // fixed-count forms the classic path below uses. Mixing the two was the actual cause
+            // of a "both screens zoomed in" regression. shaders_dirty catches the
+            // classic-pipeline-to-shader-object transition (count never established under shader
+            // objects yet) even when the viewport *value* happens to be unchanged; the value-based
+            // check alone would miss that case.
+            if (dynamic.viewport != current_dynamic.viewport || is_dirty || shaders_dirty) {
+                const vk::Viewport vk_viewport = {
+                    .x = static_cast<f32>(dynamic.viewport.left),
+                    .y = static_cast<f32>(dynamic.viewport.top),
+                    .width = static_cast<f32>(dynamic.viewport.GetWidth()),
+                    .height = static_cast<f32>(dynamic.viewport.GetHeight()),
+                    .minDepth = 0.f,
+                    .maxDepth = 1.f,
+                };
+                cmdbuf.setViewportWithCountEXT(vk_viewport);
+            }
+
+            if (dynamic.scissor != current_dynamic.scissor || is_dirty || shaders_dirty) {
+                const vk::Rect2D scissor = {
+                    .offset{
+                        .x = static_cast<s32>(dynamic.scissor.left),
+                        .y = static_cast<s32>(dynamic.scissor.bottom),
+                    },
+                    .extent{
+                        .width = dynamic.scissor.GetWidth(),
+                        .height = dynamic.scissor.GetHeight(),
+                    },
+                };
+                cmdbuf.setScissorWithCountEXT(scissor);
+            }
+        } else {
+            if (dynamic.viewport != current_dynamic.viewport || is_dirty) {
+                const vk::Viewport vk_viewport = {
+                    .x = static_cast<f32>(dynamic.viewport.left),
+                    .y = static_cast<f32>(dynamic.viewport.top),
+                    .width = static_cast<f32>(dynamic.viewport.GetWidth()),
+                    .height = static_cast<f32>(dynamic.viewport.GetHeight()),
+                    .minDepth = 0.f,
+                    .maxDepth = 1.f,
+                };
+                cmdbuf.setViewport(0, vk_viewport);
+            }
+
+            if (dynamic.scissor != current_dynamic.scissor || is_dirty) {
+                const vk::Rect2D scissor = {
+                    .offset{
+                        .x = static_cast<s32>(dynamic.scissor.left),
+                        .y = static_cast<s32>(dynamic.scissor.bottom),
+                    },
+                    .extent{
+                        .width = dynamic.scissor.GetWidth(),
+                        .height = dynamic.scissor.GetHeight(),
+                    },
+                };
+                cmdbuf.setScissor(0, scissor);
+            }
         }
 
         if (dynamic.stencil_compare_mask != current_dynamic.stencil_compare_mask || is_dirty) {
@@ -594,16 +758,68 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
                 cmdbuf.setColorWriteMaskEXT(
                     0, static_cast<vk::ColorComponentFlags>(eds3_write_mask));
             }
+            if (blending.blend_enable != current_blending.blend_enable || is_dirty) {
+                cmdbuf.setColorBlendEnableEXT(0, blending.blend_enable != 0);
+                cmdbuf.setLogicOpEnableEXT(!blending.blend_enable && !needs_logic_op_emulation);
+            }
+            if (dynamic_logic_op && (blending.logic_op != current_blending.logic_op || is_dirty)) {
+                cmdbuf.setLogicOpEXT(PicaToVK::LogicOp(blending.logic_op));
+            }
         }
 
-        if (pipeline_dirty) {
+        if (use_shader_objects) {
+            if (shaders_dirty) {
+                // Explicitly including the geometry stage (null when unused) matters: omitting a
+                // stage from vkCmdBindShadersEXT leaves whatever was bound to it by an earlier
+                // draw in this command buffer untouched, which would silently reuse a stale
+                // geometry shader object -- shaders_dirty firing on a shader-combo change (not
+                // just a classic-to-shader-object transition) is exactly what keeps that correct.
+                //
+                // Every dynamic-state value below is a constant in this fork (never varies
+                // draw-to-draw) -- see docs/SHADER_OBJECT_HANDOFF.md's "mandatory dynamic-state
+                // commands" list, confirmed against the Vulkan registry (vk.xml's
+                // VK_EXT_shader_object <require> block). These have no pipeline object to fall
+                // back on for defaults, so all of them are mandatory once any shader object is
+                // bound, unlike the EDS1/EDS3-gated calls above which still have a baked pipeline
+                // fallback on the classic path. Gating on shaders_dirty rather than reissuing
+                // every draw is safe now that this path is hardware-verified across cold and warm
+                // boot: these values don't depend on which shader is bound, only on whether we're
+                // still in shader-object mode with dynamic state already established, which
+                // shaders_dirty (like pipeline_dirty for the classic path) correctly tracks.
+                const std::array stages = {vk::ShaderStageFlagBits::eVertex,
+                                           vk::ShaderStageFlagBits::eGeometry,
+                                           vk::ShaderStageFlagBits::eFragment};
+                const std::array shaders = {vertex_shader_object, geometry_shader_object,
+                                            fragment_shader_object};
+                cmdbuf.bindShadersEXT(stages, shaders);
+
+                cmdbuf.setDepthBoundsTestEnableEXT(false);
+                cmdbuf.setRasterizerDiscardEnableEXT(false);
+                cmdbuf.setDepthBiasEnableEXT(false);
+                cmdbuf.setDepthClampEnableEXT(false);
+                cmdbuf.setPrimitiveRestartEnableEXT(false);
+                cmdbuf.setPolygonModeEXT(vk::PolygonMode::eFill);
+                cmdbuf.setRasterizationSamplesEXT(vk::SampleCountFlagBits::e1);
+                constexpr vk::SampleMask sample_mask = 0xFFFFFFFF;
+                cmdbuf.setSampleMaskEXT(vk::SampleCountFlagBits::e1, sample_mask);
+                cmdbuf.setAlphaToCoverageEnableEXT(false);
+                cmdbuf.setAlphaToOneEnableEXT(false);
+            }
+        } else if (pipeline_dirty) {
             if (!pipeline->IsDone()) {
+                // Deferred: TryBuild's own wait budget (Async didn't wait at all, Bounded may
+                // have timed out) already passed by the time this recorded command buffer
+                // replays on the submission thread, so this is often where a frame actually
+                // blocks -- see the STALL row this emits for exactly how long and which pipeline.
                 const auto start = std::chrono::steady_clock::now();
                 const Common::PaceUrgentScope urgent{compile_pacer};
                 pipeline->WaitDone();
-                Common::ShaderCompileStats::RecordStall(
-                    std::chrono::duration_cast<std::chrono::microseconds>(
-                        std::chrono::steady_clock::now() - start));
+                const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - start);
+                Common::ShaderCompileStats::RecordStall(elapsed_us);
+                Common::GpuFrameLog::LogStall("submission_wait_done",
+                                              Common::GpuFrameLog::CurrentFrame(), "-",
+                                              elapsed_us.count());
             }
             cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, pipeline->Handle());
         }
@@ -614,6 +830,10 @@ bool PipelineCache::BindPipeline(PipelineInfo& info, PipelineWaitMode wait_mode)
 
     current_info = info;
     current_pipeline = pipeline;
+    shader_objects_bound = use_shader_objects;
+    if (use_shader_objects) {
+        bound_shaders = current_shaders;
+    }
     scheduler.MarkStateNonDirty(StateFlags::Pipeline | StateFlags::DescriptorSets);
 
     return true;

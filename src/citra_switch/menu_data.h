@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Azahar Emulator Project
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
+// Copyright(c) 2026: Raibatsu (hello@raibatsu.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -12,39 +13,40 @@
 
 #include "citra_switch/config.h"
 
-// Data the menu draws produced by the Azahar core.
 namespace SwitchFrontend {
 
-// What the high word of a title ID says a title is.
 enum class TitleKind {
     Application,
     Demo,
     Update,
-    AddOnContent, // DLC.
+    AddOnContent,
     System,
     Other,
 };
 
-// One scanned title, either a loose file under the ROM directory or a title installed into the
-// emulated SD card.
 struct GameEntry {
-    std::string path;           // Absolute SD path passed to BootRom.
-    std::string title;          // SMDH long title, or the file name / title ID as a fallback.
-    std::string publisher;      // SMDH publisher, empty if unknown.
+    std::string path;
+    std::string title;
+    std::string publisher;
     std::string file_type;
-    bool encrypted{};           // True if the SMDH couldn't be read due to missing keys.
-    bool installed{};           // Came from the SD title tree rather than the ROM directory.
-    bool insertable{};          // A CCI cartridge image that can occupy the emulated card slot.
-    std::uint64_t program_id{}; // 0 if it couldn't be read.
-    int icon_size{};            // 48x48 RGBA8888 icon, empty if none.
+    bool encrypted{};
+    bool installed{};
+    bool insertable{};
+    std::uint64_t program_id{};
+    // e.g. "CTR-P-BNDE" - empty for homebrew/ELF/3DSX, which have no product code. See
+    // GameTdbGameId() below for the 4-character ID GameTDB actually keys box art and title
+    // descriptions by.
+    std::string product_code;
+    int icon_size{};
     std::vector<std::uint32_t> icon;
+    std::uint64_t total_playtime_seconds{};
+    std::uint64_t last_played{};
 };
 
-// What is installed alongside a library entry. Gathered on demand since it costs a few TMD reads.
 struct TitleDetails {
     std::uint64_t program_id{};
     TitleKind kind{};
-    bool has_base_version{}; // Only an installed title carries a TMD to read a version out of.
+    bool has_base_version{};
     std::uint16_t base_version{};
     bool has_update{};
     std::uint16_t update_version{};
@@ -52,16 +54,15 @@ struct TitleDetails {
     int dlc_contents{};
 };
 
-// One installable file listed by the CIA browser.
 struct CiaEntry {
-    std::string name; // Leaf file name.
+    std::string name;
     std::string path;
     std::uint64_t program_id{};
     TitleKind kind{};
     std::uint16_t version{};
     std::uint64_t size{};
     bool compressed{};
-    bool readable{}; // False if the header or TMD wouldn't parse, which blocks installing it.
+    bool readable{};
 };
 
 enum class InstallResult {
@@ -73,15 +74,14 @@ enum class InstallResult {
     Encrypted,
 };
 
-// One subfolder listed by the folder browser.
 struct DirEntry {
-    std::string name; // Leaf name, no trailing '/'.
-    std::string path; // Absolute SD path with a trailing '/'.
+    std::string name;
+    std::string path;
 };
 
-// The subset of settings the on-console menu can edit.
 struct MenuSettings {
-    int resolution_factor{};      // 0 = auto (window), 1 = native, 2... = upscale factor.
+    int resolution_factor{};
+    int layout_preset{};
     bool use_vsync{};
     bool async_gpu_emulation{};
     bool strict_gpu_sync{};
@@ -93,78 +93,77 @@ struct MenuSettings {
     bool skip_slow_draw{};
     bool skip_texture_copy{};
     bool skip_cpu_write{};
-    bool enable_compile_boost{}; // CPU boost mode during in-game shader/pipeline compiles.
-    bool disable_right_eye_render{}; // Skip rendering the 3D right-eye view entirely.
-    int texture_filter{};         // Upscaling filter, 0 = None .. 5 = MMPX.
-    bool use_integer_scaling{};   // Scale the screen by whole-number factors only.
-    bool filter_mode{};           // Linear (on) vs nearest-neighbor (off) filtering.
-    bool show_fps{};              // On-screen framerate counter.
-    bool custom_textures{};       // Enable loading a custom texture pack at all.
-    bool preload_textures{};      // Load the whole custom texture pack up front.
-    bool dump_textures{};         // Write the game's textures out to disk.
-    int cpu_clock_percentage{};   // 5..400.
+    bool enable_compile_boost{};
+    bool enable_gpu_frame_log{};
+    bool disable_right_eye_render{};
+    int texture_filter{};
+    bool use_integer_scaling{};
+    bool filter_mode{};
+    bool show_fps{};
+    bool show_shader_compile_progress{};
+    bool custom_textures{};
+    bool preload_textures{};
+    bool dump_textures{};
+    int cpu_clock_percentage{};
+    int movie_throttle_clock_percentage{};
+    bool movie_throttle_enabled{};
+    bool gametdb_enabled{};
     bool is_new_3ds{};
+    bool plugin_loader_enabled{};
+    bool allow_plugin_loader{};
     bool use_cpu_jit{};
     bool fastmem{};
-    int region_value{};           // -1 = auto, 0..6 per SMDH region order.
-    int language{};               // 3DS system language, 0..11.
-    int graphics_api{};           // Active graphics API backend.
-    int pointer_source{};         // Touch pointer driver.
-    int gyro_sensitivity_x{};     // Gyro pointer horizontal sensitivity, percent of the default.
-    int gyro_sensitivity_y{};     // Gyro pointer vertical sensitivity, percent of the default.
-    std::uint32_t layout_cycle_mask{}; // Presets R3 cycles through (bit i = preset i).
+    int region_value{};
+    int language{};
+    int graphics_api{};
+    int pointer_source{};
+    int gyro_sensitivity_x{};
+    int gyro_sensitivity_y{};
+    std::uint32_t layout_cycle_mask{};
 };
 
-// Scans the configured ROM directory and the installed SD titles, sorted by title.
 std::vector<GameEntry> ScanGames();
 
-// The version/update/DLC details behind a library entry.
 TitleDetails GetTitleDetails(const GameEntry& entry);
 
-// Classifies a title ID by its high word.
+// The last 4 characters of an NCCH product code (e.g. "CTR-P-BNDE" -> "BNDE") - the ID GameTDB
+// itself keys both box art (see gametdb.h) and title descriptions (see titledb.h) by. Empty if
+// `product_code` doesn't look like a real product code (homebrew has none).
+std::string GameTdbGameId(const std::string& product_code);
+
 TitleKind ClassifyTitle(std::uint64_t program_id);
 
-// A short name for `kind`, e.g. "Update".
-const char* TitleKindName(TitleKind kind);
+std::string TitleKindName(TitleKind kind);
 
-// Nicely formats a 3DS version string
 std::string FormatTitleVersion(std::uint16_t version);
 
-// The installed version of `program_id`, if that exact title is already on the emulated card.
 bool GetInstalledVersion(std::uint64_t program_id, std::uint16_t& version);
 
-// The .cia/.zcia files in `directory`, sorted by name.
 std::vector<CiaEntry> ListCiaFiles(const std::string& directory);
 
-// Installs `path` into the emulated NAND/SD title tree, calling `progress` with
-// (bytes_written, total_bytes) as it runs.
 InstallResult InstallCia(const std::string& path,
                          const std::function<void(std::size_t, std::size_t)>& progress);
 
-// A short reason for a failed installation.
-const char* InstallResultText(InstallResult result);
+std::string InstallResultText(InstallResult result);
 
 int ClearShaderCache(std::uint64_t program_id);
 
-// The subfolders of `directory`, sorted by name.
 std::vector<DirEntry> ListSubdirectories(const std::string& directory);
 
-// The parent of `directory`, or "" if it is already a device root such as "sdmc:/".
 std::string ParentDirectory(const std::string& directory);
 
-// True if `directory` exists or could be created.
 bool EnsureDirectory(const std::string& directory);
 
-// Snapshots the editable settings from Settings::values.
 MenuSettings GetMenuSettings();
 
-// Every field's compile-time default (Settings::values.field.GetDefault() for the ones backed by
-// a real Setting/SwitchableSetting), not whatever config.ini currently has loaded. `language` and
-// `graphics_api` are left at their current live value — the former is a console/NAND setting, not
-// an emulator one, and the latter has no in-app control on Switch (one backend per build).
 MenuSettings DefaultMenuSettings();
 
-// Applies edited settings to Settings::values and saves config.ini.
 void SetMenuSettings(const MenuSettings& settings);
+
+// Same as SetMenuSettings, but skips the SaveConfig() disk write - for callers that apply many
+// times in quick succession (a cyclable/gyro row auto-repeating while held) and will call
+// SaveConfig() themselves once the user settles, rather than writing the whole config file to
+// disk on every single step.
+void ApplyMenuSettings(const MenuSettings& settings);
 
 } // namespace SwitchFrontend

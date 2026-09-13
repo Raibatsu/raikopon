@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Azahar Emulator Project
-// Copyright(c) 2026: PalindromicBreadLoaf(palindromicbreadloaf@tuta.com)
+// Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
+// Copyright(c) 2026: Raibatsu (hello@raibatsu.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -13,40 +14,44 @@
 
 #include "citra_switch/emu_window.h"
 #include "citra_switch/input.h"
+#include "citra_switch/ui_input_bindings.h"
 #include "common/param_package.h"
 #include "common/settings.h"
 #include "core/frontend/emu_window.h"
 #include "core/frontend/input.h"
 
-// Button mappings and inputs for the Switch
+// Gameplay-side input: guest button/analog/motion devices, the touch pointer, and the physical
+// mapping each MappableControl currently resolves to.
 namespace SwitchFrontend {
+
 namespace {
 
 constexpr float kStickRange = 32767.0f;
 constexpr float kStickDeadzone = 0.15f;
 
-// libnx reports angular velocity in rotations/sec vs the 3DS gyroscope in deg/sec.
+// libnx reports gyro speed in rotations/sec; the 3DS gyroscope expects degrees/sec.
 constexpr float kRotationsToDegrees = 360.0f;
 
-// Pointer travel at full stick deflection, in bottom-screens per second.
+// How fast the touch pointer travels across the bottom screen at full stick deflection, in
+// screens/second.
 constexpr float kStickPointerSpeed = 1.5f;
 
-// Pointer travel per full console rotation, in bottom-screens, at 100% sensitivity. The
-// per-axis sensitivity percentages scale this base speed.
+// Same, but for a full console rotation at 100% gyro sensitivity - the per-axis percentages
+// scale this.
 constexpr float kGyroPointerSpeed = 6.0f;
 
-// Bounds for the user-tunable gyro pointer sensitivity, as a percentage of kGyroPointerSpeed.
 constexpr int kGyroSensitivityMin = 10;
 constexpr int kGyroSensitivityMax = 500;
 
-// Sign of the gyro->pointer mapping.
+// Which way a gyro rotation moves the pointer.
 constexpr float kGyroSignX = -1.0f;
 constexpr float kGyroSignY = -1.0f;
 
-// Ignore stalls so a resumed frame can't fling the pointer (Although it was funny to watch).
+// A stalled/late frame shouldn't fling the pointer across the screen once it resumes.
 constexpr float kMaxPointerDelta = 0.1f;
 
-// What the 3DS accelerometer reads while lying face-up, which is the orientation a Switch held upright maps onto.
+// Where the 3DS accelerometer reads while resting face-up - the orientation an upright Switch
+// maps onto.
 constexpr Common::Vec3<float> kRestAccel{0.0f, -1.0f, 0.0f};
 
 std::atomic<std::uint64_t> s_buttons{};
@@ -54,10 +59,10 @@ std::array<std::atomic<float>, Settings::NativeAnalog::NumAnalogs> s_stick_x{};
 std::array<std::atomic<float>, Settings::NativeAnalog::NumAnalogs> s_stick_y{};
 std::array<std::atomic<float>, 3> s_accel{};
 std::array<std::atomic<float>, 3> s_gyro{};
-bool s_touch_active{};
+bool s_touch_active = false;
 
-// The position is stored as a fraction of the bottom screen so it stays valid across layout
-// changes and can never leave the screen (it is clamped to [0, 1]).
+// Stored as a fraction of the bottom screen (clamped to [0, 1]) so it stays meaningful across
+// layout changes and can never wander off-screen.
 std::atomic<PointerSource> s_pointer_source{PointerSource::LeftStick};
 std::atomic<int> s_gyro_sensitivity_x{100};
 std::atomic<int> s_gyro_sensitivity_y{100};
@@ -65,41 +70,67 @@ std::atomic<bool> s_pointer_mode{false};
 std::atomic<float> s_pointer_fx{0.5f};
 std::atomic<float> s_pointer_fy{0.5f};
 
-// The physical Switch button bound to each control. Written from the menu thread, read on the
-// input/emulation threads, hence the atomics.
+// Read on the input/emulation threads, written from the menu thread - atomic for that reason,
+// not because any single access needs to be lock-free per se.
 std::array<std::atomic<InputButton>, NumMappableControls> s_mapping{};
 
-// The 3DS button each of the first fourteen controls drives. The controls line up with these in order.
+// The first 14 MappableControl entries drive an actual 3DS button, in the same order.
 constexpr std::array<Settings::NativeButton::Values, 14> kControlToNative{{
-    Settings::NativeButton::A,      Settings::NativeButton::B,
-    Settings::NativeButton::X,      Settings::NativeButton::Y,
-    Settings::NativeButton::Up,     Settings::NativeButton::Down,
-    Settings::NativeButton::Left,   Settings::NativeButton::Right,
-    Settings::NativeButton::L,      Settings::NativeButton::R,
-    Settings::NativeButton::Start,  Settings::NativeButton::Select,
-    Settings::NativeButton::ZL,     Settings::NativeButton::ZR,
+    Settings::NativeButton::A,     Settings::NativeButton::B,
+    Settings::NativeButton::X,     Settings::NativeButton::Y,
+    Settings::NativeButton::Up,    Settings::NativeButton::Down,
+    Settings::NativeButton::Left,  Settings::NativeButton::Right,
+    Settings::NativeButton::L,     Settings::NativeButton::R,
+    Settings::NativeButton::Start, Settings::NativeButton::Select,
+    Settings::NativeButton::ZL,    Settings::NativeButton::ZR,
 }};
 
-// The default (recommended) control layout.
+// Recommended out-of-the-box layout. TogglePointer/CycleLayout/TouchTap's slots here are no
+// longer read by anything (see the UpdateInput() comment below) - they moved to
+// ui_input_bindings.h's multi-bind MenuAction system, kept only so this array stays sized to
+// NumMappableControls without a gap.
 constexpr std::array<InputButton, NumMappableControls> kDefaultMapping{{
     InputButton::A,     InputButton::B,      InputButton::X,     InputButton::Y,
     InputButton::Up,    InputButton::Down,   InputButton::Left,  InputButton::Right,
     InputButton::L,     InputButton::R,      InputButton::Start, InputButton::Select,
     InputButton::ZL,    InputButton::ZR,
-    InputButton::L3, // TogglePointer
-    InputButton::R3, // CycleLayout
-    InputButton::ZR, // TouchTap
+    InputButton::L3,
+    InputButton::R3,
+    InputButton::ZR,
 }};
 
-// Seeds the mappings with their defaults at static-init time, before the config is loaded.
 [[maybe_unused]] const bool s_mapping_seeded = [] {
     for (int i = 0; i < NumMappableControls; ++i) {
-        s_mapping[i].store(kDefaultMapping[i], std::memory_order_relaxed);
+        s_mapping[static_cast<std::size_t>(i)].store(kDefaultMapping[static_cast<std::size_t>(i)],
+                                                      std::memory_order_relaxed);
     }
     return true;
 }();
 
-// Elapsed time since the previous UpdateInput.
+// ui_input_bindings.h's MenuAction masks use raw HidNpadButton_* bit positions; state.buttons
+// (below) uses InputButton's own ordinal-based numbering. This table converts one to the other,
+// bit position by bit position, so TouchTap's binding can live in the multi-bind system while
+// still being checked against state.buttons here. Hand-copied rather than including <switch.h>
+// directly, matching every other raw-bit table in this codebase (see
+// ui_input_bindings.cpp's file comment for why).
+constexpr std::array<InputButton, 16> kRawBitToInputButton{{
+    InputButton::A,    InputButton::B,     InputButton::X,     InputButton::Y,
+    InputButton::L3,   InputButton::R3,    InputButton::L,     InputButton::R,
+    InputButton::ZL,   InputButton::ZR,    InputButton::Start, InputButton::Select,
+    InputButton::Left, InputButton::Up,    InputButton::Right, InputButton::Down,
+}};
+
+std::uint64_t RawMaskToButtonMask(std::uint64_t raw_mask) {
+    std::uint64_t converted = 0;
+    for (std::size_t bit = 0; bit < kRawBitToInputButton.size(); ++bit) {
+        if ((raw_mask & (std::uint64_t{1} << bit)) != 0) {
+            converted |= ButtonMask(kRawBitToInputButton[bit]);
+        }
+    }
+    return converted;
+}
+
+// Seconds since the previous call, clamped so a stalled frame can't fling the pointer.
 float PointerDeltaSeconds() {
     using Clock = std::chrono::steady_clock;
     static Clock::time_point last = Clock::now();
@@ -111,7 +142,7 @@ float PointerDeltaSeconds() {
 
 class SwitchButton final : public Input::ButtonDevice {
 public:
-    explicit SwitchButton(InputButton button_) : button{button_} {}
+    explicit SwitchButton(InputButton button_) : button(button_) {}
 
     bool GetStatus() const override {
         return (s_buttons.load(std::memory_order_relaxed) & ButtonMask(button)) != 0;
@@ -123,7 +154,7 @@ private:
 
 class SwitchAnalog final : public Input::AnalogDevice {
 public:
-    explicit SwitchAnalog(std::size_t analog_) : analog{analog_} {}
+    explicit SwitchAnalog(std::size_t analog_) : analog(analog_) {}
 
     std::tuple<float, float> GetStatus() const override {
         return {s_stick_x[analog].load(std::memory_order_relaxed),
@@ -137,14 +168,13 @@ private:
 class SwitchMotion final : public Input::MotionDevice {
 public:
     std::tuple<Common::Vec3<float>, Common::Vec3<float>> GetStatus() const override {
-        return {Load(s_accel), Load(s_gyro)};
+        return {LoadAxes(s_accel), LoadAxes(s_gyro)};
     }
 
 private:
-    static Common::Vec3<float> Load(const std::array<std::atomic<float>, 3>& source) {
-        return {source[0].load(std::memory_order_relaxed),
-                source[1].load(std::memory_order_relaxed),
-                source[2].load(std::memory_order_relaxed)};
+    static Common::Vec3<float> LoadAxes(const std::array<std::atomic<float>, 3>& axes) {
+        return {axes[0].load(std::memory_order_relaxed), axes[1].load(std::memory_order_relaxed),
+                axes[2].load(std::memory_order_relaxed)};
     }
 };
 
@@ -168,7 +198,7 @@ public:
 
 class SwitchMotionFactory final : public Input::Factory<Input::MotionDevice> {
 public:
-    std::unique_ptr<Input::MotionDevice> Create(const Common::ParamPackage& params) override {
+    std::unique_ptr<Input::MotionDevice> Create(const Common::ParamPackage&) override {
         return std::make_unique<SwitchMotion>();
     }
 };
@@ -193,8 +223,8 @@ std::string MotionParam() {
     return Common::ParamPackage{{"engine", "switch"}}.Serialize();
 }
 
-// The Switch and 3DS sensor frames are one rotation apart: the 3DS's x+ (left), y+ (out of the
-// touch screen) and z+ (up) read off the Switch's -x, z and y respectively.
+// The Switch and 3DS motion frames sit one rotation apart: the 3DS's x+ (left), y+ (out of the
+// touch screen), z+ (up) read off the Switch's -x, z, y respectively.
 Common::Vec3<float> ToConsoleFrame(float x, float y, float z) {
     return {-x, z, y};
 }
@@ -213,23 +243,22 @@ std::tuple<float, float> NormalizeStick(std::int32_t raw_x, std::int32_t raw_y) 
     if (magnitude <= kStickDeadzone) {
         return {0.0f, 0.0f};
     }
-
-    const float scaled_magnitude =
-        (std::min(magnitude, 1.0f) - kStickDeadzone) / (1.0f - kStickDeadzone);
-    return {x / magnitude * scaled_magnitude, y / magnitude * scaled_magnitude};
+    const float scaled = (std::min(magnitude, 1.0f) - kStickDeadzone) / (1.0f - kStickDeadzone);
+    return {x / magnitude * scaled, y / magnitude * scaled};
 }
 
-// Moves the pointer this frame from either the (already-normalized) driving stick or the gyro,
-// then clamps it to the bottom screen.
+// Advances the pointer this frame from whichever source is driving it, then clamps to the
+// bottom screen.
 void AdvancePointer(const InputState& state, float dt, float stick_x, float stick_y) {
     float dfx = 0.0f;
     float dfy = 0.0f;
     if (s_pointer_source.load(std::memory_order_relaxed) != PointerSource::Gyro) {
         dfx = stick_x * kStickPointerSpeed * dt;
-        dfy = -stick_y * kStickPointerSpeed * dt; // stick up is +y, but the screen's top is frac 0.
+        // Stick up reads as +y, but the screen's top edge is fraction 0.
+        dfy = -stick_y * kStickPointerSpeed * dt;
     } else if (state.motion.active) {
-        const float yaw = state.motion.gyro_y;   // vertical rotation
-        const float pitch = state.motion.gyro_x; // horizontal rotation
+        const float yaw = state.motion.gyro_y;
+        const float pitch = state.motion.gyro_x;
         const float speed_x =
             kGyroPointerSpeed * s_gyro_sensitivity_x.load(std::memory_order_relaxed) / 100.0f;
         const float speed_y =
@@ -243,7 +272,7 @@ void AdvancePointer(const InputState& state, float dt, float stick_x, float stic
                        std::memory_order_relaxed);
 }
 
-// Sticks, motion, and touch never change.
+// Sticks, motion, and touch are fixed - only the button engine varies per profile.
 void SetProfileDefaults() {
     auto& profile = Settings::values.current_input_profile;
     profile.name = "Nintendo Switch";
@@ -270,22 +299,22 @@ void InitializeInput() {
 }
 
 InputButton GetMapping(MappableControl control) {
-    return s_mapping[static_cast<int>(control)].load(std::memory_order_relaxed);
+    return s_mapping[static_cast<std::size_t>(control)].load(std::memory_order_relaxed);
 }
 
 void SetMapping(MappableControl control, InputButton button) {
-    s_mapping[static_cast<int>(control)].store(button, std::memory_order_relaxed);
+    s_mapping[static_cast<std::size_t>(control)].store(button, std::memory_order_relaxed);
 }
 
 InputButton DefaultMapping(MappableControl control) {
-    return kDefaultMapping[static_cast<int>(control)];
+    return kDefaultMapping[static_cast<std::size_t>(control)];
 }
 
 void ApplyButtonMappings() {
     auto& profile = Settings::values.current_input_profile;
     for (int i = 0; i < static_cast<int>(kControlToNative.size()); ++i) {
         const InputButton button = GetMapping(static_cast<MappableControl>(i));
-        profile.buttons[kControlToNative[i]] =
+        profile.buttons[kControlToNative[static_cast<std::size_t>(i)]] =
             button == InputButton::None ? "engine:null" : ButtonParam(button);
     }
 }
@@ -422,14 +451,19 @@ void UpdateInput(const InputState& state) {
     const bool left_pointer = pointer_mode && pointer_source == PointerSource::LeftStick;
     const bool right_pointer = pointer_mode && pointer_source == PointerSource::RightStick;
 
-    // In pointer mode the button bound to TouchTap taps the touchscreen instead of reaching the
-    // guest.
-    const std::uint64_t tap_mask = ButtonMask(GetMapping(MappableControl::TouchTap));
-    const bool tap = pointer_mode && (state.buttons & tap_mask) != 0;
+    // In pointer mode, whichever button(s) are bound to TouchTap tap the touchscreen instead of
+    // reaching the guest. TouchTap is multi-bind (ui_input_bindings.h's MenuAction system, raw
+    // HidNpadButton_* numbering) rather than a single MappableControl slot, so its mask is
+    // converted to InputButton numbering before it can be compared against state.buttons.
+    const std::uint64_t tap_mask =
+        RawMaskToButtonMask(GetMenuActionButtons(MenuAction::TouchTap));
+    // Required chord, same as the other UI actions in ui_input_bindings.h - every bound button
+    // must be held together for the simulated touch to register, not just any one of them.
+    const bool tap = pointer_mode && tap_mask != 0 && (state.buttons & tap_mask) == tap_mask;
     const std::uint64_t buttons = pointer_mode ? state.buttons & ~tap_mask : state.buttons;
     s_buttons.store(buttons, std::memory_order_relaxed);
 
-    // Whichever stick drives the pointer is freed from the pad while it does so.
+    // Whichever stick is currently driving the pointer is withheld from the guest pad.
     s_stick_x[Settings::NativeAnalog::CirclePad].store(left_pointer ? 0.0f : left_x,
                                                        std::memory_order_relaxed);
     s_stick_y[Settings::NativeAnalog::CirclePad].store(left_pointer ? 0.0f : left_y,
@@ -460,7 +494,7 @@ void UpdateInput(const InputState& state) {
         return;
     }
 
-    // A physical touch always wins in a conflict.
+    // A real touch always takes priority over a simulated tap.
     bool touch_pressed = state.touch_pressed;
     unsigned touch_x = state.touch_x;
     unsigned touch_y = state.touch_y;
@@ -534,7 +568,8 @@ bool IsPointerModeActive() {
 }
 
 void TogglePointerMode() {
-    s_pointer_mode.store(!s_pointer_mode.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    s_pointer_mode.store(!s_pointer_mode.load(std::memory_order_relaxed),
+                         std::memory_order_relaxed);
 }
 
 void SetPointerMode(bool enabled) {

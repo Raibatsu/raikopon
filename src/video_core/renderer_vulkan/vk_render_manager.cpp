@@ -33,13 +33,24 @@ void RenderManager::BeginRendering(const Framebuffer* framebuffer,
             .height = draw_rect.GetHeight(),
         },
     };
-    const RenderPass new_pass = {
+    RenderPass new_pass = {
         .framebuffer = framebuffer->Handle(),
         .render_pass = framebuffer->RenderPass(),
         .render_area = render_area,
         .clear = {},
         .do_clear = false,
     };
+    // Shadow rendering writes via image store, not color-attachment writes -- under dynamic
+    // rendering it needs a rendering scope with zero attachments, same as the classic path's
+    // zero-attachment framebuffer for this case (see Framebuffer's constructor).
+    if (instance.IsDynamicRenderingSupported() && !framebuffer->shadow_rendering) {
+        new_pass.color_view = framebuffer->ImageView(SurfaceType::Color);
+        new_pass.depth_view = framebuffer->ImageView(SurfaceType::DepthStencil);
+        new_pass.color_format = instance.GetTraits(framebuffer->Format(SurfaceType::Color)).native;
+        const PixelFormat depth_pixel_format = framebuffer->Format(SurfaceType::DepthStencil);
+        new_pass.depth_format = instance.GetTraits(depth_pixel_format).native;
+        new_pass.has_stencil = depth_pixel_format == PixelFormat::D24S8;
+    }
     images = framebuffer->Images();
     aspects = framebuffer->Aspects();
     shadow_rendering = framebuffer->shadow_rendering;
@@ -53,27 +64,63 @@ void RenderManager::BeginRendering(const RenderPass& new_pass) {
     }
 
     EndRendering();
-    scheduler.Record([info = new_pass](vk::CommandBuffer cmdbuf) {
-        const vk::RenderPassBeginInfo renderpass_begin_info = {
-            .renderPass = info.render_pass,
-            .framebuffer = info.framebuffer,
-            .renderArea = info.render_area,
-            .clearValueCount = info.do_clear ? 1u : 0u,
-            .pClearValues = &info.clear,
-        };
-        cmdbuf.beginRenderPass(renderpass_begin_info, vk::SubpassContents::eInline);
-    });
+
+    if (instance.IsDynamicRenderingSupported()) {
+        scheduler.Record([info = new_pass](vk::CommandBuffer cmdbuf) {
+            const vk::AttachmentLoadOp load_op =
+                info.do_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad;
+            const vk::RenderingAttachmentInfoKHR color_attachment = {
+                .imageView = info.color_view,
+                .imageLayout = vk::ImageLayout::eGeneral,
+                .loadOp = load_op,
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .clearValue = info.clear,
+            };
+            // Depth+stencil combined formats share one image view for both aspects -- point both
+            // pDepthAttachment and pStencilAttachment at this same info when has_stencil is set.
+            const vk::RenderingAttachmentInfoKHR depth_attachment = {
+                .imageView = info.depth_view,
+                .imageLayout = vk::ImageLayout::eGeneral,
+                .loadOp = load_op,
+                .storeOp = vk::AttachmentStoreOp::eStore,
+                .clearValue = info.clear,
+            };
+            const vk::RenderingInfoKHR rendering_info = {
+                .renderArea = info.render_area,
+                .layerCount = 1,
+                .colorAttachmentCount = info.color_view ? 1u : 0u,
+                .pColorAttachments = &color_attachment,
+                .pDepthAttachment = info.depth_view ? &depth_attachment : nullptr,
+                .pStencilAttachment =
+                    (info.depth_view && info.has_stencil) ? &depth_attachment : nullptr,
+            };
+            cmdbuf.beginRenderingKHR(rendering_info);
+        });
+    } else {
+        scheduler.Record([info = new_pass](vk::CommandBuffer cmdbuf) {
+            const vk::RenderPassBeginInfo renderpass_begin_info = {
+                .renderPass = info.render_pass,
+                .framebuffer = info.framebuffer,
+                .renderArea = info.render_area,
+                .clearValueCount = info.do_clear ? 1u : 0u,
+                .pClearValues = &info.clear,
+            };
+            cmdbuf.beginRenderPass(renderpass_begin_info, vk::SubpassContents::eInline);
+        });
+    }
 
     pass = new_pass;
+    active = true;
 }
 
 void RenderManager::EndRendering() {
-    if (!pass.render_pass) {
+    if (!active) {
         return;
     }
 
-    scheduler.Record([images = images, aspects = aspects,
-                      shadow_rendering = shadow_rendering](vk::CommandBuffer cmdbuf) {
+    const bool dynamic_rendering = instance.IsDynamicRenderingSupported();
+    scheduler.Record([images = images, aspects = aspects, shadow_rendering = shadow_rendering,
+                      dynamic_rendering](vk::CommandBuffer cmdbuf) {
         u32 num_barriers = 0;
         vk::PipelineStageFlags pipeline_flags{};
         vk::AccessFlags src_access_flags{};
@@ -112,7 +159,11 @@ void RenderManager::EndRendering() {
                 },
             };
         }
-        cmdbuf.endRenderPass();
+        if (dynamic_rendering) {
+            cmdbuf.endRenderingKHR();
+        } else {
+            cmdbuf.endRenderPass();
+        }
         if (num_barriers == 0) {
             return;
         }
@@ -124,7 +175,8 @@ void RenderManager::EndRendering() {
     });
 
     // Reset state.
-    pass.render_pass = VK_NULL_HANDLE;
+    active = false;
+    pass = RenderPass{};
     images = {};
     aspects = {};
     shadow_rendering = false;

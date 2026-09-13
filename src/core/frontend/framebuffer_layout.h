@@ -68,6 +68,10 @@ struct FramebufferLayout {
  */
 FramebufferLayout reverseLayout(FramebufferLayout layout);
 
+Common::Rectangle<u32> RotatedScreenRect(const Common::Rectangle<u32>& rect, int rotation_degrees);
+
+DisplayOrientation OrientationForRotation(int rotation_degrees, DisplayOrientation fallback);
+
 /**
  * Factory method for constructing a default FramebufferLayout with screens on top of one another
  * @param width Window framebuffer width in pixels

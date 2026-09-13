@@ -8,17 +8,22 @@ add_executable(citra_switch
     applets/swkbd.h
     applets/swkbd_horizon.cpp
     applets/swkbd_horizon.h
-    canvas.cpp
-    canvas.h
     citra_switch.cpp
     config.cpp
     config.h
     default_ini.h
+    canvas_quad_spv.h
     emu_window.cpp
     emu_window.h
     emulation.cpp
     game_settings.cpp
     game_settings.h
+    gametdb.cpp
+    gametdb.h
+    glyph_atlas.cpp
+    glyph_atlas.h
+    gpu_canvas.cpp
+    gpu_canvas.h
     harfbuzz_stubs.cpp
     # The exception entry stub must be a strong symbol in the executable itself so the linker picks
     # it over libnx's weak __libnx_exception_entry.
@@ -28,28 +33,82 @@ add_executable(citra_switch
     horizon_sys_stubs.cpp
     ingame_cheats.cpp
     ingame_cheats.h
-    ingame_settings.cpp
-    ingame_settings.h
     input.cpp
     input.h
     layout_editor.cpp
     layout_editor.h
+    keyboard_prompt.cpp
     keyboard_prompt.h
-    menu.cpp
-    menu.h
+    library_cheats.cpp
+    library_cheats.h
+    library_mods.cpp
+    library_mods.h
     menu_data.cpp
     menu_data.h
-    rail_icons.h
     settings_model.cpp
     settings_model.h
+    ui_badge.cpp
+    ui_badge.h
+    ui_cheats.cpp
+    ui_cheats.h
+    ui_controls.cpp
+    ui_controls.h
+    ui_credits.cpp
+    ui_credits.h
+    ui_game_icons.cpp
+    ui_game_icons.h
+    ui_gamedetails.cpp
+    ui_gamedetails.h
+    ui_gamesettings.cpp
+    ui_gamesettings.h
+    ui_hintbar.cpp
+    ui_hintbar.h
+    ui_icon_atlas.cpp
+    ui_icon_atlas.h
+    ui_icons.h
+    ui_input_bindings.cpp
+    ui_input_bindings.h
+    ui_install.cpp
+    ui_install.h
+    ui_layout.cpp
+    ui_layout.h
+    ui_library.cpp
+    ui_library.h
+    ui_model.h
+    ui_mods.cpp
+    ui_mods.h
+    ui_navbar.cpp
+    ui_navbar.h
+    ui_page_transition.cpp
+    ui_page_transition.h
+    ui_paths.cpp
+    ui_paths.h
+    ui_paths_icons.h
+    ui_scroll.cpp
+    ui_scroll.h
+    ui_settings.cpp
+    ui_settings.h
+    ui_splash.cpp
+    ui_splash.h
+    ui_strings.cpp
+    ui_strings.h
+    ui_theme.cpp
+    ui_theme.h
+    ui_updates.cpp
+    ui_updates.h
     updater.cpp
     updater.h
+    titledb.cpp
+    titledb.h
+    whats_next.cpp
+    whats_next.h
 )
 
 # oaknut_horizon_jit is pulled in transitively via oaknut
 target_link_libraries(citra_switch PRIVATE citra_core citra_common inih)
 
-# The launcher draws with a libnx software framebuffer and renders text with FreeType
+# The launcher's GPU-compositor UI (rewrite in progress) renders text via FreeType, rasterized
+# into a GPU glyph atlas rather than blended into a CPU framebuffer.
 find_path(SWITCH_FREETYPE_INCLUDE_DIR ft2build.h PATH_SUFFIXES freetype2 REQUIRED)
 find_library(SWITCH_FREETYPE freetype REQUIRED)
 find_library(SWITCH_PNG png REQUIRED)
@@ -74,6 +133,8 @@ target_link_libraries(citra_switch PRIVATE
     ${SWITCH_CURL} ${SWITCH_MBEDTLS} ${SWITCH_MBEDX509} ${SWITCH_MBEDCRYPTO})
 # nlohmann/json (vendored, see externals/CMakeLists.txt) for parsing GitHub API responses.
 target_link_libraries(citra_switch PRIVATE json-headers)
+# stb_image (vendored, see externals/CMakeLists.txt) for decoding downloaded GameTDB cover art.
+target_link_libraries(citra_switch PRIVATE stb_image)
 
 # The GLES bring-up path pulls the switch-mesa EGL/GLES driver. It is mutually exclusive with NXVK
 # until NXVK either supports nouveau or Zink (or both).
@@ -93,17 +154,14 @@ if (ENABLE_OPENGL)
         ${SWITCH_EGL} ${SWITCH_GLESV2} ${SWITCH_GLAPI} ${SWITCH_DRM_NOUVEAU})
 endif()
 
-# Vulkan supported provided by the NXVK project
+# Vulkan supported provided by the NXVK project. gpu_canvas.cpp (the launcher's own standalone
+# swapchain, separate from NXVK's in-game context) needs the Vulkan headers directly too.
 if (ENABLE_VULKAN)
-    target_link_libraries(citra_switch PRIVATE nxvk)
+    target_link_libraries(citra_switch PRIVATE nxvk vulkan-headers)
 endif()
 
-set(RAIKOPON_NRO_NAME "raikopon")
-# Single source of truth for the app version: feeds both the NACP metadata below and
-# raikopon_version.h (generated), which the in-app updater compares GitHub release tags against.
-# Bump this by hand for every release. Keep it short - the NACP DisplayVersion field must be
-# under 0x10 bytes on real hardware.
-set(RAIKOPON_VERSION "1.6.0")
+set(RAIKOPON_NRO_NAME "RaikaAzahar")
+set(RAIKOPON_VERSION "2.8.12")
 
 configure_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/raikopon_version.h.in"
@@ -113,8 +171,8 @@ configure_file(
 target_include_directories(citra_switch PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
 nx_generate_nacp(OUTPUT ${RAIKOPON_NRO_NAME}.nacp
-    NAME "Raikopon"
-    AUTHOR "Azahar Team \& PalindromicBreadLoaf \& Raibatsu"
+    NAME "Raika Azahar"
+    AUTHOR "Azahar Team \& Raibatsu"
     VERSION "${RAIKOPON_VERSION}"
 )
 
@@ -131,6 +189,37 @@ configure_file(
     "${RAIKOPON_ROMFS_DIR}/cacert.pem"
     COPYONLY
 )
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/GoogleSansFlex_24pt-Regular.ttf"
+    "${RAIKOPON_ROMFS_DIR}/GoogleSansFlex_24pt-Regular.ttf"
+    COPYONLY
+)
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/GoogleSansFlex-OFL.txt"
+    "${RAIKOPON_ROMFS_DIR}/GoogleSansFlex-OFL.txt"
+    COPYONLY
+)
+# Title descriptions (GameTDB synopses), keyed by 4-char game ID for O(log n) lookup entirely
+# offline - see tools/gen_titledb.py for how this is generated and titledb.h for the binary layout.
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/titledb.bin"
+    "${RAIKOPON_ROMFS_DIR}/titledb.bin"
+    COPYONLY
+)
+# Frontend UI translations - one flat JSON file per language, generated by
+# tools/gen_translations.py, loaded by ui_strings.cpp. Edit lang/<code>.json directly (or the
+# STRINGS table in that script and regenerate) to fix or add translations; no C++ rebuild needed
+# for text changes, only a RomFS repack.
+file(GLOB RAIKOPON_LANG_FILES "${CMAKE_CURRENT_SOURCE_DIR}/lang/*.json")
+file(MAKE_DIRECTORY "${RAIKOPON_ROMFS_DIR}/lang")
+foreach(RAIKOPON_LANG_FILE ${RAIKOPON_LANG_FILES})
+    get_filename_component(RAIKOPON_LANG_FILENAME "${RAIKOPON_LANG_FILE}" NAME)
+    configure_file(
+        "${RAIKOPON_LANG_FILE}"
+        "${RAIKOPON_ROMFS_DIR}/lang/${RAIKOPON_LANG_FILENAME}"
+        COPYONLY
+    )
+endforeach()
 dkp_add_asset_target(raikopon_romfs "${RAIKOPON_ROMFS_DIR}")
 
 # Compile deko3d shaders with uam and pack them into the same romfs.

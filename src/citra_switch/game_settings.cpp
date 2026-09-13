@@ -5,6 +5,7 @@
 #include "citra_switch/game_settings.h"
 
 #include <algorithm>
+#include <ctime>
 #include <sstream>
 
 #include <INIReader.h>
@@ -44,12 +45,14 @@ int s_pre_gyro_x = 100;
 int s_pre_gyro_y = 100;
 int s_pre_pointer_source = 0;
 int s_pre_movie_throttle = 45;
+bool s_pre_movie_throttle_enabled = true;
 
 // The custom-layout rects are plain Setting<u16>, not SwitchableSetting, so they need the same
 // snapshot/restore treatment as the frontend-only fields above.
 struct CustomRect {
     u16 top_x, top_y, top_w, top_h;
     u16 bottom_x, bottom_y, bottom_w, bottom_h;
+    u16 top_rotation, bottom_rotation;
 };
 CustomRect s_pre_custom_rect{};
 
@@ -58,7 +61,8 @@ CustomRect CurrentCustomRect() {
     return {v.custom_top_x.GetValue(),     v.custom_top_y.GetValue(),
             v.custom_top_width.GetValue(), v.custom_top_height.GetValue(),
             v.custom_bottom_x.GetValue(),  v.custom_bottom_y.GetValue(),
-            v.custom_bottom_width.GetValue(), v.custom_bottom_height.GetValue()};
+            v.custom_bottom_width.GetValue(), v.custom_bottom_height.GetValue(),
+            v.custom_top_rotation.GetValue(), v.custom_bottom_rotation.GetValue()};
 }
 
 void ApplyCustomRect(const CustomRect& rect) {
@@ -71,6 +75,8 @@ void ApplyCustomRect(const CustomRect& rect) {
     v.custom_bottom_y = rect.bottom_y;
     v.custom_bottom_width = rect.bottom_w;
     v.custom_bottom_height = rect.bottom_h;
+    v.custom_top_rotation = rect.top_rotation;
+    v.custom_bottom_rotation = rect.bottom_rotation;
 }
 
 GameOverrides ReadOverridesFile(std::uint64_t program_id) {
@@ -132,6 +138,9 @@ GameOverrides ReadOverridesFile(std::uint64_t program_id) {
     if (has("movie_throttle_clock_percentage")) {
         overrides.movie_throttle_clock_percentage =
             static_cast<int>(ini.GetInteger(kSection, "movie_throttle_clock_percentage", 45));
+    }
+    if (has("movie_throttle_enabled")) {
+        overrides.movie_throttle_enabled = ini.GetBoolean(kSection, "movie_throttle_enabled", true);
     }
     if (has("cpu_clock_percentage")) {
         overrides.cpu_clock_percentage =
@@ -200,6 +209,8 @@ GameOverrides ReadOverridesFile(std::uint64_t program_id) {
     read_rect("custom_bottom_y", overrides.custom_bottom_y, 500);
     read_rect("custom_bottom_width", overrides.custom_bottom_width, 640);
     read_rect("custom_bottom_height", overrides.custom_bottom_height, 480);
+    read_rect("custom_top_rotation", overrides.custom_top_rotation, 0);
+    read_rect("custom_bottom_rotation", overrides.custom_bottom_rotation, 0);
     return overrides;
 }
 
@@ -212,6 +223,7 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
                          overrides.small_screen_position || overrides.gyro_sensitivity_x ||
                          overrides.gyro_sensitivity_y || overrides.pointer_source ||
                          overrides.movie_throttle_clock_percentage ||
+                         overrides.movie_throttle_enabled ||
                          overrides.cpu_clock_percentage || overrides.enable_compile_boost ||
                          overrides.resolution_factor || overrides.use_vsync ||
                          overrides.async_shader_compilation || overrides.use_disk_shader_cache ||
@@ -224,7 +236,8 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
                          overrides.custom_top_x || overrides.custom_top_y ||
                          overrides.custom_top_width || overrides.custom_top_height ||
                          overrides.custom_bottom_x || overrides.custom_bottom_y ||
-                         overrides.custom_bottom_width || overrides.custom_bottom_height;
+                         overrides.custom_bottom_width || overrides.custom_bottom_height ||
+                         overrides.custom_top_rotation || overrides.custom_bottom_rotation;
     if (!any_set) {
         // Nothing customised (any longer) — no point leaving an empty file behind.
         FileUtil::Delete(path);
@@ -256,6 +269,7 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
     write_int("gyro_sensitivity_y", overrides.gyro_sensitivity_y);
     write_int("pointer_source", overrides.pointer_source);
     write_int("movie_throttle_clock_percentage", overrides.movie_throttle_clock_percentage);
+    write_bool("movie_throttle_enabled", overrides.movie_throttle_enabled);
     write_int("cpu_clock_percentage", overrides.cpu_clock_percentage);
     write_bool("enable_compile_boost", overrides.enable_compile_boost);
     write_int("resolution_factor", overrides.resolution_factor);
@@ -280,6 +294,8 @@ void WriteOverridesFile(std::uint64_t program_id, const GameOverrides& overrides
     write_int("custom_bottom_y", overrides.custom_bottom_y);
     write_int("custom_bottom_width", overrides.custom_bottom_width);
     write_int("custom_bottom_height", overrides.custom_bottom_height);
+    write_int("custom_top_rotation", overrides.custom_top_rotation);
+    write_int("custom_bottom_rotation", overrides.custom_bottom_rotation);
 
     FileUtil::CreateFullPath(path);
     if (!FileUtil::WriteStringToFile(true, path, ss.str())) {
@@ -302,6 +318,7 @@ void BeginGameOverrides(std::uint64_t program_id) {
     s_pre_gyro_y = GetGyroSensitivityY();
     s_pre_pointer_source = static_cast<int>(GetPointerSource());
     s_pre_movie_throttle = GetMovieThrottleClockPercentage();
+    s_pre_movie_throttle_enabled = GetMovieThrottleEnabled();
 
     s_active = ReadOverridesFile(program_id);
 
@@ -359,6 +376,8 @@ void BeginGameOverrides(std::uint64_t program_id) {
     apply_rect(s_active.custom_bottom_y, v.custom_bottom_y);
     apply_rect(s_active.custom_bottom_width, v.custom_bottom_width);
     apply_rect(s_active.custom_bottom_height, v.custom_bottom_height);
+    apply_rect(s_active.custom_top_rotation, v.custom_top_rotation);
+    apply_rect(s_active.custom_bottom_rotation, v.custom_bottom_rotation);
     if (s_active.gyro_sensitivity_x || s_active.gyro_sensitivity_y) {
         SetGyroSensitivity(s_active.gyro_sensitivity_x.value_or(s_pre_gyro_x),
                            s_active.gyro_sensitivity_y.value_or(s_pre_gyro_y));
@@ -368,6 +387,9 @@ void BeginGameOverrides(std::uint64_t program_id) {
     }
     if (s_active.movie_throttle_clock_percentage) {
         SetMovieThrottleClockPercentage(*s_active.movie_throttle_clock_percentage);
+    }
+    if (s_active.movie_throttle_enabled) {
+        SetMovieThrottleEnabled(*s_active.movie_throttle_enabled);
     }
     if (s_active.cpu_clock_percentage) {
         v.cpu_clock_percentage.SetGlobal(false);
@@ -439,6 +461,16 @@ void BeginGameOverrides(std::uint64_t program_id) {
     if (s_active.bottom_screen_opacity) {
         v.bottom_screen_opacity.SetGlobal(false);
         v.bottom_screen_opacity = static_cast<u16>(*s_active.bottom_screen_opacity);
+    }
+
+    if (s_active.layout_option || s_active.custom_top_x || s_active.custom_top_y ||
+        s_active.custom_top_width || s_active.custom_top_height || s_active.custom_bottom_x ||
+        s_active.custom_bottom_y || s_active.custom_bottom_width ||
+        s_active.custom_bottom_height || s_active.custom_top_rotation ||
+        s_active.custom_bottom_rotation) {
+        LOG_INFO(Config, "BeginGameOverrides: title {:016X} has a saved layout, requesting relayout",
+                 program_id);
+        RequestFramebufferRelayout();
     }
 }
 
@@ -528,6 +560,7 @@ void BeginFieldOverride(OverrideField field) {
     case OverrideField::GyroSensitivity:
     case OverrideField::PointerSource:
     case OverrideField::MovieThrottleClock:
+    case OverrideField::MovieThrottleEnabled:
         // Frontend-only state, no global/custom split to switch.
         break;
     }
@@ -565,6 +598,8 @@ void MarkGameOverride(OverrideField field) {
         s_active.custom_bottom_y = v.custom_bottom_y.GetValue();
         s_active.custom_bottom_width = v.custom_bottom_width.GetValue();
         s_active.custom_bottom_height = v.custom_bottom_height.GetValue();
+        s_active.custom_top_rotation = v.custom_top_rotation.GetValue();
+        s_active.custom_bottom_rotation = v.custom_bottom_rotation.GetValue();
         s_active.top_screen_opacity = static_cast<int>(v.top_screen_opacity.GetValue());
         s_active.bottom_screen_opacity = static_cast<int>(v.bottom_screen_opacity.GetValue());
         break;
@@ -577,6 +612,9 @@ void MarkGameOverride(OverrideField field) {
         break;
     case OverrideField::MovieThrottleClock:
         s_active.movie_throttle_clock_percentage = GetMovieThrottleClockPercentage();
+        break;
+    case OverrideField::MovieThrottleEnabled:
+        s_active.movie_throttle_enabled = GetMovieThrottleEnabled();
         break;
     case OverrideField::CpuClock:
         s_active.cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue());
@@ -665,6 +703,16 @@ void CommitMenuSettingsPerGame(const MenuSettings& before, const MenuSettings& a
             std::clamp(after.pointer_source, 0, NumPointerSources - 1)));
         MarkGameOverride(OverrideField::PointerSource);
     }
+    if (after.movie_throttle_clock_percentage != before.movie_throttle_clock_percentage) {
+        BeginFieldOverride(OverrideField::MovieThrottleClock);
+        SetMovieThrottleClockPercentage(after.movie_throttle_clock_percentage);
+        MarkGameOverride(OverrideField::MovieThrottleClock);
+    }
+    if (after.movie_throttle_enabled != before.movie_throttle_enabled) {
+        BeginFieldOverride(OverrideField::MovieThrottleEnabled);
+        SetMovieThrottleEnabled(after.movie_throttle_enabled);
+        MarkGameOverride(OverrideField::MovieThrottleEnabled);
+    }
     if (after.cpu_clock_percentage != before.cpu_clock_percentage) {
         BeginFieldOverride(OverrideField::CpuClock);
         // The running timers keep their own copy of the clock scale, so the change has to be
@@ -687,6 +735,11 @@ void CommitMenuSettingsPerGame(const MenuSettings& before, const MenuSettings& a
         BeginFieldOverride(OverrideField::Resolution);
         v.resolution_factor = static_cast<u32>(std::clamp(after.resolution_factor, 0, 10));
         MarkGameOverride(OverrideField::Resolution);
+    }
+    if (after.layout_preset != before.layout_preset) {
+        BeginFieldOverride(OverrideField::ScreenLayout);
+        SetScreenLayoutPreset(after.layout_preset);
+        MarkGameOverride(OverrideField::ScreenLayout);
     }
     if (after.use_vsync != before.use_vsync) {
         BeginFieldOverride(OverrideField::VSync);
@@ -759,6 +812,7 @@ void ResetGameOverridesToLibrary() {
     SetGyroSensitivity(s_pre_gyro_x, s_pre_gyro_y);
     SetPointerSource(static_cast<PointerSource>(s_pre_pointer_source));
     SetMovieThrottleClockPercentage(s_pre_movie_throttle);
+    SetMovieThrottleEnabled(s_pre_movie_throttle_enabled);
     ApplyCustomRect(s_pre_custom_rect);
 
     s_active = {};
@@ -781,10 +835,61 @@ void EndGameOverrides() {
     SetGyroSensitivity(s_pre_gyro_x, s_pre_gyro_y);
     SetPointerSource(static_cast<PointerSource>(s_pre_pointer_source));
     SetMovieThrottleClockPercentage(s_pre_movie_throttle);
+    SetMovieThrottleEnabled(s_pre_movie_throttle_enabled);
     ApplyCustomRect(s_pre_custom_rect);
 
     s_program_id = 0;
     s_active = {};
+}
+
+namespace {
+
+std::string PlaytimeFile(std::uint64_t program_id) {
+    return GameSettingsDir() + fmt::format("{:016X}", program_id) + ".playtime.ini";
+}
+
+} // namespace
+
+PlaytimeRecord LoadPlaytime(std::uint64_t program_id) {
+    PlaytimeRecord record{};
+    const std::string path = PlaytimeFile(program_id);
+    if (!FileUtil::Exists(path)) {
+        return record;
+    }
+    std::string buffer;
+    if (!FileUtil::ReadFileToString(true, path, buffer)) {
+        return record;
+    }
+    INIReader ini{buffer.c_str(), buffer.size()};
+    if (ini.ParseError() < 0) {
+        LOG_ERROR(Config, "Malformed playtime file '{}'", path);
+        return record;
+    }
+    static constexpr const char* kSection = "Playtime";
+    record.total_seconds =
+        static_cast<std::uint64_t>(ini.GetInteger64(kSection, "total_seconds", 0));
+    record.last_played = static_cast<std::uint64_t>(ini.GetInteger64(kSection, "last_played", 0));
+    return record;
+}
+
+void AddPlaytime(std::uint64_t program_id, std::uint64_t seconds_played) {
+    if (program_id == 0) {
+        return;
+    }
+    PlaytimeRecord record = LoadPlaytime(program_id);
+    record.total_seconds += seconds_played;
+    record.last_played = static_cast<std::uint64_t>(std::time(nullptr));
+
+    std::ostringstream ss;
+    ss << "[Playtime]\n";
+    ss << "total_seconds = " << record.total_seconds << '\n';
+    ss << "last_played = " << record.last_played << '\n';
+
+    const std::string path = PlaytimeFile(program_id);
+    FileUtil::CreateFullPath(path);
+    if (!FileUtil::WriteStringToFile(true, path, ss.str())) {
+        LOG_ERROR(Config, "Failed to save playtime to '{}'", path);
+    }
 }
 
 } // namespace SwitchFrontend

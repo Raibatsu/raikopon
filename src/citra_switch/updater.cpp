@@ -23,11 +23,23 @@
 namespace SwitchFrontend {
 
 namespace {
+std::once_flag s_curl_init_once;
+} // namespace
+
+// Exported (not file-local) because gametdb.cpp's background fetch thread needs to call this too,
+// and curl_global_init() is explicitly documented as not thread-safe / not safe to call more than
+// once while any other thread might be using libcurl - two independent std::once_flags (one per
+// file) would each think they're "the first call" and could race a real in-flight request.
+void EnsureCurlInitialized() {
+    std::call_once(s_curl_init_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+}
+
+namespace {
 
 constexpr const char* kRepoOwner = "Raibatsu";
 constexpr const char* kRepoName = "raikopon";
-constexpr const char* kNroAssetName = "raikopon.nro";
-constexpr const char* kChecksumAssetName = "raikopon.nro.sha256";
+constexpr const char* kNroAssetName = "RaikaAzahar.nro";
+constexpr const char* kChecksumAssetName = "RaikaAzahar.sha256";
 // Fixed staging suffix, matching the shape a working reference implementation
 // (shodowlo/NX-torrent-player's app/update.cpp) uses for the same purpose. An earlier version of
 // this code used a timestamp-suffixed name instead, worked around a symptom that was later traced
@@ -44,11 +56,6 @@ constexpr long kConnectTimeoutSeconds = 15;
 constexpr long kTransferTimeoutSeconds = 180;
 
 std::string s_own_nro_path;
-std::once_flag s_curl_init_once;
-
-void EnsureCurlInitialized() {
-    std::call_once(s_curl_init_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
-}
 
 struct ParsedVersion {
     int major = 0;
@@ -126,6 +133,61 @@ bool IsNewer(const ParsedVersion& candidate, const ParsedVersion& current) {
         return candidate.suffix.empty();
     }
     return candidate.suffix > current.suffix;
+}
+
+// Pulls the changelog out of a release body formatted like:
+//   xyz, asklhdlkaj
+//   ## Changelog:
+//
+//   * Changed x,y,z.
+//   * Potato
+//
+//
+//   ##
+// i.e. everything between the first "##" marker and the next one, minus the marker itself and
+// surrounding whitespace. Returns empty if the body has no such block (releases aren't required
+// to use this format).
+std::string ExtractChangelog(std::string_view body) {
+    constexpr std::string_view kMarker = "##";
+    const std::size_t start = body.find(kMarker);
+    if (start == std::string_view::npos) {
+        return {};
+    }
+    std::size_t content_start = start + kMarker.size();
+    if (content_start < body.size() && body[content_start] == ' ') {
+        ++content_start; // The single space after "## " in "## Changelog:", not indentation.
+    }
+    const std::size_t end = body.find(kMarker, content_start);
+    if (end == std::string_view::npos) {
+        return {};
+    }
+    std::string_view content = body.substr(content_start, end - content_start);
+    while (!content.empty() && std::isspace(static_cast<unsigned char>(content.back()))) {
+        content.remove_suffix(1);
+    }
+    while (!content.empty() && std::isspace(static_cast<unsigned char>(content.front()))) {
+        content.remove_prefix(1);
+    }
+
+    // Release editors commonly leave trailing spaces on list lines - strip those per line too.
+    std::string out;
+    out.reserve(content.size());
+    std::size_t line_start = 0;
+    while (line_start <= content.size()) {
+        const std::size_t nl = content.find('\n', line_start);
+        std::string_view line = content.substr(
+            line_start, nl == std::string_view::npos ? std::string_view::npos : nl - line_start);
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
+            line.remove_suffix(1);
+        }
+        out.append(line);
+        if (nl == std::string_view::npos) {
+            break;
+        }
+        out.push_back('\n');
+        line_start = nl + 1;
+    }
+    return out;
 }
 
 std::string HexEncode(const unsigned char* bytes, std::size_t size) {
@@ -316,7 +378,7 @@ UpdateCheckOutcome CheckForUpdate(UpdateChannel channel) {
     // Local test-server override, for iterating on the updater without burning GitHub's
     // unauthenticated API quota (60 requests/hour/IP - trivial to exhaust while testing, since
     // every relaunch during a test session can trigger another check). If
-    // sdmc:/switch/dekopon/update_test_url.txt exists and contains a URL, fetch that instead of
+    // sdmc:/switch/azahar/update_test_url.txt exists and contains a URL, fetch that instead of
     // GitHub and treat the response as a single release object - same shape CheckForUpdate already
     // expects for the Stable channel (a small local HTTP server, e.g. `python -m http.server`,
     // serving a hand-written release.json alongside the .nro/.sha256 is enough - no need to mimic
@@ -324,7 +386,7 @@ UpdateCheckOutcome CheckForUpdate(UpdateChannel channel) {
     // touched by the real release process, and channel selection is ignored while it's active
     // (there's only one release to offer from a folder of static files).
     std::string test_url;
-    FileUtil::ReadFileToString(true, "sdmc:/switch/dekopon/update_test_url.txt", test_url);
+    FileUtil::ReadFileToString(true, "sdmc:/switch/azahar/update_test_url.txt", test_url);
     test_url = Common::StripSpaces(test_url);
     const bool use_test_server = !test_url.empty();
 
@@ -402,6 +464,9 @@ UpdateCheckOutcome CheckForUpdate(UpdateChannel channel) {
         outcome.info.nro_download_url = assets.nro_url;
         outcome.info.sha256_download_url = assets.sha256_url;
         outcome.info.nro_size = assets.nro_size;
+        if (release.contains("body") && release["body"].is_string()) {
+            outcome.info.changelog = ExtractChangelog(release["body"].get<std::string>());
+        }
         return outcome;
     } catch (const nlohmann::json::exception&) {
         outcome.result = UpdateCheckResult::ParseError;
@@ -440,6 +505,8 @@ DownloadResult DownloadAndInstallUpdate(
         curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
         curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, CurlXferInfo);
         curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progress_ctx);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
+        curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 10L);
 
         const CURLcode res = curl_easy_perform(curl);
         long status = 0;

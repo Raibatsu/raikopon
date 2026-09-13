@@ -88,6 +88,10 @@ void Swapchain::Create(u32 width_, u32 height_, vk::SurfaceKHR surface_, bool lo
 
     SetupImages();
     RefreshSemaphores();
+
+    display_timing_active = instance.IsDisplayTimingSupported();
+    present_id = 0;
+    QueryRefreshDuration();
 }
 
 bool Swapchain::AcquireNextImage() {
@@ -119,7 +123,16 @@ bool Swapchain::AcquireNextImage() {
 }
 
 void Swapchain::Present() {
+    const vk::PresentTimeGOOGLE present_time = {
+        .presentID = present_id,
+        .desiredPresentTime = 0,
+    };
+    const vk::PresentTimesInfoGOOGLE timing_info = {
+        .swapchainCount = 1,
+        .pTimes = &present_time,
+    };
     const vk::PresentInfoKHR present_info = {
+        .pNext = display_timing_active ? &timing_info : nullptr,
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
         .swapchainCount = 1,
@@ -141,7 +154,42 @@ void Swapchain::Present() {
         UNREACHABLE();
     }
 
+    if (display_timing_active) {
+        ++present_id;
+        ProcessPresentTiming();
+    }
+
     frame_index = (frame_index + 1) % image_count;
+}
+
+void Swapchain::QueryRefreshDuration() {
+    if (!display_timing_active) {
+        return;
+    }
+    try {
+        const vk::RefreshCycleDurationGOOGLE timing =
+            instance.GetDevice().getRefreshCycleDurationGOOGLE(swapchain);
+        refresh_duration_ns = timing.refreshDuration;
+        LOG_INFO(Render_Vulkan, "Display timing active, refresh duration {}ns", refresh_duration_ns);
+    } catch (const vk::SystemError& err) {
+        LOG_WARNING(Render_Vulkan, "Failed to query refresh cycle duration: {}", err.what());
+        display_timing_active = false;
+    }
+}
+
+void Swapchain::ProcessPresentTiming() {
+    std::vector<vk::PastPresentationTimingGOOGLE> timings;
+    try {
+        timings = instance.GetDevice().getPastPresentationTimingGOOGLE(swapchain);
+    } catch (const vk::SystemError&) {
+        return;
+    }
+    for (const vk::PastPresentationTimingGOOGLE& timing : timings) {
+        if (timing.presentMargin < refresh_duration_ns / 4) {
+            LOG_DEBUG(Render_Vulkan, "Present {} tight margin {}ns (refresh {}ns)",
+                     timing.presentID, timing.presentMargin, refresh_duration_ns);
+        }
+    }
 }
 
 void Swapchain::FindPresentFormat() {

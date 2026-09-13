@@ -690,6 +690,33 @@ FramebufferLayout reverseLayout(FramebufferLayout layout) {
     return layout;
 }
 
+Common::Rectangle<u32> RotatedScreenRect(const Common::Rectangle<u32>& rect, int rotation_degrees) {
+    if (rotation_degrees != 90 && rotation_degrees != 270) {
+        return rect;
+    }
+    const s32 cx = static_cast<s32>(rect.left + rect.right) / 2;
+    const s32 cy = static_cast<s32>(rect.top + rect.bottom) / 2;
+    const s32 w = static_cast<s32>(rect.GetHeight());
+    const s32 h = static_cast<s32>(rect.GetWidth());
+    const s32 left = std::max(0, cx - w / 2);
+    const s32 top = std::max(0, cy - h / 2);
+    return Common::Rectangle<u32>{static_cast<u32>(left), static_cast<u32>(top),
+                                  static_cast<u32>(left + w), static_cast<u32>(top + h)};
+}
+
+DisplayOrientation OrientationForRotation(int rotation_degrees, DisplayOrientation fallback) {
+    switch (rotation_degrees) {
+    case 90:
+        return DisplayOrientation::Portrait;
+    case 180:
+        return DisplayOrientation::LandscapeFlipped;
+    case 270:
+        return DisplayOrientation::PortraitFlipped;
+    default:
+        return fallback;
+    }
+}
+
 std::pair<unsigned, unsigned> GetMinimumSizeFromPortraitLayout() {
     const u32 min_width = Core::kScreenTopWidth;
     const u32 min_height = Core::kScreenTopHeight + Core::kScreenBottomHeight;

@@ -51,8 +51,31 @@ vk::MemoryPropertyFlags MakePropertyFlags(BufferType type) {
     }
 }
 
+/// Flags for a memory type that's cached but not necessarily coherent. On drivers where the
+/// coherent host-visible type is backed by an uncached CPU mapping (e.g. NVK on Tegra), a cached
+/// non-coherent type is faster for sequential CPU writes; StreamBuffer already flushes/invalidates
+/// explicitly whenever is_coherent is false, so landing here is always safe.
+vk::MemoryPropertyFlags MakeCachedPropertyFlags(BufferType type) {
+    switch (type) {
+    case BufferType::Upload:
+        return vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached;
+    case BufferType::Download:
+        return vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCached;
+    case BufferType::Stream:
+        return vk::MemoryPropertyFlagBits::eDeviceLocal | vk::MemoryPropertyFlagBits::eHostVisible |
+               vk::MemoryPropertyFlagBits::eHostCached;
+    default:
+        UNREACHABLE_MSG("Unknown buffer type {}", type);
+        return vk::MemoryPropertyFlagBits::eHostVisible;
+    }
+}
+
 /// Get the preferred host visible memory type.
 u32 GetMemoryType(const vk::PhysicalDeviceMemoryProperties& properties, BufferType type) {
+    if (const auto cached_type = FindMemoryType(properties, MakeCachedPropertyFlags(type))) {
+        return *cached_type;
+    }
+
     vk::MemoryPropertyFlags flags = MakePropertyFlags(type);
     std::optional<u32> preferred_type;
 

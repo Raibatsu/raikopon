@@ -18,8 +18,21 @@ constexpr bool TevOpUsesSource3(TevOperation op) {
 }
 
 void CanonicalizeTevStage(TevStageConfigRaw& stage) {
-    const TevOperation color_op = static_cast<TevOperation>(stage.ops_raw & 0xF);
-    const TevOperation alpha_op = static_cast<TevOperation>((stage.ops_raw >> 16) & 0xF);
+    TevOperation color_op = static_cast<TevOperation>(stage.ops_raw & 0xF);
+    TevOperation alpha_op = static_cast<TevOperation>((stage.ops_raw >> 16) & 0xF);
+
+    if (color_op == TevOperation::Lerp &&
+        (stage.sources_raw & 0xFu) == ((stage.sources_raw >> 4) & 0xFu) &&
+        (stage.modifiers_raw & 0xFu) == ((stage.modifiers_raw >> 4) & 0xFu)) {
+        color_op = TevOperation::Replace;
+        stage.ops_raw &= ~0xFu;
+    }
+    if (alpha_op == TevOperation::Lerp &&
+        ((stage.sources_raw >> 16) & 0xFu) == ((stage.sources_raw >> 20) & 0xFu) &&
+        ((stage.modifiers_raw >> 12) & 0x7u) == ((stage.modifiers_raw >> 16) & 0x7u)) {
+        alpha_op = TevOperation::Replace;
+        stage.ops_raw &= ~(0xFu << 16);
+    }
 
     if (!TevOpUsesSource2(color_op)) {
         stage.sources_raw &= ~(0xFu << 4);    // color_source2

@@ -60,6 +60,13 @@ constexpr s32 kMovieThrottleClockMax = 100;
 // active (see RegisterMovieCpuThrottle). Adjustable from the quick menu — see
 // Get/SetMovieThrottleClockPercentage below.
 std::atomic<s32> s_movie_throttle_clock_percentage{45};
+// Whether the throttle hack is applied at all. Adjustable from the quick menu — see
+// Get/SetMovieThrottleEnabled below.
+std::atomic<bool> s_movie_throttle_enabled{true};
+// True while a throttle this hack applied is still in effect, i.e. Core Clock has actually been
+// overridden and is waiting to be restored. Tracked separately from s_movie_throttle_enabled so
+// toggling the hack off mid-playback doesn't skip restoring a clock override already in place.
+std::atomic<bool> s_movie_throttle_active{false};
 // The player's own Core Clock setting, captured when a video starts so it can be restored
 // exactly (rather than hardcoding 100%) once the video ends.
 s32 s_saved_cpu_clock_percentage = 100;
@@ -74,14 +81,21 @@ s32 s_saved_cpu_clock_percentage = 100;
 void RegisterMovieCpuThrottle(Core::System& system) {
     system.RegisterMoviePlaybackStateChanged([&system](bool playing) {
         if (playing) {
+            if (!s_movie_throttle_enabled.load(std::memory_order_relaxed)) {
+                return;
+            }
             const s32 throttle_percentage =
                 s_movie_throttle_clock_percentage.load(std::memory_order_relaxed);
             s_saved_cpu_clock_percentage = Settings::values.cpu_clock_percentage.GetValue();
             Settings::values.cpu_clock_percentage = throttle_percentage;
             system.ApplySettings();
+            s_movie_throttle_active.store(true, std::memory_order_relaxed);
             LOG_INFO(Frontend, "Movie playback started: throttling Core Clock to {}%",
                      throttle_percentage);
         } else {
+            if (!s_movie_throttle_active.exchange(false, std::memory_order_relaxed)) {
+                return;
+            }
             Settings::values.cpu_clock_percentage = s_saved_cpu_clock_percentage;
             system.ApplySettings();
             LOG_INFO(Frontend, "Movie playback ended: restoring Core Clock to {}%",
@@ -190,7 +204,7 @@ std::string ResolveRomPath(const std::string& rom_arg) {
     FileUtil::ForeachDirectoryEntry(
         nullptr, roms_dir,
         [&found](u64*, const std::string& directory, const std::string& virtual_name) {
-            if (!found.empty()) {
+            if (!found.empty() || (!virtual_name.empty() && virtual_name.front() == '.')) {
                 return true;
             }
             const std::string path = directory + virtual_name;
@@ -561,6 +575,16 @@ const char* CurrentScreenLayoutName() {
     return s_layout_presets[s_layout_index].name;
 }
 
+int GetScreenLayoutIndex() {
+    return static_cast<int>(s_layout_index);
+}
+
+void SetScreenLayoutPreset(int index) {
+    const int count = static_cast<int>(s_layout_presets.size());
+    s_layout_index = static_cast<std::size_t>(std::clamp(index, 0, count - 1));
+    ApplyCurrentLayout();
+}
+
 int GetScreenLayoutCount() {
     return static_cast<int>(s_layout_presets.size());
 }
@@ -589,6 +613,14 @@ void SetMovieThrottleClockPercentage(s32 percentage) {
     s_movie_throttle_clock_percentage.store(
         std::clamp(percentage, kMovieThrottleClockMin, kMovieThrottleClockMax),
         std::memory_order_relaxed);
+}
+
+bool GetMovieThrottleEnabled() {
+    return s_movie_throttle_enabled.load(std::memory_order_relaxed);
+}
+
+void SetMovieThrottleEnabled(bool enabled) {
+    s_movie_throttle_enabled.store(enabled, std::memory_order_relaxed);
 }
 
 bool LoadFailed() {

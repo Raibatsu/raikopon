@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "citra_switch/keyboard_prompt.h"
+#include "citra_switch/ui_strings.h"
 #include "common/string_util.h"
 #include "core/cheats/cheat_base.h"
 #include "core/cheats/cheats.h"
@@ -101,7 +102,7 @@ int EditCheatFlow(int edit_index) {
         }
     }
 
-    const std::string name = PromptKeyboard("Cheat name", "e.g. Infinite HP", initial_name, 64);
+    const std::string name = PromptKeyboard(Tr("cheats.name_title"), Tr("cheats.name_guide"), initial_name, 64);
     if (name.empty()) {
         return -1;
     }
@@ -109,9 +110,9 @@ int EditCheatFlow(int edit_index) {
     std::vector<std::string> lines;
     for (std::size_t i = 0;; ++i) {
         const std::string existing = i < initial_lines.size() ? initial_lines[i] : std::string{};
-        const std::string header = "Cheat code - line " + std::to_string(i + 1);
-        const std::string guide = existing.empty() ? "XXXXXXXX YYYYYYYY - blank line to finish"
-                                                    : "XXXXXXXX YYYYYYYY - blank clears this line";
+        const std::string header = Tr("cheats.code_line_prefix") + std::to_string(i + 1);
+        const std::string guide = existing.empty() ? Tr("cheats.guide_finish")
+                                                    : Tr("cheats.guide_clear");
         // Stripped defensively: GatewayCheat's line parser requires exactly 17 characters
         // ("XXXXXXXX YYYYYYYY") with no slack, and a touch keyboard is an easy way to pick up a
         // stray leading/trailing space that would otherwise silently invalidate the line.

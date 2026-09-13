@@ -25,6 +25,16 @@ std::vector<u32> CompileGLSL(std::string_view code, vk::ShaderStageFlagBits stag
  */
 vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device);
 
+/**
+ * @brief Runs the spirv-tools optimizer over SPIR-V produced by the sirit direct-emit path (the
+ * glslang path already optimizes internally, see CompileGLSL). No-ops if
+ * Settings::values.disable_spirv_optimizer is set. Replaces `code` in place; leaves it untouched
+ * on optimizer failure.
+ * @param code The SPIR-V bytecode to optimize, modified in place.
+ * @param stage The pipeline stage the shader will be used in, for logging.
+ */
+void OptimizeSpirv(std::vector<u32>& code, vk::ShaderStageFlagBits stage);
+
 vk::ShaderModule Compile(std::string_view code, vk::ShaderStageFlagBits stage, vk::Device device,
                          std::string_view premable = "");
 

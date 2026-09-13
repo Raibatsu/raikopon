@@ -71,10 +71,23 @@ public:
         if (since_last < gap) {
             const auto remaining = gap - since_last;
             lock.unlock();
+            const auto sleep_start = std::chrono::steady_clock::now();
             std::this_thread::sleep_for(remaining);
+            total_pace_ns.fetch_add(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - sleep_start)
+                    .count(),
+                std::memory_order_relaxed);
             lock.lock();
         }
         last_completion = std::chrono::steady_clock::now();
+    }
+
+    // Process-wide total time actually slept in Pace(), across every worker sharing this
+    // PaceLimiter. For diagnosing how much of a stall is the pacer rather than genuine compile
+    // work.
+    std::uint64_t TotalPaceNs() const {
+        return total_pace_ns.load(std::memory_order_relaxed);
     }
 
 private:
@@ -103,6 +116,7 @@ private:
     std::chrono::steady_clock::time_point last_completion{};
     std::atomic<bool> bypassed{false};
     std::atomic<int> urgent{0};
+    std::atomic<std::uint64_t> total_pace_ns{0};
 };
 
 class PaceUrgentScope {
@@ -247,6 +261,14 @@ public:
 
     const std::size_t NumWorkers() const noexcept {
         return threads.size();
+    }
+
+    // Approximate: scheduled/done are independent atomics, so a task finishing mid-read can
+    // transiently under/over-count by one. Fine for diagnostics, not for correctness.
+    std::size_t PendingCount() const noexcept {
+        const std::size_t scheduled = work_scheduled.load(std::memory_order_relaxed);
+        const std::size_t done = work_done.load(std::memory_order_relaxed);
+        return scheduled > done ? scheduled - done : 0;
     }
 
 private:

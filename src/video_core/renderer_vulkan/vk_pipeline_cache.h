@@ -153,8 +153,17 @@ private:
     void SwitchDiskCache(u64 title_id, const std::atomic_bool& stop_loading,
                          const VideoCore::DiskResourceLoadCallback& callback);
 
+    /// Blocks until every queued compile job has finished. Must be called before touching
+    /// driver_pipeline_cache or swapping the active ShaderDiskCache: in-flight GraphicsPipeline
+    /// jobs hold pointers into both.
+    void WaitForCompileWorkers();
+
     /// Builds the rasterizer pipeline layout
     void BuildLayout();
+
+    /// True when every currently-selected shader (current_shaders) that's non-null has finished
+    /// compiling AND has a valid shader-object handle. See docs/SHADER_OBJECT_HANDOFF.md item 3.
+    bool AreShaderObjectsReady() const;
 
     /// Returns true when the disk data can be used by the current driver
     bool IsCacheValid(std::span<const u8> cache_data) const;
@@ -180,6 +189,10 @@ private:
     Pica::Shader::Profile profile{};
     vk::UniquePipelineCache driver_pipeline_cache;
     vk::UniquePipelineLayout pipeline_layout;
+    // Populated by BuildLayout(); reused by shader-object creation (Shader::CreateShaderObject
+    // needs the raw set layouts, not the linked VkPipelineLayout handle). See
+    // docs/SHADER_OBJECT_HANDOFF.md.
+    std::array<vk::DescriptorSetLayout, NumRasterizerSets> descriptor_set_layouts{};
     std::size_t num_worker_threads;
     std::shared_ptr<Common::PaceLimiter> compile_pacer;
     Common::ThreadWorker pipeline_workers;
@@ -188,6 +201,13 @@ private:
     std::unique_ptr<Common::ThreadWorker> boot_workers;
     PipelineInfo current_info{};
     GraphicsPipeline* current_pipeline{};
+    // Tracks what the last successful BindPipeline call actually bound via shader objects, so
+    // BindPipeline can skip re-issuing vkCmdBindShadersEXT and its accompanying mandatory dynamic
+    // state when nothing changed -- mirrors current_pipeline's role for the classic path, which
+    // has no equivalent under shader objects (pipeline stays null there). See
+    // docs/SHADER_OBJECT_HANDOFF.md.
+    bool shader_objects_bound{};
+    std::array<Shader*, MAX_SHADER_STAGES> bound_shaders{};
     std::array<DescriptorHeap, NumDescriptorHeaps> descriptor_heaps;
     std::array<vk::DescriptorSet, NumRasterizerSets> bound_descriptor_sets{};
     std::array<u32, NumDynamicOffsets> offsets{};

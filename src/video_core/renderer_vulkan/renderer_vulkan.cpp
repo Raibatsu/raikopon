@@ -2,7 +2,11 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <fmt/format.h>
+
 #include "common/assert.h"
+#include "common/ingame_overlay.h"
+#include "common/loading_icon.h"
 #include "common/logging/log.h"
 #include "common/memory_detect.h"
 #include "common/microprofile.h"
@@ -35,7 +39,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string_view>
-#include <thread>
+#include <utility>
 #include <vector>
 
 #include <vk_mem_alloc.h>
@@ -150,6 +154,7 @@ RendererVulkan::RendererVulkan(Core::System& system, Pica::PicaCore& pica_,
       present_heap{instance, scheduler.GetMasterSemaphore(), PRESENT_BINDINGS, 32} {
     CompileShaders();
     CreateOverlayFont();
+    CreateLoadingIcon();
     BuildLayouts();
     BuildPipelines();
     if (secondary_window) {
@@ -189,6 +194,12 @@ RendererVulkan::~RendererVulkan() {
     device.destroySampler(overlay_font_sampler);
     device.destroyImageView(overlay_font_view);
     vmaDestroyImage(instance.GetAllocator(), overlay_font_image, overlay_font_allocation);
+
+    if (loading_icon_available) {
+        device.destroySampler(loading_icon_sampler);
+        device.destroyImageView(loading_icon_view);
+        vmaDestroyImage(instance.GetAllocator(), loading_icon_image, loading_icon_allocation);
+    }
 }
 
 void RendererVulkan::PrepareRendertarget() {
@@ -213,82 +224,18 @@ void RendererVulkan::PrepareRendertarget() {
 
         LoadFBToScreenInfo(framebuffer, screen_infos[i], i == 1);
     }
-
-    static std::array<std::uintptr_t, 3> diag_view{};
-    static u64 diag_frame = 0;
-    ++diag_frame;
-
-    std::array<PAddr, 3> diag_addr{};
-    for (u32 i = 0; i < 3; i++) {
-        const u32 fb_id = i == 2 ? 1 : 0;
-        const auto& framebuffer = framebuffer_config[fb_id];
-        bool right_eye = (i == 1);
-        if (framebuffer.address_right1 == 0 || framebuffer.address_right2 == 0) {
-            right_eye = false;
-        }
-        diag_addr[i] = framebuffer.active_fb == 0
-                          ? (right_eye ? framebuffer.address_right1 : framebuffer.address_left1)
-                          : (right_eye ? framebuffer.address_right2 : framebuffer.address_left2);
-        diag_view[i] = reinterpret_cast<std::uintptr_t>(
-            static_cast<VkImageView>(screen_infos[i].image_view));
-    }
-
-    if (diag_frame % 300 == 1) {
-        LOG_WARNING(Render_Vulkan,
-                    "SCREENDIAG snapshot frame={} top-l addr=0x{:08x} view=0x{:x} | top-r "
-                    "addr=0x{:08x} view=0x{:x} | bottom addr=0x{:08x} view=0x{:x}",
-                    diag_frame, diag_addr[0], diag_view[0], diag_addr[1], diag_view[1],
-                    diag_addr[2], diag_view[2]);
-    }
-
-    for (u32 a = 0; a < 3; a++) {
-        for (u32 b = a + 1; b < 3; b++) {
-            if (diag_view[a] != 0 && diag_view[a] == diag_view[b]) {
-                LOG_CRITICAL(Render_Vulkan,
-                            "SCREENDIAG ALIAS frame={} screen{}==screen{} view=0x{:x} "
-                            "addr{}=0x{:08x} addr{}=0x{:08x}",
-                            diag_frame, a, b, diag_view[a], a, diag_addr[a], b, diag_addr[b]);
-            }
-        }
-    }
-
-    // Raw top-vs-bottom buffer-address collision across the FULL slot set (active + back), not
-    // just whichever slot is currently active. If a top buffer address ever equals a bottom
-    // buffer address, the two screens are literally sharing memory -> guaranteed bleed. This
-    // catches in-game collisions the image_view alias check above misses (that check only sees
-    // the currently-bound surface, which lags a frame behind the game writing the back buffer).
-    const std::array<std::pair<const char*, PAddr>, 4> diag_top_slots{{
-        {"top-l1", framebuffer_config[0].address_left1},
-        {"top-l2", framebuffer_config[0].address_left2},
-        {"top-r1", framebuffer_config[0].address_right1},
-        {"top-r2", framebuffer_config[0].address_right2},
-    }};
-    const std::array<std::pair<const char*, PAddr>, 4> diag_bottom_slots{{
-        {"bot-l1", framebuffer_config[1].address_left1},
-        {"bot-l2", framebuffer_config[1].address_left2},
-        {"bot-r1", framebuffer_config[1].address_right1},
-        {"bot-r2", framebuffer_config[1].address_right2},
-    }};
-    for (const auto& [tname, taddr] : diag_top_slots) {
-        if (taddr == 0) {
-            continue;
-        }
-        for (const auto& [bname, baddr] : diag_bottom_slots) {
-            if (baddr != 0 && taddr == baddr) {
-                LOG_CRITICAL(Render_Vulkan,
-                            "SCREENDIAG ADDR-COLLIDE frame={} {}==0x{:08x} {} top_active_fb={} "
-                            "bottom_active_fb={}",
-                            diag_frame, tname, taddr, bname,
-                            framebuffer_config[0].active_fb, framebuffer_config[1].active_fb);
-            }
-        }
-    }
 }
 
 void RendererVulkan::PrepareDraw(Frame* frame, const Layout::FramebufferLayout& layout) {
     const auto sampler = present_samplers[!Settings::values.filter_mode.GetValue()];
     const auto present_set = present_heap.Commit();
     for (u32 index = 0; index < screen_infos.size(); index++) {
+        if (!screen_infos[index].image_view) [[unlikely]] {
+            // Screen texture failed to (re)allocate - writing a null view into the descriptor
+            // set is invalid, and DrawSingleScreen()/DrawSingleScreenStereo() already skip
+            // sampling from this index, so just leave its descriptor slot unwritten.
+            continue;
+        }
         update_queue.AddImageSampler(present_set, 0, index, screen_infos[index].image_view,
                                      sampler);
     }
@@ -336,8 +283,17 @@ void RendererVulkan::PrepareDraw(Frame* frame, const Layout::FramebufferLayout& 
 
 void RendererVulkan::RenderToWindow(PresentWindow& window, const Layout::FramebufferLayout& layout,
                                     bool flipped) {
+    // The in-game quick settings overlay and layout editor both pause emulation while open, so the
+    // game itself stops flagging game_frames_updated - without these extra checks the
+    // skip-duplicate-frames optimization would stop presenting anything at all, freezing the whole
+    // screen (overlay included) until the game resumes. The layout editor's own state (rotation
+    // mode, aspect lock, which screen is selected) only reaches the screen through this gate -
+    // toggling one of those without also triggering a relayout (nothing else in the frame changed)
+    // used to just sit unpresented until some other action happened to also call
+    // RequestFramebufferRelayout().
     if (!Settings::values.use_skip_duplicate_frames.GetValue() ||
-        Core::PerfStats::game_frames_updated) {
+        Core::PerfStats::game_frames_updated || Common::IngameOverlay::IsOpen() ||
+        VideoCore::IsLayoutEditorVisible()) {
         Frame* frame = window.GetRenderFrame();
 
         if (layout.width != frame->width || layout.height != frame->height) {
@@ -357,14 +313,6 @@ void RendererVulkan::RenderToWindow(PresentWindow& window, const Layout::Framebu
         if ((secondaryWindowEnabled && isSecondaryWindow) || (!secondaryWindowEnabled)) {
             Core::PerfStats::game_frames_updated = false;
             screenRendered = true;
-        }
-    } else {
-        static u64 diag_skip_count = 0;
-        if (++diag_skip_count % 60 == 1) {
-            LOG_WARNING(Render_Vulkan,
-                        "SCREENDIAG present skipped (dup-frame) count={} thread=0x{:x}",
-                        diag_skip_count,
-                        std::hash<std::thread::id>{}(std::this_thread::get_id()));
         }
     }
 }
@@ -624,6 +572,188 @@ void RendererVulkan::CreateOverlayFont() {
     device.updateDescriptorSets(write, {});
 }
 
+void RendererVulkan::CreateLoadingIcon() {
+    const Common::LoadingIcon::Icon icon = Common::LoadingIcon::Get();
+    if (icon.size == 0 ||
+        icon.pixels.size() != static_cast<std::size_t>(icon.size) * static_cast<std::size_t>(icon.size)) {
+        loading_icon_available = false;
+        return;
+    }
+
+    vk::Device device = instance.GetDevice();
+
+    const vk::ImageCreateInfo image_info = {
+        .imageType = vk::ImageType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .extent = {icon.size, icon.size, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = vk::SampleCountFlagBits::e1,
+        .usage = vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst,
+    };
+    const VmaAllocationCreateInfo alloc_info = {
+        .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+    };
+    VkImage unsafe_image{};
+    VkImageCreateInfo unsafe_image_info = static_cast<VkImageCreateInfo>(image_info);
+    VkResult result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
+                                     &unsafe_image, &loading_icon_allocation, nullptr);
+    if (result != VK_SUCCESS) [[unlikely]] {
+        LOG_ERROR(Render_Vulkan, "Failed allocating loading-icon texture with error {}", result);
+        loading_icon_available = false;
+        return;
+    }
+    loading_icon_image = vk::Image{unsafe_image};
+
+    const vk::ImageViewCreateInfo view_info = {
+        .image = loading_icon_image,
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .subresourceRange{
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+    loading_icon_view = device.createImageView(view_info);
+
+    const vk::SamplerCreateInfo sampler_info = {
+        .magFilter = vk::Filter::eLinear,
+        .minFilter = vk::Filter::eLinear,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        .anisotropyEnable = false,
+        .compareEnable = false,
+        .borderColor = vk::BorderColor::eFloatTransparentBlack,
+        .unnormalizedCoordinates = false,
+    };
+    loading_icon_sampler = device.createSampler(sampler_info);
+
+    const vk::DeviceSize icon_bytes =
+        static_cast<vk::DeviceSize>(icon.pixels.size()) * sizeof(std::uint32_t);
+    const vk::BufferCreateInfo staging_info = {
+        .size = icon_bytes,
+        .usage = vk::BufferUsageFlagBits::eTransferSrc,
+    };
+    const VmaAllocationCreateInfo staging_alloc_info = {
+        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    VkBuffer unsafe_staging{};
+    VmaAllocation staging_allocation{};
+    VmaAllocationInfo staging_mapped{};
+    VkBufferCreateInfo unsafe_staging_info = static_cast<VkBufferCreateInfo>(staging_info);
+    result = vmaCreateBuffer(instance.GetAllocator(), &unsafe_staging_info, &staging_alloc_info,
+                             &unsafe_staging, &staging_allocation, &staging_mapped);
+    if (result != VK_SUCCESS) [[unlikely]] {
+        LOG_ERROR(Render_Vulkan, "Failed allocating loading-icon staging buffer with error {}",
+                  result);
+        device.destroySampler(loading_icon_sampler);
+        device.destroyImageView(loading_icon_view);
+        vmaDestroyImage(instance.GetAllocator(), loading_icon_image, loading_icon_allocation);
+        loading_icon_available = false;
+        return;
+    }
+    std::memcpy(staging_mapped.pMappedData, icon.pixels.data(), icon_bytes);
+    vk::Buffer staging_buffer{unsafe_staging};
+
+    renderpass_cache.EndRendering();
+    scheduler.Record([image = loading_icon_image, staging_buffer, size = icon.size](
+                         vk::CommandBuffer cmdbuf) {
+        const vk::ImageSubresourceRange range = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+        const vk::ImageMemoryBarrier to_transfer = {
+            .srcAccessMask = vk::AccessFlagBits::eNone,
+            .dstAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = range,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTopOfPipe,
+                               vk::PipelineStageFlagBits::eTransfer, {}, {}, {}, to_transfer);
+
+        const vk::BufferImageCopy copy = {
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource{
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {size, size, 1},
+        };
+        cmdbuf.copyBufferToImage(staging_buffer, image, vk::ImageLayout::eTransferDstOptimal, copy);
+
+        const vk::ImageMemoryBarrier to_shader = {
+            .srcAccessMask = vk::AccessFlagBits::eTransferWrite,
+            .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = range,
+        };
+        cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+                               vk::PipelineStageFlagBits::eFragmentShader, {}, {}, {}, to_shader);
+    });
+    scheduler.Finish();
+    vmaDestroyBuffer(instance.GetAllocator(), staging_buffer, staging_allocation);
+
+    // Its own tiny pool/set rather than growing overlay_descriptor_pool - CreateOverlayFont()
+    // already sized that one for exactly 1 set, and this keeps the two lifecycles independent
+    // (this one only exists loading_icon_available is true).
+    const vk::DescriptorPoolSize pool_size = {
+        .type = vk::DescriptorType::eCombinedImageSampler,
+        .descriptorCount = 1,
+    };
+    loading_icon_descriptor_pool = device.createDescriptorPoolUnique({
+        .maxSets = 1,
+        .poolSizeCount = 1,
+        .pPoolSizes = &pool_size,
+    });
+    const vk::DescriptorSetLayout set_layout = *overlay_descriptor_layout;
+    loading_icon_descriptor_set = device.allocateDescriptorSets({
+        .descriptorPool = *loading_icon_descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &set_layout,
+    })[0];
+
+    const vk::DescriptorImageInfo image_desc = {
+        .sampler = loading_icon_sampler,
+        .imageView = loading_icon_view,
+        .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+    };
+    const vk::WriteDescriptorSet write = {
+        .dstSet = loading_icon_descriptor_set,
+        .dstBinding = 0,
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = vk::DescriptorType::eCombinedImageSampler,
+        .pImageInfo = &image_desc,
+    };
+    device.updateDescriptorSets(write, {});
+
+    loading_icon_available = true;
+}
+
 void RendererVulkan::BuildLayouts() {
     const vk::PushConstantRange push_range = {
         .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
@@ -643,11 +773,14 @@ void RendererVulkan::BuildLayouts() {
     const vk::PipelineLayoutCreateInfo cursor_layout_info = {};
     cursor_pipeline_layout = instance.GetDevice().createPipelineLayoutUnique(cursor_layout_info);
 
-    // The overlay samples the font atlas and takes a per-batch tint via push constant.
+    // The overlay samples its bound texture (font atlas, or the loading-icon texture) and takes
+    // a per-batch tint + mode via push constant - see vulkan_overlay.frag's PushConstants.
     const vk::PushConstantRange overlay_push_range = {
         .stageFlags = vk::ShaderStageFlagBits::eFragment,
         .offset = 0,
-        .size = sizeof(float) * 4,
+        // vec4 color + int mode, matching vulkan_overlay.frag's PushConstants exactly (see the
+        // OverlayPushConstants struct RecordOverlay uses to push it).
+        .size = sizeof(float) * 4 + sizeof(s32),
     };
     const vk::DescriptorSetLayout overlay_set_layout = *overlay_descriptor_layout;
     const vk::PipelineLayoutCreateInfo overlay_layout_info = {
@@ -1076,8 +1209,17 @@ void RendererVulkan::ConfigureFramebufferTexture(TextureInfo& texture,
     VkResult result = vmaCreateImage(instance.GetAllocator(), &unsafe_image_info, &alloc_info,
                                      &unsafe_image, &texture.allocation, nullptr);
     if (result != VK_SUCCESS) [[unlikely]] {
-        LOG_CRITICAL(Render_Vulkan, "Failed allocating texture with error {}", result);
-        UNREACHABLE();
+        // Same reasoning as vk_texture_runtime.cpp's Handle::Create - genuinely reachable under
+        // memory pressure, and FillScreen()/screen draw already treat a null texture.image as
+        // "not ready yet", so leave this Handle without a real image rather than crashing.
+        LOG_CRITICAL(Render_Vulkan, "Failed allocating {}x{} screen texture with error {}, skipping",
+                    image_info.extent.width, image_info.extent.height, result);
+        texture.allocation = VK_NULL_HANDLE;
+        texture.image = vk::Image{};
+        texture.image_view = vk::ImageView{};
+        texture.width = 0;
+        texture.height = 0;
+        return;
     }
     texture.image = vk::Image{unsafe_image};
 
@@ -1093,7 +1235,18 @@ void RendererVulkan::ConfigureFramebufferTexture(TextureInfo& texture,
             .layerCount = 1,
         },
     };
-    texture.image_view = device.createImageView(view_info);
+    const vk::Result view_result = device.createImageView(&view_info, nullptr, &texture.image_view);
+    if (view_result != vk::Result::eSuccess) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan, "Failed creating screen texture view with error {}, skipping",
+                    vk::to_string(view_result));
+        vmaDestroyImage(instance.GetAllocator(), texture.image, texture.allocation);
+        texture.allocation = VK_NULL_HANDLE;
+        texture.image = vk::Image{};
+        texture.image_view = vk::ImageView{};
+        texture.width = 0;
+        texture.height = 0;
+        return;
+    }
 
     texture.width = framebuffer.width;
     texture.height = framebuffer.height;
@@ -1179,6 +1332,11 @@ void RendererVulkan::ReloadPipeline(Settings::StereoRenderOption render_3d) {
 void RendererVulkan::DrawSingleScreen(u32 screen_id, float x, float y, float w, float h,
                                       Layout::DisplayOrientation orientation) {
     const ScreenInfo& screen_info = screen_infos[screen_id];
+    if (!screen_info.image_view) [[unlikely]] {
+        // The screen texture failed to (re)allocate (e.g. out of device memory during a
+        // resolution change) - skip drawing this screen for now rather than binding a null view.
+        return;
+    }
     const auto& texcoords = screen_info.texcoords;
 
     std::array<ScreenRectVertex, 4> vertices;
@@ -1251,6 +1409,10 @@ void RendererVulkan::DrawSingleScreenStereo(u32 screen_id_l, u32 screen_id_r, fl
                                             float w, float h,
                                             Layout::DisplayOrientation orientation) {
     const ScreenInfo& screen_info_l = screen_infos[screen_id_l];
+    const ScreenInfo& screen_info_r = screen_infos[screen_id_r];
+    if (!screen_info_l.image_view || !screen_info_r.image_view) [[unlikely]] {
+        return;
+    }
     const auto& texcoords = screen_info_l.texcoords;
 
     std::array<ScreenRectVertex, 4> vertices;
@@ -1335,12 +1497,18 @@ void RendererVulkan::DrawTopScreen(const Layout::FramebufferLayout& layout,
     int leftside, rightside;
     leftside = Settings::values.swap_eyes_3d.GetValue() ? 1 : 0;
     rightside = Settings::values.swap_eyes_3d.GetValue() ? 0 : 1;
-    const float top_screen_left = static_cast<float>(top_screen.left);
-    const float top_screen_top = static_cast<float>(top_screen.top);
-    const float top_screen_width = static_cast<float>(top_screen.GetWidth());
-    const float top_screen_height = static_cast<float>(top_screen.GetHeight());
 
-    const auto orientation = layout.GetOrientation();
+    const bool custom_layout =
+        Settings::values.layout_option.GetValue() == Settings::LayoutOption::CustomLayout;
+    const int top_rotation = custom_layout ? Settings::values.custom_top_rotation.GetValue() : 0;
+    const Common::Rectangle<u32> effective_top_screen =
+        Layout::RotatedScreenRect(top_screen, top_rotation);
+    const float top_screen_left = static_cast<float>(effective_top_screen.left);
+    const float top_screen_top = static_cast<float>(effective_top_screen.top);
+    const float top_screen_width = static_cast<float>(effective_top_screen.GetWidth());
+    const float top_screen_height = static_cast<float>(effective_top_screen.GetHeight());
+
+    const auto orientation = Layout::OrientationForRotation(top_rotation, layout.GetOrientation());
     switch (layout.render_3d_mode) {
     case Settings::StereoRenderOption::Off: {
         const int eye = static_cast<int>(Settings::values.mono_render_option.GetValue());
@@ -1389,12 +1557,19 @@ void RendererVulkan::DrawBottomScreen(const Layout::FramebufferLayout& layout,
         return;
     }
 
-    const float bottom_screen_left = static_cast<float>(bottom_screen.left);
-    const float bottom_screen_top = static_cast<float>(bottom_screen.top);
-    const float bottom_screen_width = static_cast<float>(bottom_screen.GetWidth());
-    const float bottom_screen_height = static_cast<float>(bottom_screen.GetHeight());
+    const bool custom_layout =
+        Settings::values.layout_option.GetValue() == Settings::LayoutOption::CustomLayout;
+    const int bottom_rotation =
+        custom_layout ? Settings::values.custom_bottom_rotation.GetValue() : 0;
+    const Common::Rectangle<u32> effective_bottom_screen =
+        Layout::RotatedScreenRect(bottom_screen, bottom_rotation);
+    const float bottom_screen_left = static_cast<float>(effective_bottom_screen.left);
+    const float bottom_screen_top = static_cast<float>(effective_bottom_screen.top);
+    const float bottom_screen_width = static_cast<float>(effective_bottom_screen.GetWidth());
+    const float bottom_screen_height = static_cast<float>(effective_bottom_screen.GetHeight());
 
-    const auto orientation = layout.GetOrientation();
+    const auto orientation =
+        Layout::OrientationForRotation(bottom_rotation, layout.GetOrientation());
 
     switch (layout.render_3d_mode) {
     case Settings::StereoRenderOption::Off: {
@@ -1457,6 +1632,8 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     OverlayDraw fps_overlay = PrepareFpsOverlay(layout);
     OverlayDraw shader_compile_overlay = PrepareShaderCompileOverlay(layout);
     OverlayDraw loading_overlay = PrepareLoadingOverlay(layout);
+    OverlayDraw ingame_settings_overlay = PrepareIngameSettingsOverlay(layout);
+    OverlayDraw hold_progress_ring = PrepareHoldProgressRing(layout);
     OverlayDraw layout_editor = PrepareLayoutEditor(layout);
 
     PrepareDraw(frame, layout);
@@ -1470,7 +1647,15 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     // Apply the initial default opacity value; Needed to avoid flickering
     ApplySecondLayerOpacity(1.0f);
 
-    if (!Settings::values.swap_screen.GetValue()) {
+    // For CustomLayout the two rects can actually overlap, so which one is drawn last (and
+    // therefore visible on top) is its own setting rather than swap_screen, which just controls
+    // draw order for layouts where the screens never overlap in the first place.
+    const bool top_drawn_last =
+        Settings::values.layout_option.GetValue() == Settings::LayoutOption::CustomLayout
+            ? Settings::values.custom_top_screen_on_top.GetValue()
+            : Settings::values.swap_screen.GetValue();
+
+    if (!top_drawn_last) {
         DrawTopScreen(layout, top_screen);
         draw_info.layer = 0;
         if (layout.bottom_opacity < 1) {
@@ -1500,6 +1685,8 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     RecordOverlay(std::move(fps_overlay));
     RecordOverlay(std::move(shader_compile_overlay));
     RecordOverlay(std::move(loading_overlay));
+    RecordOverlay(std::move(ingame_settings_overlay));
+    RecordOverlay(std::move(hold_progress_ring));
     RecordOverlay(std::move(layout_editor));
 
     scheduler.Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRenderPass(); });
@@ -1584,6 +1771,39 @@ public:
                  OverlayFont::kWhiteV);
     }
 
+    // A rect of size (w, h) centered at (cx, cy), rotated about its own center - same corner-
+    // rotation math as GpuCanvas::EmitQuad (gpu_canvas.cpp), ported here since OverlayBuilder has
+    // no rotation support of its own and this is the only overlay pass that needs it (the
+    // hold-progress ring's spokes).
+    void AddRotatedRect(float cx, float cy, float w, float h, float rotation_radians) {
+        const float hx = w * 0.5f, hy = h * 0.5f;
+        const float cos_r = std::cos(rotation_radians), sin_r = std::sin(rotation_radians);
+        const auto rotate = [&](float dx, float dy) {
+            return std::pair<float, float>{cx + dx * cos_r - dy * sin_r,
+                                           cy + dx * sin_r + dy * cos_r};
+        };
+        const auto [x0, y0] = rotate(-hx, -hy);
+        const auto [x1, y1] = rotate(hx, -hy);
+        const auto [x2, y2] = rotate(-hx, hy);
+        const auto [x3, y3] = rotate(hx, hy);
+        const float l0 = x0 * inv_w - 1.0f, t0 = y0 * inv_h - 1.0f;
+        const float l1 = x1 * inv_w - 1.0f, t1 = y1 * inv_h - 1.0f;
+        const float l2 = x2 * inv_w - 1.0f, t2 = y2 * inv_h - 1.0f;
+        const float l3 = x3 * inv_w - 1.0f, t3 = y3 * inv_h - 1.0f;
+        const float u = OverlayFont::kWhiteU, v = OverlayFont::kWhiteV;
+        verts.insert(verts.end(), {
+                                      l0, t0, u, v, l1, t1, u, v, l2, t2, u, v,
+                                      l1, t1, u, v, l3, t3, u, v, l2, t2, u, v,
+                                  });
+    }
+
+    // Unlike AddRect (which pins every corner to one atlas texel for flat fills), this spans real
+    // UVs across the quad - for sampling an actual image (the loading screen's icon background).
+    void AddTexturedRect(float x0, float y0, float x1, float y1, float u0, float v0, float u1,
+                         float v1) {
+        PushQuad(x0, y0, x1, y1, u0, v0, u1, v1);
+    }
+
     // Width in output pixels that a string occupies.
     static float Measure(std::string_view text, float scale) {
         float width = 0.0f;
@@ -1625,6 +1845,50 @@ private:
     float inv_w;
     float inv_h;
 };
+
+// Matches vulkan_overlay.frag's PushConstants layout exactly (vec4 + int, tightly packed).
+struct OverlayPushConstants {
+    std::array<float, 4> color;
+    s32 mode;
+};
+
+// Mirrors citra_switch/ui_theme.cpp's DarkPalette() exactly (CurrentPalette() always returns it -
+// there's no light/dark toggle exposed today). Duplicated rather than shared because this file
+// can't depend on the citra_switch frontend target - kept in sync by hand if DarkPalette() changes.
+namespace UiColor {
+constexpr std::array<float, 4> kBg = {0x17 / 255.0f, 0x18 / 255.0f, 0x1B / 255.0f, 1.0f};
+constexpr std::array<float, 4> kSurface = {0x24 / 255.0f, 0x26 / 255.0f, 0x2B / 255.0f, 1.0f};
+constexpr std::array<float, 4> kSurfaceWarm = {0x39 / 255.0f, 0x36 / 255.0f, 0x2D / 255.0f, 1.0f};
+constexpr std::array<float, 4> kAccent = {0xFA / 255.0f, 0xAA / 255.0f, 0x49 / 255.0f, 1.0f};
+constexpr std::array<float, 4> kAccentDim = {0x8C / 255.0f, 0x5F / 255.0f, 0x29 / 255.0f, 1.0f};
+constexpr std::array<float, 4> kText = {0xF1 / 255.0f, 0xF2 / 255.0f, 0xF4 / 255.0f, 1.0f};
+constexpr std::array<float, 4> kTextDim = {0x9B / 255.0f, 0xA0 / 255.0f, 0xA6 / 255.0f, 1.0f};
+} // namespace UiColor
+
+std::vector<std::string> WrapOverlayText(std::string_view text, float scale, float max_width) {
+    std::vector<std::string> lines;
+    std::size_t word_start = 0;
+    std::string current_line;
+    while (word_start < text.size()) {
+        const std::size_t word_end = text.find(' ', word_start);
+        const std::string_view word = text.substr(
+            word_start, word_end == std::string_view::npos ? std::string_view::npos
+                                                            : word_end - word_start);
+        std::string candidate =
+            current_line.empty() ? std::string(word) : current_line + " " + std::string(word);
+        if (current_line.empty() || OverlayBuilder::Measure(candidate, scale) <= max_width) {
+            current_line = std::move(candidate);
+        } else {
+            lines.push_back(std::move(current_line));
+            current_line = std::string(word);
+        }
+        word_start = word_end == std::string_view::npos ? text.size() : word_end + 1;
+    }
+    if (!current_line.empty()) {
+        lines.push_back(std::move(current_line));
+    }
+    return lines;
+}
 } // namespace
 
 RendererVulkan::OverlayDraw RendererVulkan::PrepareFpsOverlay(
@@ -1704,6 +1968,9 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareFpsOverlay(
 
 RendererVulkan::OverlayDraw RendererVulkan::PrepareShaderCompileOverlay(
     const Layout::FramebufferLayout& layout) {
+    if (!Settings::values.show_shader_compile_progress.GetValue()) {
+        return {};
+    }
     const auto progress = Common::ShaderCompileStats::GetProgress();
     if (!progress) {
         return {};
@@ -1719,14 +1986,12 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareShaderCompileOverlay(
         return {};
     }
 
-    // Same sizing scheme as the FPS counter so the two read as one system.
     const float em = std::max(14.0f, std::round(h / 32.0f));
     const float scale = em / OverlayFont::kBakePixelHeight;
     const float margin = std::round(em * 0.6f);
-    const float pad = std::round(em * 0.35f);
+    const float pad = std::round(em * 0.6f);
     const float line_h = OverlayFont::kLineHeight * scale;
 
-    // Stack below the FPS counter instead of overlapping it, when that's also shown.
     const float top = Settings::values.show_fps.GetValue() ? margin + line_h + pad * 2.0f : margin;
 
     float ink_top = OverlayFont::kAscent;
@@ -1745,27 +2010,56 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareShaderCompileOverlay(
 
     const float text_w = OverlayBuilder::Measure(text, scale);
 
-    builder.AddRect(margin - pad, top + ink_top * scale - pad, margin + text_w + pad,
-                    top + ink_bottom * scale + pad);
-    const u32 box_vertices = builder.VertexCount();
+    constexpr float kOutlineWidth = 2.0f;
+    constexpr float kAccentHeight = 3.0f;
+    const float box_x0 = margin - pad;
+    const float box_y0 = top + ink_top * scale - pad;
+    const float box_x1 = margin + text_w + pad;
+    const float box_y1 = top + ink_bottom * scale + pad;
 
-    builder.AddText(margin, top, text, scale);
-    const u32 glyph_vertices = builder.VertexCount() - box_vertices;
+    constexpr std::array<float, 4> c_outline = {0.0f, 0.0f, 0.0f, 1.0f};
+    const std::array<float, 4>& c_panel = UiColor::kSurface;
+    const std::array<float, 4>& c_accent = UiColor::kAccent;
+    const std::array<float, 4>& c_text = UiColor::kText;
+
+    std::vector<OverlayDraw::Batch> batches;
+    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
+        const u32 count = builder.VertexCount() - start;
+        if (count > 0) {
+            batches.push_back({color, start, count});
+        }
+    };
+
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(box_x0 - kOutlineWidth, box_y0 - kOutlineWidth, box_x1 + kOutlineWidth,
+                        box_y1 + kOutlineWidth);
+        emit(c_outline, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(box_x0, box_y0, box_x1, box_y1);
+        emit(c_panel, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(box_x0, box_y0, box_x1, box_y0 + kAccentHeight);
+        emit(c_accent, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddText(margin, top, text, scale);
+        emit(c_text, s);
+    }
 
     const u64 size = verts.size() * sizeof(float);
     auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
     std::memcpy(data, verts.data(), size);
     overlay_vertex_buffer.Commit(size);
 
-    constexpr std::array<float, 4> box_color = {0.0f, 0.0f, 0.0f, 0.55f};
-    constexpr std::array<float, 4> text_color = {1.0f, 0.78f, 0.35f, 1.0f};
-
     OverlayDraw overlay;
     overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
-    overlay.batches.push_back({box_color, 0, box_vertices});
-    if (glyph_vertices > 0) {
-        overlay.batches.push_back({text_color, box_vertices, glyph_vertices});
-    }
+    overlay.batches = std::move(batches);
     return overlay;
 }
 
@@ -1839,10 +2133,21 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLoadingOverlay(
     verts.reserve(512);
     OverlayBuilder builder{verts, w, h};
 
-    constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.75f};
-    constexpr std::array<float, 4> c_panel = {0.10f, 0.11f, 0.14f, 0.96f};
-    constexpr std::array<float, 4> c_title = {1.0f, 1.0f, 1.0f, 1.0f};
-    constexpr std::array<float, 4> c_count = {0.70f, 0.73f, 0.82f, 1.0f};
+    // Dulled well below full brightness, then dimmed again on top - between the two the icon
+    // stays recognizable as a backdrop without ever competing with the panel's text. When there's
+    // no icon (title never scanned by the frontend, e.g. booted straight from a CLI path), skip
+    // straight to the old flat-dim look at its original, stronger opacity.
+    constexpr std::array<float, 4> c_icon_tint = {0.55f, 0.55f, 0.55f, 1.0f};
+    const std::array<float, 4> c_dim = loading_icon_available
+                                           ? std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.35f}
+                                           : std::array<float, 4>{0.0f, 0.0f, 0.0f, 0.75f};
+    constexpr std::array<float, 4> c_outline = {0.0f, 0.0f, 0.0f, 1.0f};
+    const std::array<float, 4>& c_accent = UiColor::kAccent;
+    const std::array<float, 4>& c_panel = UiColor::kSurface;
+    const std::array<float, 4>& c_title = UiColor::kText;
+    const std::array<float, 4>& c_count = UiColor::kTextDim;
+    constexpr float kAccentHeight = 3.0f;
+    constexpr float kOutlineWidth = 2.0f;
 
     std::vector<OverlayDraw::Batch> batches;
     const auto emit = [&](const std::array<float, 4>& color, u32 start) {
@@ -1852,18 +2157,51 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLoadingOverlay(
         }
     };
 
-    // Dim behind the panel.
+    // Full-screen background - the launched title's icon (see CreateLoadingIcon), "cover"-cropped
+    // to the screen's aspect ratio rather than stretched out of proportion, since the icon itself
+    // is always square. Real artwork (gametdb, once permitted) will replace this eventually.
+    if (loading_icon_available) {
+        const u32 s = builder.VertexCount();
+        float u0 = 0.0f, v0 = 0.0f, u1 = 1.0f, v1 = 1.0f;
+        if (w > h) {
+            const float crop = h / w;
+            v0 = (1.0f - crop) * 0.5f;
+            v1 = 1.0f - v0;
+        } else if (h > w) {
+            const float crop = w / h;
+            u0 = (1.0f - crop) * 0.5f;
+            u1 = 1.0f - u0;
+        }
+        builder.AddTexturedRect(0.0f, 0.0f, w, h, u0, v0, u1, v1);
+        const u32 count = builder.VertexCount() - s;
+        if (count > 0) {
+            batches.push_back({c_icon_tint, s, count, loading_icon_descriptor_set, 1});
+        }
+    }
+
+    // Dim on top of the icon (or, with no icon, the only thing behind the panel at all).
     {
         const u32 s = builder.VertexCount();
         builder.AddRect(0.0f, 0.0f, w, h);
         emit(c_dim, s);
     }
 
-    // Panel background.
+    // 2px outline, then panel background, then a thin accent strip along its top edge.
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0 - kOutlineWidth, panel_y0 - kOutlineWidth,
+                        panel_x0 + panel_w + kOutlineWidth, panel_y0 + panel_h + kOutlineWidth);
+        emit(c_outline, s);
+    }
     {
         const u32 s = builder.VertexCount();
         builder.AddRect(panel_x0, panel_y0, panel_x0 + panel_w, panel_y0 + panel_h);
         emit(c_panel, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0, panel_y0, panel_x0 + panel_w, panel_y0 + kAccentHeight);
+        emit(c_accent, s);
     }
 
     // Title, centered.
@@ -1880,6 +2218,301 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLoadingOverlay(
         builder.AddText(panel_x0 + (panel_w - count_w) / 2.0f, panel_y0 + pad + title_line_h + gap,
                         count_text, count_scale);
         emit(c_count, s);
+    }
+
+    const u64 size = verts.size() * sizeof(float);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    overlay_vertex_buffer.Commit(size);
+
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches = std::move(batches);
+    return overlay;
+}
+
+// Driven entirely by Common::IngameOverlay::GetState() - citra_switch.cpp's RunGame() owns all
+// navigation/settings logic (it's the only side with access to settings_model.h/game_settings.h)
+// and just publishes the resulting rows/selection/hints here every frame; this function only
+// draws them. Windowed rather than scrolled (only kVisibleRows around the selection are ever
+// emitted) since the overlay pipeline has no per-region scissor to clip a scrolling list against.
+RendererVulkan::OverlayDraw RendererVulkan::PrepareIngameSettingsOverlay(
+    const Layout::FramebufferLayout& layout) {
+    if (!Common::IngameOverlay::IsOpen()) {
+        overlay_was_open_last_frame = false;
+        return {};
+    }
+    const Common::IngameOverlay::State state = Common::IngameOverlay::GetState();
+    if (!state.open) {
+        overlay_was_open_last_frame = false;
+        return {};
+    }
+
+    constexpr double kOpenAnimSeconds = 0.18;
+    constexpr float kOpenSlideDistance = 30.0f;
+    const auto now = std::chrono::steady_clock::now();
+    if (!overlay_was_open_last_frame) {
+        overlay_open_since = now;
+    }
+    overlay_was_open_last_frame = true;
+    const double open_elapsed = std::chrono::duration<double>(now - overlay_open_since).count();
+    const float open_t = static_cast<float>(std::clamp(open_elapsed / kOpenAnimSeconds, 0.0, 1.0));
+    const float open_f = open_t - 1.0f;
+    const float open_eased = open_f * open_f * open_f + 1.0f; // ease-out cubic
+    const float open_offset = (1.0f - open_eased) * kOpenSlideDistance;
+
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return {};
+    }
+
+    const float title_em = std::max(20.0f, std::round(h / 26.0f));
+    const float row_em = std::max(16.0f, std::round(h / 34.0f));
+    const float hint_em = std::max(13.0f, std::round(h / 42.0f));
+    const float title_scale = title_em / OverlayFont::kBakePixelHeight;
+    const float row_scale = row_em / OverlayFont::kBakePixelHeight;
+    const float hint_scale = hint_em / OverlayFont::kBakePixelHeight;
+    const float title_line_h = OverlayFont::kLineHeight * title_scale;
+    const float row_line_h = OverlayFont::kLineHeight * row_scale;
+    const float hint_line_h = OverlayFont::kLineHeight * hint_scale;
+
+    constexpr int kVisibleRows = 8;
+    const int total_rows = static_cast<int>(state.rows.size());
+    const int window_size = std::min(kVisibleRows, total_rows);
+    int scroll_start = state.selected - window_size / 2;
+    scroll_start = std::clamp(scroll_start, 0, std::max(0, total_rows - window_size));
+
+    const float pad = std::round(title_em * 0.9f);
+    const float row_h = std::round(row_line_h * 1.9f);
+    const float panel_w = std::round(w * 0.42f);
+    const float rows_h = static_cast<float>(window_size) * row_h;
+    const std::vector<std::string> desc_lines =
+        state.description.empty()
+            ? std::vector<std::string>{}
+            : WrapOverlayText(state.description, hint_scale, panel_w - pad * 2.0f);
+    const float desc_h = desc_lines.empty()
+                            ? 0.0f
+                            : static_cast<float>(desc_lines.size()) * hint_line_h + pad * 0.5f;
+    const float panel_h = pad + title_line_h + pad * 0.5f + rows_h + desc_h + pad;
+    const float panel_x0 = std::round((w - panel_w) * 0.5f);
+    const float panel_y0 = std::round((h - panel_h) * 0.5f) + open_offset;
+
+    std::vector<float> verts;
+    verts.reserve(2048);
+    OverlayBuilder builder{verts, w, h};
+
+    constexpr std::array<float, 4> c_dim = {0.0f, 0.0f, 0.0f, 0.65f};
+    const std::array<float, 4>& c_panel = UiColor::kSurface;
+    const std::array<float, 4>& c_accent = UiColor::kAccent;
+    const std::array<float, 4>& c_title = UiColor::kText;
+    const std::array<float, 4>& c_row_selected = UiColor::kSurfaceWarm;
+    const std::array<float, 4>& c_row_armed = UiColor::kAccentDim;
+    const std::array<float, 4>& c_text = UiColor::kText;
+    const std::array<float, 4>& c_text_dim = UiColor::kTextDim;
+    constexpr std::array<float, 4> c_outline = {0.0f, 0.0f, 0.0f, 1.0f};
+    constexpr float kAccentHeight = 3.0f;
+    constexpr float kHeaderUnderlineHeight = 2.0f;
+    constexpr float kOutlineWidth = 2.0f;
+
+    std::vector<OverlayDraw::Batch> batches;
+    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
+        const u32 count = builder.VertexCount() - start;
+        if (count > 0) {
+            batches.push_back({color, start, count});
+        }
+    };
+
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(0.0f, 0.0f, w, h);
+        emit(c_dim, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0 - kOutlineWidth, panel_y0 - kOutlineWidth,
+                        panel_x0 + panel_w + kOutlineWidth, panel_y0 + panel_h + kOutlineWidth);
+        emit(c_outline, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0, panel_y0, panel_x0 + panel_w, panel_y0 + panel_h);
+        emit(c_panel, s);
+    }
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(panel_x0, panel_y0, panel_x0 + panel_w, panel_y0 + kAccentHeight);
+        emit(c_accent, s);
+    }
+
+    float y = panel_y0 + pad;
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddText(panel_x0 + pad, y, state.title, title_scale);
+        emit(c_title, s);
+    }
+    y += title_line_h + pad * 0.5f;
+
+    for (int i = scroll_start; i < scroll_start + window_size; ++i) {
+        const Common::IngameOverlay::Row& row = state.rows[static_cast<std::size_t>(i)];
+        if (row.is_header) {
+            const float text_y = y + (row_h - row_line_h) * 0.5f;
+            {
+                const u32 s = builder.VertexCount();
+                builder.AddText(panel_x0 + pad, text_y, row.label, row_scale);
+                emit(c_accent, s);
+            }
+            const u32 s = builder.VertexCount();
+            builder.AddRect(panel_x0 + pad, y + row_h - kHeaderUnderlineHeight,
+                            panel_x0 + panel_w - pad, y + row_h);
+            emit(c_accent, s);
+            y += row_h;
+            continue;
+        }
+        const bool selected = i == state.selected;
+        const bool armed = selected && state.armed;
+        if (selected) {
+            const u32 s = builder.VertexCount();
+            builder.AddRect(panel_x0 + pad * 0.5f, y, panel_x0 + panel_w - pad * 0.5f, y + row_h);
+            emit(armed ? c_row_armed : c_row_selected, s);
+        }
+        const float text_y = y + (row_h - row_line_h) * 0.5f;
+        {
+            const u32 s = builder.VertexCount();
+            builder.AddText(panel_x0 + pad, text_y, row.label, row_scale);
+            emit(selected ? c_text : c_text_dim, s);
+        }
+        if (!row.value.empty()) {
+            const float value_w = OverlayBuilder::Measure(row.value, row_scale);
+            const u32 s = builder.VertexCount();
+            builder.AddText(panel_x0 + panel_w - pad - value_w, text_y, row.value, row_scale);
+            emit(selected ? c_text : c_text_dim, s);
+        }
+        y += row_h;
+    }
+
+    if (!desc_lines.empty()) {
+        y += pad * 0.5f;
+        for (const std::string& line : desc_lines) {
+            const u32 s = builder.VertexCount();
+            builder.AddText(panel_x0 + pad, y, line, hint_scale);
+            emit(c_text_dim, s);
+            y += hint_line_h;
+        }
+    }
+
+    if (!state.hints.empty()) {
+        float hx = panel_x0 + pad;
+        const float hint_y = h - hint_line_h - pad * 0.5f;
+        for (const auto& hint : state.hints) {
+            const std::string text = hint.button + ": " + hint.label;
+            const u32 s = builder.VertexCount();
+            builder.AddText(hx, hint_y, text, hint_scale);
+            emit(c_text_dim, s);
+            hx += OverlayBuilder::Measure(text, hint_scale) + pad;
+        }
+    }
+
+    const u64 size = verts.size() * sizeof(float);
+    auto [data, offset, invalidate] = overlay_vertex_buffer.Map(size, 16);
+    std::memcpy(data, verts.data(), size);
+    overlay_vertex_buffer.Commit(size);
+
+    OverlayDraw overlay;
+    overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
+    overlay.batches = std::move(batches);
+    return overlay;
+}
+
+// Fill-up ring for the Plus+Minus hold-to-open gesture (see citra_switch.cpp's RunGame, which
+// publishes Common::IngameOverlay::SetHoldProgress every frame the chord is held). Hollow-centered
+// (Breath of the Wild style) - a ring of small tangential segments rather than radial spokes, so
+// nothing is drawn near the center. Each segment gets its own thin black backing rect (drawn
+// first, slightly larger) to fake a stroke outline, since OverlayBuilder has no fan/arc/outline
+// primitive of its own (only rects - see AddRotatedRect above).
+RendererVulkan::OverlayDraw RendererVulkan::PrepareHoldProgressRing(
+    const Layout::FramebufferLayout& layout) {
+    const float progress = Common::IngameOverlay::GetHoldProgress();
+    if (progress <= 0.0f) {
+        hold_ring_was_active_last_frame = false;
+        return {};
+    }
+    const float w = static_cast<float>(layout.width);
+    const float h = static_cast<float>(layout.height);
+    if (w <= 0.0f || h <= 0.0f) {
+        return {};
+    }
+
+    constexpr double kPopAnimSeconds = 0.15;
+    const auto now = std::chrono::steady_clock::now();
+    if (!hold_ring_was_active_last_frame) {
+        hold_ring_pop_since = now;
+    }
+    hold_ring_was_active_last_frame = true;
+    const double pop_elapsed = std::chrono::duration<double>(now - hold_ring_pop_since).count();
+    const float pop_t = static_cast<float>(std::clamp(pop_elapsed / kPopAnimSeconds, 0.0, 1.0));
+    const float pop_f = pop_t - 1.0f;
+    const float pop_eased = pop_f * pop_f * pop_f + 1.0f; // ease-out cubic
+
+    const float cx = w * 0.5f;
+    // Rests in the upper-middle area rather than dead center - "pops up" from the top edge into
+    // this resting spot as pop_eased ramps 0->1.
+    const float rest_cy = h * 0.22f;
+    const float start_cy = -h * 0.05f;
+    const float cy = start_cy + (rest_cy - start_cy) * pop_eased;
+    const float scale = 0.7f + 0.3f * pop_eased;
+
+    constexpr int kSegmentCount = 40;
+    constexpr float kOutlineMargin = 2.0f;
+    const float radius = std::round(std::min(w, h) * 0.045f) * scale;
+    const float thickness = std::max(3.0f, radius * 0.42f);
+    // Chord length for one segment's arc slice, with a little overlap so segments visually touch.
+    const float arc_len = 2.0f * radius * std::sin(3.14159265f / static_cast<float>(kSegmentCount)) * 1.35f;
+
+    std::vector<float> verts;
+    verts.reserve(static_cast<std::size_t>(kSegmentCount) * 24);
+    OverlayBuilder builder{verts, w, h};
+
+    constexpr std::array<float, 4> c_outline = {0.0f, 0.0f, 0.0f, 0.9f};
+    const std::array<float, 4>& c_lit = UiColor::kAccent;
+    const std::array<float, 4>& c_dim = UiColor::kSurfaceWarm;
+
+    std::vector<OverlayDraw::Batch> batches;
+    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
+        const u32 count = builder.VertexCount() - start;
+        if (count > 0) {
+            batches.push_back({color, start, count});
+        }
+    };
+
+    const int lit_segments =
+        static_cast<int>(std::round(progress * static_cast<float>(kSegmentCount)));
+
+    // Outline pass first - every segment slot, slightly larger, in black.
+    {
+        const u32 s = builder.VertexCount();
+        for (int i = 0; i < kSegmentCount; ++i) {
+            const float angle = (static_cast<float>(i) / static_cast<float>(kSegmentCount)) *
+                                    6.2831853f - 1.5707963f;
+            const float seg_cx = cx + std::cos(angle) * radius;
+            const float seg_cy = cy + std::sin(angle) * radius;
+            builder.AddRotatedRect(seg_cx, seg_cy, thickness + kOutlineMargin * 2.0f,
+                                   arc_len + kOutlineMargin * 2.0f, angle);
+        }
+        emit(c_outline, s);
+    }
+
+    // Fill pass - lit segments (progress so far) then dim ones, each its own batch by color.
+    for (int i = 0; i < kSegmentCount; ++i) {
+        const float angle =
+            (static_cast<float>(i) / static_cast<float>(kSegmentCount)) * 6.2831853f - 1.5707963f;
+        const float seg_cx = cx + std::cos(angle) * radius;
+        const float seg_cy = cy + std::sin(angle) * radius;
+        const u32 s = builder.VertexCount();
+        // A rect's local +y axis points tangentially (not radially) once rotated by `angle`
+        // directly - see AddRotatedRect's rotation convention.
+        builder.AddRotatedRect(seg_cx, seg_cy, thickness, arc_len, angle);
+        emit(i < lit_segments ? c_lit : c_dim, s);
     }
 
     const u64 size = verts.size() * sizeof(float);
@@ -1927,37 +2560,56 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
     verts.reserve(1024);
     OverlayBuilder builder{verts, w, h};
 
+    constexpr std::array<float, 4> c_outline = {0.0f, 0.0f, 0.0f, 1.0f};
+    const std::array<float, 4>& c_idle = UiColor::kTextDim;
+    const std::array<float, 4>& c_active = UiColor::kAccent;
+    const std::array<float, 4> c_active_fill = {UiColor::kAccent[0], UiColor::kAccent[1],
+                                                UiColor::kAccent[2], 0.22f};
+    const std::array<float, 4>& c_chip_bg = UiColor::kSurface;
+    const std::array<float, 4>& c_chip_bg_active = UiColor::kAccentDim;
+    const std::array<float, 4>& c_chip_text = UiColor::kText;
+    const std::array<float, 4>& c_desc_text = UiColor::kTextDim;
+    constexpr float kOutlineWidth = 2.0f;
+
+    std::vector<OverlayDraw::Batch> batches;
+    const auto emit = [&](const std::array<float, 4>& color, u32 start) {
+        const u32 count = builder.VertexCount() - start;
+        if (count > 0) {
+            batches.push_back({color, start, count});
+        }
+    };
+
     const float em = std::max(14.0f, std::round(h / 32.0f));
     const float scale = em / OverlayFont::kBakePixelHeight;
-    const float thickness = std::max(2.0f, std::round(h / 240.0f));
+    const float idle_thickness = std::max(2.0f, std::round(h / 240.0f));
+    const float active_thickness = idle_thickness * 2.0f;
 
-    const auto add_outline = [&](const VideoCore::LayoutEditorRect& r) {
-        const float x0 = r.x * sx;
-        const float y0 = r.y * sy;
-        const float x1 = (r.x + r.w) * sx;
-        const float y1 = (r.y + r.h) * sy;
+    const auto add_border = [&](float x0, float y0, float x1, float y1, float thickness) {
         builder.AddRect(x0, y0, x1, y0 + thickness);             // top
         builder.AddRect(x0, y1 - thickness, x1, y1);             // bottom
         builder.AddRect(x0, y0, x0 + thickness, y1);             // left
         builder.AddRect(x1 - thickness, y0, x1, y1);             // right
     };
 
-    // Unselected outlines first, then the selected one, so each group can carry its own colour.
-    if (!state.selected_top) {
-        add_outline(state.top);
-    }
-    if (!state.selected_bottom) {
-        add_outline(state.bottom);
-    }
-    const u32 idle_vertices = builder.VertexCount();
-
-    if (state.selected_top) {
-        add_outline(state.top);
-    }
-    if (state.selected_bottom) {
-        add_outline(state.bottom);
-    }
-    const u32 active_vertices = builder.VertexCount() - idle_vertices;
+    // Selected screen gets an obvious translucent accent wash over the whole rect plus a thick
+    // accent border; unselected screens get a thin, muted border only - much harder to miss than
+    // a colour-only outline swap when the actual 3D scene is competing for attention behind it.
+    const auto draw_screen = [&](const VideoCore::LayoutEditorRect& r, bool selected) {
+        const float x0 = r.x * sx;
+        const float y0 = r.y * sy;
+        const float x1 = (r.x + r.w) * sx;
+        const float y1 = (r.y + r.h) * sy;
+        if (selected) {
+            const u32 s = builder.VertexCount();
+            builder.AddRect(x0, y0, x1, y1);
+            emit(c_active_fill, s);
+        }
+        const u32 s = builder.VertexCount();
+        add_border(x0, y0, x1, y1, selected ? active_thickness : idle_thickness);
+        emit(selected ? c_active : c_idle, s);
+    };
+    draw_screen(state.top, state.selected_top);
+    draw_screen(state.bottom, state.selected_bottom);
 
     // A single long sentence used to overflow the screen once controller hints were added
     // alongside the touch ones. Button chips (small badge + a one/two-word label, same idea as
@@ -1966,19 +2618,22 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
     struct ChipHint {
         const char* chip;
         std::string label;
+        bool active = false;
     };
-    const std::array<ChipHint, 4> row_common{{
-        {"A", "Save"},
-        {"B", "Cancel"},
-        {"X", state.aspect_locked ? "Free stretch" : "Lock aspect"},
-        {"-", "Reset"},
+    const std::array<ChipHint, 5> row_common{{
+        {"A", "Save", false},
+        {"B", "Cancel", false},
+        {"X", state.aspect_locked ? "Free stretch" : "Lock aspect", !state.aspect_locked},
+        {"-", "Reset", false},
+        {"Y", state.rotation_mode ? "Stop rotating" : "Rotate", state.rotation_mode},
     }};
-    const std::array<ChipHint, 5> row_controller{{
-        {"LS", "Move"},
-        {"RS", "Stretch"},
-        {"ZL/ZR", "Scale"},
-        {"L/R", "Select"},
-        {"D-Pad", "Opacity"},
+    const std::array<ChipHint, 6> row_controller{{
+        {"LS", "Move", false},
+        {"RS", "Stretch", false},
+        {"ZL/ZR", "Scale", false},
+        {"L/R", "Select", false},
+        {"D-Pad L/R", "Opacity", false},
+        {"D-Pad U/D", "Layer", false},
     }};
 
     const float line_h = OverlayFont::kLineHeight * scale;
@@ -1995,6 +2650,7 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
         const char* chip_text;
         float desc_text_x, desc_text_y;
         std::string desc_text;
+        bool active;
     };
     std::vector<ChipDraw> draws;
 
@@ -2025,6 +2681,7 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
             d.desc_text_x = std::round(x + cw + chip_label_gap);
             d.desc_text_y = std::round(row_top + (chip_h - line_h) * 0.5f);
             d.desc_text = entry.label;
+            d.active = entry.active;
             draws.push_back(d);
             x = std::round(x + cw + chip_label_gap + OverlayBuilder::Measure(entry.label, scale) +
                            entry_gap);
@@ -2036,22 +2693,42 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
     layout_row(row_controller, row2_top);
     layout_row(row_common, row1_top);
 
+    // Outline, then background (surface, or accent_dim while that chip's mode is active), per chip
+    // so an active mode reads as an obvious colour change rather than just a word swap.
     for (const auto& d : draws) {
+        const u32 s = builder.VertexCount();
+        builder.AddRect(d.chip_x0 - kOutlineWidth, d.chip_y0 - kOutlineWidth,
+                        d.chip_x1 + kOutlineWidth, d.chip_y1 + kOutlineWidth);
+        emit(c_outline, s);
+    }
+    for (const auto& d : draws) {
+        const u32 s = builder.VertexCount();
         builder.AddRect(d.chip_x0, d.chip_y0, d.chip_x1, d.chip_y1);
+        emit(d.active ? c_chip_bg_active : c_chip_bg, s);
     }
-    const u32 chip_bg_vertices = builder.VertexCount() - idle_vertices - active_vertices;
-
-    for (const auto& d : draws) {
-        builder.AddText(d.chip_text_x, d.chip_text_y, d.chip_text, scale);
+    {
+        const u32 s = builder.VertexCount();
+        for (const auto& d : draws) {
+            builder.AddText(d.chip_text_x, d.chip_text_y, d.chip_text, scale);
+        }
+        emit(c_chip_text, s);
     }
-    const u32 chip_text_vertices =
-        builder.VertexCount() - idle_vertices - active_vertices - chip_bg_vertices;
-
     for (const auto& d : draws) {
+        const u32 s = builder.VertexCount();
         builder.AddText(d.desc_text_x, d.desc_text_y, d.desc_text, scale);
+        emit(d.active ? c_active : c_desc_text, s);
     }
-    const u32 desc_text_vertices = builder.VertexCount() - idle_vertices - active_vertices -
-                                   chip_bg_vertices - chip_text_vertices;
+
+    const std::string rotation_line = fmt::format("Top {}deg   Bottom {}deg",
+                                                  state.top_rotation_degrees,
+                                                  state.bottom_rotation_degrees);
+    const float rotation_line_w = OverlayBuilder::Measure(rotation_line, scale);
+    {
+        const u32 s = builder.VertexCount();
+        builder.AddText(std::round((w - rotation_line_w) * 0.5f),
+                        std::round(row2_top - row_gap - line_h), rotation_line, scale);
+        emit(state.rotation_mode ? c_active : c_desc_text, s);
+    }
 
     const u64 size = verts.size() * sizeof(float);
     if (size == 0) {
@@ -2061,34 +2738,9 @@ RendererVulkan::OverlayDraw RendererVulkan::PrepareLayoutEditor(
     std::memcpy(data, verts.data(), size);
     overlay_vertex_buffer.Commit(size);
 
-    constexpr std::array<float, 4> idle_color = {1.0f, 1.0f, 1.0f, 0.45f};
-    constexpr std::array<float, 4> active_color = {0.35f, 0.85f, 1.0f, 0.95f};
-    constexpr std::array<float, 4> chip_bg_color = {0.0f, 0.0f, 0.0f, 0.75f};
-    constexpr std::array<float, 4> chip_text_color = {1.0f, 1.0f, 1.0f, 1.0f};
-    constexpr std::array<float, 4> desc_text_color = {0.85f, 0.85f, 0.85f, 0.9f};
-
     OverlayDraw overlay;
     overlay.base_vertex = static_cast<u32>(offset) / (sizeof(float) * 4);
-    u32 first = 0;
-    if (idle_vertices > 0) {
-        overlay.batches.push_back({idle_color, first, idle_vertices});
-    }
-    first += idle_vertices;
-    if (active_vertices > 0) {
-        overlay.batches.push_back({active_color, first, active_vertices});
-    }
-    first += active_vertices;
-    if (chip_bg_vertices > 0) {
-        overlay.batches.push_back({chip_bg_color, first, chip_bg_vertices});
-    }
-    first += chip_bg_vertices;
-    if (chip_text_vertices > 0) {
-        overlay.batches.push_back({chip_text_color, first, chip_text_vertices});
-    }
-    first += chip_text_vertices;
-    if (desc_text_vertices > 0) {
-        overlay.batches.push_back({desc_text_color, first, desc_text_vertices});
-    }
+    overlay.batches = std::move(batches);
     return overlay;
 }
 
@@ -2099,12 +2751,14 @@ void RendererVulkan::RecordOverlay(OverlayDraw overlay) {
     scheduler.Record([this, base_vertex = overlay.base_vertex,
                       batches = std::move(overlay.batches)](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, overlay_pipeline);
-        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *overlay_pipeline_layout, 0,
-                                  overlay_descriptor_set, {});
         cmdbuf.bindVertexBuffers(0, overlay_vertex_buffer.Handle(), {0});
         for (const auto& b : batches) {
+            const vk::DescriptorSet set = b.descriptor_set ? b.descriptor_set : overlay_descriptor_set;
+            cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, *overlay_pipeline_layout, 0,
+                                      set, {});
+            const OverlayPushConstants pc{b.color, b.mode};
             cmdbuf.pushConstants(*overlay_pipeline_layout, vk::ShaderStageFlagBits::eFragment, 0,
-                                 static_cast<u32>(b.color.size() * sizeof(float)), b.color.data());
+                                 static_cast<u32>(sizeof(OverlayPushConstants)), &pc);
             cmdbuf.draw(b.count, 1, base_vertex + b.first, 0);
         }
     });

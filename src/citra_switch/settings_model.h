@@ -18,9 +18,9 @@
 // both can drive the exact same rows/logic instead of each keeping its own copy.
 namespace SwitchFrontend {
 
-enum class SettingsTab { Graphics, Debug, Misc, Controls, Updates };
-extern const std::array<std::pair<SettingsTab, const char*>, 5> kSettingsTabs;
-inline constexpr int kNumSettingsTabs = 5;
+enum class SettingsTab { Display, Performance, Advanced, System, Paths, Controls, Updates };
+extern const std::array<std::pair<SettingsTab, const char*>, 7> kSettingsTabs;
+inline constexpr int kNumSettingsTabs = 7;
 
 enum SettingRowIdx {
     SettingRowResolution,
@@ -35,9 +35,12 @@ enum SettingRowIdx {
     SettingRowLinearFiltering,
     SettingRowIntegerScaling,
     SettingRowShowFps,
+    SettingRowShowShaderCompileProgress,
     SettingRowDisableRightEye,
     SettingRowCpuClock,
     SettingRowNew3ds,
+    SettingRowPluginLoader,
+    SettingRowAllowPluginLoader,
     SettingRowCpuJit,
     SettingRowFastmem,
     SettingRowRegion,
@@ -46,12 +49,14 @@ enum SettingRowIdx {
     SettingRowGyroSensitivity,
     SettingRowPreloadTextures,
     SettingRowDumpTextures,
+    SettingRowLayout,
     SettingRowLayoutCycle,
     SettingRowDisablePipelineFastPath,
     SettingRowSkipSlowDraw,
     SettingRowSkipTextureCopy,
     SettingRowSkipCpuWrite,
     SettingRowEnableCompileBoost,
+    SettingRowEnableGpuFrameLog,
     SettingRowCustomTextures,
     // Not emitted by BuildSettingRows — a tag the in-game settings screen uses for its own
     // synthetic "Edit Screen Layout" action row, which has no MenuSettings field of its own (it
@@ -61,19 +66,32 @@ enum SettingRowIdx {
     // never produces.
     SettingRowEditLayout,
     SettingRowMovieThrottle,
+    SettingRowMovieThrottleEnabled,
+    SettingRowGameTdbEnabled,
+    // Not a MenuSettings-backed value - Confirm on this row kicks off (or reopens the progress
+    // popup for) gametdb.cpp's background cover download instead of toggling/cycling anything.
+    // IsBooleanSetting/IsCyclableRow/etc. all fall through to their default case for it.
+    SettingRowDownloadCovers,
     SettingRowPointerMode,
+    // Non-selectable group divider - only `label` is meaningful (see SettingRow::is_header).
+    SettingRowSectionHeader,
 };
 
 struct SettingRow {
     SettingRowIdx item;
-    const char* label;
+    // std::string, not const char* - most rows still pass a literal (implicitly converts fine),
+    // but a growing number pass a Tr() result (see ui_strings.h) for the ones already localized.
+    std::string label;
     std::string value;
-    const char* description;
+    std::string description;
+    // True for a group-divider row (accent label + underline, same idiom as ui_controls.cpp's
+    // ControlEntry::is_header) - non-selectable, skipped by FirstSelectableRow/NextSelectableRow.
+    bool is_header = false;
 };
 
-const char* RegionName(int region);
+std::string RegionName(int region);
 const char* LanguageName(int language);
-const char* TextureFilterName(int filter);
+std::string TextureFilterName(int filter);
 std::string ResolutionText(int factor);
 std::string LayoutCycleSummary(std::uint32_t mask);
 std::string GyroSensitivityText(const MenuSettings& s);
@@ -81,6 +99,13 @@ std::string GyroSensitivityArmedText(const MenuSettings& s, bool y_axis);
 
 std::vector<SettingRow> BuildSettingRows(SettingsTab tab, const MenuSettings& s);
 void AdjustGyroAxis(MenuSettings& s, bool y_axis, int dir);
+
+// Every IsPerGameEditable row across the Graphics/Debug/Misc tabs, minus gyro sensitivity (its
+// two-axis armed-bar interaction doesn't fit a plain toggle/cycle row model) - the single source
+// of truth for both the library's per-game settings screen (ui_gamesettings.cpp) and the in-game
+// quick menu (citra_switch.cpp's RunGame), so the two never drift out of sync with each other or
+// with IsPerGameEditable's own filter.
+std::vector<SettingRow> BuildPerGameSettingRows(const MenuSettings& s);
 
 // Rows that cycle a value in place via the joystick once armed. Boolean rows are handled by
 // IsBooleanSetting/ToggleSetting below instead (flipped directly by an A press).
@@ -100,4 +125,14 @@ void ToggleSetting(MenuSettings& s, SettingRowIdx item);
 bool IsPerGameEditable(SettingRowIdx item);
 
 bool RequiresRestart(SettingRowIdx item);
+
+// Index of the first selectable (non-header) row, or 0 if `rows` has none (callers index a
+// non-empty rows vector elsewhere, so this never needs to signal "no selectable row" separately).
+int FirstSelectableRow(const std::vector<SettingRow>& rows);
+
+// Moves `index` by `dir` (+1/-1), skipping over header rows; stays put if that runs off either
+// end. Same idiom as ui_controls.cpp's local NextSelectable, shared here since three screens
+// (library Settings, per-game Settings, in-game quick menu) all need it now.
+int NextSelectableRow(const std::vector<SettingRow>& rows, int index, int dir);
+
 } // namespace SwitchFrontend

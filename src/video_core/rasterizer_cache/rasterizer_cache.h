@@ -128,10 +128,13 @@ void RasterizerCache<T>::TickFrame() {
 
 template <class T>
 void RasterizerCache<T>::RunGarbageCollector() {
-    frame_tick++;
+    const u64 remove_tick = runtime.GetResourceTick();
     for (auto it = sentenced.begin(); it != sentenced.end();) {
-        const auto [surface_id, tick] = *it;
-        if (frame_tick - tick <= runtime.RemoveThreshold()) {
+        const auto [surface_id, resource_tick] = *it;
+        // Anything older(lower tick-value) than the resource-free tick-value is done being used
+        // and is ready to be deleted
+        if (remove_tick >= resource_tick) {
+            // Resource is still possibly in-use, skip
             it++;
             continue;
         }
@@ -169,7 +172,7 @@ void RasterizerCache<T>::RemoveTextureCubeFace(SurfaceId surface_id) {
         }
         if (std::none_of(cube.face_ids.begin(), cube.face_ids.end(),
                          [](SurfaceId id) { return id; })) {
-            sentenced.emplace_back(cube.surface_id, frame_tick);
+            sentenced.emplace_back(cube.surface_id, runtime.GetResourceTick());
             it = texture_cube_cache.erase(it);
         } else {
             it++;
@@ -275,7 +278,9 @@ bool RasterizerCache<T>::AccelerateTextureCopy(const Pica::DisplayTransferConfig
         .dst_offset = {dst_rect.left, dst_rect.bottom},
         .extent = {src_rect.GetWidth(), src_rect.GetHeight()},
     };
-    runtime.CopyTextures(src_surface, dst_surface, texture_copy);
+    if (!runtime.CopyTextures(src_surface, dst_surface, texture_copy)) {
+        return false;
+    }
 
     InvalidateRegion(dst_params.addr, dst_params.size, dst_surface_id);
     return true;
@@ -345,7 +350,9 @@ bool RasterizerCache<T>::AccelerateDisplayTransfer(const Pica::DisplayTransferCo
         .src_rect = src_rect,
         .dst_rect = dst_rect,
     };
-    runtime.BlitTextures(src_surface, dst_surface, texture_blit);
+    if (!runtime.BlitTextures(src_surface, dst_surface, texture_blit)) {
+        return false;
+    }
 
     InvalidateRegion(dst_params.addr, dst_params.size, dst_surface_id);
     return true;
@@ -429,7 +436,7 @@ typename T::Sampler& RasterizerCache<T>::GetSampler(
 }
 
 template <class T>
-void RasterizerCache<T>::CopySurface(Surface& src_surface, Surface& dst_surface,
+bool RasterizerCache<T>::CopySurface(Surface& src_surface, Surface& dst_surface,
                                      SurfaceInterval copy_interval) {
     MICROPROFILE_SCOPE(RasterizerCache_CopySurface);
     const PAddr copy_addr = copy_interval.lower();
@@ -442,8 +449,7 @@ void RasterizerCache<T>::CopySurface(Surface& src_surface, Surface& dst_surface,
             .texture_rect = dst_surface.GetScaledSubRect(subrect_params),
             .value = src_surface.MakeClearValue(copy_addr, dst_surface.pixel_format),
         };
-        runtime.ClearTexture(dst_surface, clear);
-        return;
+        return runtime.ClearTexture(dst_surface, clear);
     }
 
     const u32 src_scale = src_surface.res_scale;
@@ -462,7 +468,7 @@ void RasterizerCache<T>::CopySurface(Surface& src_surface, Surface& dst_surface,
             .dst_offset = {dst_rect.left, dst_rect.bottom},
             .extent = {src_rect.GetWidth(), src_rect.GetHeight()},
         };
-        runtime.CopyTextures(src_surface, dst_surface, copy);
+        return runtime.CopyTextures(src_surface, dst_surface, copy);
     } else {
         const TextureBlit blit = {
             .src_level = src_surface.LevelOf(copy_addr),
@@ -470,7 +476,7 @@ void RasterizerCache<T>::CopySurface(Surface& src_surface, Surface& dst_surface,
             .src_rect = src_rect,
             .dst_rect = dst_rect,
         };
-        runtime.BlitTextures(src_surface, dst_surface, blit);
+        return runtime.BlitTextures(src_surface, dst_surface, blit);
     }
 }
 
@@ -599,7 +605,7 @@ SurfaceId RasterizerCache<T>::GetTextureSurface(const Pica::Texture::TextureInfo
         params.res_scale = src_surface.res_scale;
         SurfaceId tmp_surface_id = CreateSurface(params, initial_flags);
         Surface& tmp_surface = slot_surfaces[tmp_surface_id];
-        sentenced.emplace_back(tmp_surface_id, frame_tick);
+        sentenced.emplace_back(tmp_surface_id, runtime.GetResourceTick());
 
         const TextureBlit blit = {
             .src_level = src_surface.LevelOf(params.addr),
@@ -607,7 +613,9 @@ SurfaceId RasterizerCache<T>::GetTextureSurface(const Pica::Texture::TextureInfo
             .src_rect = rect,
             .dst_rect = tmp_surface.GetScaledRect(),
         };
-        runtime.BlitTextures(src_surface, tmp_surface, blit);
+        if (!runtime.BlitTextures(src_surface, tmp_surface, blit)) {
+            return NULL_SURFACE_ID;
+        }
         return tmp_surface_id;
     }
     if (info.width != (min_width << max_level) || info.height != (min_height << max_level)) {
@@ -767,6 +775,17 @@ FramebufferHelper<T> RasterizerCache<T>::GetFramebufferSurfaces(bool using_color
 
     Surface* color_surface = color_id ? &slot_surfaces[color_id] : nullptr;
     Surface* depth_surface = depth_id ? &slot_surfaces[depth_id] : nullptr;
+
+    if (color_surface && depth_surface && color_surface->res_scale != depth_surface->res_scale) {
+        const u32 fb_scale = std::min(color_surface->res_scale, depth_surface->res_scale);
+        color_params.res_scale = fb_scale;
+        depth_params.res_scale = fb_scale;
+        color_id = GetSurface(color_params, ScaleMatch::Exact, false);
+        depth_id = GetSurface(depth_params, ScaleMatch::Exact, false);
+        fb_rect = slot_surfaces[color_id].GetScaledRect();
+        color_surface = &slot_surfaces[color_id];
+        depth_surface = &slot_surfaces[depth_id];
+    }
 
     if (color_id) {
         color_level = color_surface->LevelOf(color_params.addr);
@@ -964,6 +983,7 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
     }
 
     Surface& surface = slot_surfaces[surface_id];
+    const u32 res_scale_before_validate = surface.res_scale;
     const SurfaceInterval validate_interval(addr, addr + size);
 
     if (surface.type == SurfaceType::Fill) {
@@ -1006,9 +1026,10 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
         if (copy_surface_id && copy_surface_id != surface_id) {
             Surface& copy_surface = slot_surfaces[copy_surface_id];
             const SurfaceInterval copy_interval = copy_surface.GetCopyableInterval(params);
-            CopySurface(copy_surface, surface, copy_interval);
-            notify_validated(copy_interval);
-            continue;
+            if (CopySurface(copy_surface, surface, copy_interval)) {
+                notify_validated(copy_interval);
+                continue;
+            }
         }
 
         // Try to find surface in cache with different format
@@ -1023,6 +1044,10 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
             UploadSurface(surface, interval);
         }
         notify_validated(params.GetInterval());
+    }
+
+    if (surface.res_scale != res_scale_before_validate) {
+        RemoveFramebuffers(surface_id);
     }
 
     // Filtered mipmaps often look really bad. We can achieve better quality by
@@ -1125,7 +1150,7 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
             const SurfaceId old_id =
                 slot_surfaces.swap_and_insert(surface_id, runtime, old_surface, material);
             slot_surfaces[old_id].flags &= ~SurfaceFlagBits::Registered;
-            sentenced.emplace_back(old_id, frame_tick);
+            sentenced.emplace_back(old_id, runtime.GetResourceTick());
         }
         Surface& surface = slot_surfaces[surface_id];
         surface.UploadCustom(material, level);
@@ -1372,7 +1397,13 @@ SurfaceId RasterizerCache<T>::CreateSurface(const SurfaceParams& params,
                                             const SurfaceFlagBits& initial_flags) {
     const SurfaceId surface_id = [&] {
         const auto it = std::find_if(sentenced.begin(), sentenced.end(), [&](const auto& pair) {
-            return slot_surfaces[pair.first] == params;
+            if (slot_surfaces[pair.first] != params) {
+                return false;
+            }
+            if (slot_surfaces[pair.first].pixel_format == VideoCore::PixelFormat::D24S8) {
+                return slot_surfaces[pair.first].res_scale == params.res_scale;
+            }
+            return slot_surfaces[pair.first].res_scale <= params.res_scale;
         });
         if (it == sentenced.end()) {
             return slot_surfaces.insert(runtime, params, initial_flags);
@@ -1384,6 +1415,7 @@ SurfaceId RasterizerCache<T>::CreateSurface(const SurfaceParams& params,
     Surface& surface = slot_surfaces[surface_id];
     if (params.res_scale > surface.res_scale) {
         surface.ScaleUp(params.res_scale);
+        RemoveFramebuffers(surface_id);
     }
     surface.MarkInvalid(surface.GetInterval());
     return surface_id;
@@ -1427,7 +1459,7 @@ void RasterizerCache<T>::UnregisterSurface(SurfaceId surface_id) {
 
     if (surface.type != SurfaceType::Fill) {
         RemoveTextureCubeFace(surface_id);
-        sentenced.emplace_back(surface_id, frame_tick);
+        sentenced.emplace_back(surface_id, runtime.GetResourceTick());
         return;
     }
 
@@ -1443,7 +1475,6 @@ void RasterizerCache<T>::UnregisterAll() {
         }
     }
     runtime.Finish();
-    frame_tick += runtime.RemoveThreshold();
     RunGarbageCollector();
 }
 

@@ -31,6 +31,8 @@ set(HASH_FILES
     "${VIDEO_CORE}/shader/generator/shader_uniforms.h"
     "${VIDEO_CORE}/shader/generator/spv_fs_shader_gen.cpp"
     "${VIDEO_CORE}/shader/generator/spv_fs_shader_gen.h"
+    "${VIDEO_CORE}/shader/generator/spv_vs_shader_gen.cpp"
+    "${VIDEO_CORE}/shader/generator/spv_vs_shader_gen.h"
     "${VIDEO_CORE}/shader/shader.cpp"
     "${VIDEO_CORE}/shader/shader.h"
     "${VIDEO_CORE}/pica/regs_framebuffer.h"

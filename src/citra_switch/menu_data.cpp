@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Azahar Emulator Project
 // Copyright(c) 2026: PalindromicBreadLoaf (palindromicbreadloaf@tuta.com)
+// Copyright(c) 2026: Raibatsu (hello@raibatsu.com)
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -11,8 +12,10 @@
 #include <fmt/format.h>
 
 #include "citra_switch/config.h"
+#include "citra_switch/gametdb.h"
 #include "citra_switch/input.h"
 #include "citra_switch/menu_data.h"
+#include "citra_switch/ui_strings.h"
 #include "common/file_derived.h"
 #include "common/file_util.h"
 #include "common/shader_compile_stats.h"
@@ -38,10 +41,12 @@ constexpr std::uint64_t kTidHighDemo = 0x0004000200000000ULL;
 constexpr std::uint64_t kTidHighUpdate = 0x0004000E00000000ULL;
 constexpr std::uint64_t kTidHighDlc = 0x0004008C00000000ULL;
 
-// Don't scan updates/dlcs into the library window.
 constexpr std::array<std::uint64_t, 2> kLibraryTidHighs{kTidHighApplication, kTidHighDemo};
 
-// Decode game icons
+bool IsHiddenEntry(const std::string& virtual_name) {
+    return !virtual_name.empty() && virtual_name.front() == '.';
+}
+
 std::uint32_t Rgb565ToRgba8888(std::uint16_t c) {
     const std::uint32_t r5 = (c >> 11) & 0x1F;
     const std::uint32_t g6 = (c >> 5) & 0x3F;
@@ -52,7 +57,6 @@ std::uint32_t Rgb565ToRgba8888(std::uint16_t c) {
     return 0xFF000000u | (b << 16) | (g << 8) | r;
 }
 
-// Trims a UTF-16 title into a single clean UTF-8 line.
 std::string CleanTitle(const std::array<char16_t, 0x80>& raw) {
     std::u16string u16{raw.data(),
                        std::char_traits<char16_t>::length(raw.data()) > raw.size()
@@ -64,7 +68,6 @@ std::string CleanTitle(const std::array<char16_t, 0x80>& raw) {
             ch = ' ';
         }
     }
-    // Collapse the runs of spaces the newline replacement leaves.
     std::string collapsed;
     collapsed.reserve(out.size());
     bool prev_space = false;
@@ -89,8 +92,8 @@ void FillFromSmdh(GameEntry& entry, const Loader::SMDH& smdh) {
         entry.title = title;
     }
     const auto& pub = smdh.titles[static_cast<std::size_t>(Language::English)].publisher;
-    entry.publisher = Common::UTF16ToUTF8(std::u16string{pub.data(),
-        std::char_traits<char16_t>::length(pub.data())});
+    entry.publisher = Common::UTF16ToUTF8(
+        std::u16string{pub.data(), std::char_traits<char16_t>::length(pub.data())});
 
     const std::vector<u16> icon = smdh.GetIcon(true);
     if (icon.size() == 48 * 48) {
@@ -100,8 +103,18 @@ void FillFromSmdh(GameEntry& entry, const Loader::SMDH& smdh) {
     }
 }
 
-// Reads one candidate file into a GameEntry, or returns false if it isn't a title.
-// `fallback_title` names the entry when there is no SMDH to read a long title out of.
+} // namespace
+
+std::string GameTdbGameId(const std::string& product_code) {
+    const std::size_t dash = product_code.rfind('-');
+    if (dash == std::string::npos || dash + 1 >= product_code.size()) {
+        return {};
+    }
+    return product_code.substr(dash + 1);
+}
+
+namespace {
+
 bool TryLoad(const std::string& path, const std::string& fallback_title, GameEntry& entry) {
     std::unique_ptr<Loader::AppLoader> loader = Loader::GetLoader(path);
     if (!loader) {
@@ -117,6 +130,7 @@ bool TryLoad(const std::string& path, const std::string& fallback_title, GameEnt
     entry.file_type = Loader::GetFileTypeString(loader->GetFileType(), loader->IsFileCompressed());
     entry.insertable = loader->GetFileType() == Loader::FileType::CCI;
     loader->ReadProgramId(entry.program_id);
+    loader->ReadProductCode(entry.product_code);
 
     std::vector<u8> smdh_buffer;
     const Loader::ResultStatus icon_result = loader->ReadIcon(smdh_buffer);
@@ -155,6 +169,9 @@ void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, in
     FileUtil::ForeachDirectoryEntry(
         nullptr, directory,
         [&out, depth, recursive](u64*, const std::string& dir, const std::string& virtual_name) {
+            if (IsHiddenEntry(virtual_name)) {
+                return true;
+            }
             const std::string path = dir + virtual_name;
             if (FileUtil::IsDirectory(path)) {
                 if (recursive) {
@@ -170,7 +187,6 @@ void ScanDirectory(const std::string& directory, std::vector<GameEntry>& out, in
         });
 }
 
-// Parses a title tree folder name ("00053f00") into the low word of a title ID.
 bool ParseTidLow(const std::string& name, std::uint32_t& out) {
     if (name.size() != 8) {
         return false;
@@ -193,10 +209,8 @@ bool ParseTidLow(const std::string& name, std::uint32_t& out) {
     return true;
 }
 
-// Adds the titles installed under the emulated SD card's title tree.
 void ScanInstalled(std::vector<GameEntry>& out) {
-    const std::string title_root =
-        Service::AM::GetMediaTitlePath(Service::FS::MediaType::SDMC);
+    const std::string title_root = Service::AM::GetMediaTitlePath(Service::FS::MediaType::SDMC);
     for (const std::uint64_t high : kLibraryTidHighs) {
         const std::string dir = fmt::format("{}{:08x}/", title_root, high >> 32);
         FileUtil::ForeachDirectoryEntry(
@@ -210,8 +224,6 @@ void ScanInstalled(std::vector<GameEntry>& out) {
                     return true;
                 }
                 const std::uint64_t tid = high | low;
-                // Resolves the boot content through the title's TMD, so it picks the same .app
-                // the loader would boot.
                 const std::string content =
                     Service::AM::GetTitleContentPath(Service::FS::MediaType::SDMC, tid);
                 if (content.empty() || !FileUtil::Exists(content)) {
@@ -231,7 +243,6 @@ void ScanInstalled(std::vector<GameEntry>& out) {
     }
 }
 
-// Reads a CIA's header and TMD, which both sit ahead of the content.
 bool ReadCiaEntry(const std::string& path, CiaEntry& entry) {
     std::unique_ptr<FileUtil::IOFileBase> file = std::make_unique<FileUtil::IOFile>(path, "rb");
     if (!file->IsOpen()) {
@@ -269,7 +280,6 @@ struct InstalledTmd {
     int content_count{};
 };
 
-// Reads the TMD of `tid`, or nothing if that title isn't installed.
 std::optional<InstalledTmd> ReadInstalledTmd(std::uint64_t tid) {
     FileSys::TitleMetadata tmd;
     const std::string path =
@@ -295,26 +305,25 @@ TitleKind ClassifyTitle(std::uint64_t program_id) {
     default:
         break;
     }
-    // Everything the emulated NAND holds.
     return Service::AM::GetTitleMediaType(program_id) == Service::FS::MediaType::NAND
                ? TitleKind::System
                : TitleKind::Other;
 }
 
-const char* TitleKindName(TitleKind kind) {
+std::string TitleKindName(TitleKind kind) {
     switch (kind) {
     case TitleKind::Application:
-        return "Game";
+        return Tr("titlekind.game");
     case TitleKind::Demo:
-        return "Demo";
+        return Tr("titlekind.demo");
     case TitleKind::Update:
-        return "Update";
+        return Tr("titlekind.update");
     case TitleKind::AddOnContent:
-        return "DLC";
+        return Tr("titlekind.dlc");
     case TitleKind::System:
-        return "System";
+        return Tr("titlekind.system");
     default:
-        return "Other";
+        return Tr("titlekind.other");
     }
 }
 
@@ -341,7 +350,6 @@ TitleDetails GetTitleDetails(const GameEntry& entry) {
         return details;
     }
 
-    // The loader keys the update off the base title's low word.
     const std::uint64_t low = entry.program_id & 0xFFFFFFFFULL;
     if (const std::optional<InstalledTmd> tmd = ReadInstalledTmd(kTidHighUpdate | low)) {
         details.has_update = true;
@@ -368,6 +376,9 @@ std::vector<CiaEntry> ListCiaFiles(const std::string& directory) {
     FileUtil::ForeachDirectoryEntry(
         nullptr, directory,
         [&out](u64*, const std::string& dir, const std::string& virtual_name) {
+            if (IsHiddenEntry(virtual_name)) {
+                return true;
+            }
             const std::string path = dir + virtual_name;
             if (FileUtil::IsDirectory(path)) {
                 return true;
@@ -417,20 +428,20 @@ InstallResult InstallCia(const std::string& path,
     }
 }
 
-const char* InstallResultText(InstallResult result) {
+std::string InstallResultText(InstallResult result) {
     switch (result) {
     case InstallResult::Success:
-        return "Installed";
+        return Tr("install.result.installed");
     case InstallResult::FileNotFound:
-        return "File not found";
+        return Tr("install.result.file_not_found");
     case InstallResult::FailedToOpen:
-        return "Couldn't open the file";
+        return Tr("install.result.cant_open");
     case InstallResult::Aborted:
-        return "Install aborted";
+        return Tr("install.result.aborted");
     case InstallResult::Encrypted:
-        return "CIA is encrypted. Please decrypt it or add aes_keys.txt";
+        return Tr("install.result.encrypted");
     default:
-        return "Not a valid CIA";
+        return Tr("install.result.invalid_cia");
     }
 }
 
@@ -461,6 +472,9 @@ std::vector<DirEntry> ListSubdirectories(const std::string& directory) {
     FileUtil::ForeachDirectoryEntry(
         nullptr, directory,
         [&out](u64*, const std::string& dir, const std::string& virtual_name) {
+            if (IsHiddenEntry(virtual_name)) {
+                return true;
+            }
             const std::string path = dir + virtual_name;
             if (FileUtil::IsDirectory(path)) {
                 out.push_back(DirEntry{virtual_name, path + '/'});
@@ -477,7 +491,6 @@ std::string ParentDirectory(const std::string& directory) {
     if (directory.size() <= 1) {
         return "";
     }
-    // Skip the trailing '/' so the search lands on the separator above it.
     const std::size_t sep = directory.find_last_of('/', directory.size() - 2);
     if (sep == std::string::npos) {
         return "";
@@ -489,10 +502,30 @@ bool EnsureDirectory(const std::string& directory) {
     return FileUtil::CreateFullPath(directory) && FileUtil::IsDirectory(directory);
 }
 
+namespace {
+int s_cached_language = -1;
+
+// Service::CFG::Module::GetSystemLanguage() silently re-adjusts the stored language to match
+// whatever title is currently loaded whenever the Region setting is Auto (see
+// UpdatePreferredRegionCode() in core/hle/service/cfg/cfg.cpp) - correct for what a real game
+// boot needs, but wrong for "what language did the user pick for the launcher's own menus and
+// GameTDB text", which must stay exactly what was picked regardless of which title happens to be
+// on screen. Seeded once from the real CFG value, then only ever updated by SetMenuSettings()
+// below - never re-derived from the (possibly auto-adjusted) CFG state again.
+int CachedLanguage() {
+    if (s_cached_language < 0) {
+        s_cached_language = static_cast<int>(
+            Service::CFG::GetModule(Core::System::GetInstance())->GetSystemLanguage());
+    }
+    return s_cached_language;
+}
+} // namespace
+
 MenuSettings GetMenuSettings() {
     const auto& v = Settings::values;
     return MenuSettings{
         .resolution_factor = static_cast<int>(v.resolution_factor.GetValue()),
+        .layout_preset = GetScreenLayoutIndex(),
         .use_vsync = v.use_vsync.GetValue(),
         .async_gpu_emulation = v.async_gpu_emulation.GetValue(),
         .strict_gpu_sync = v.strict_gpu_sync.GetValue(),
@@ -505,21 +538,27 @@ MenuSettings GetMenuSettings() {
         .skip_texture_copy = v.skip_texture_copy.GetValue(),
         .skip_cpu_write = v.skip_cpu_write.GetValue(),
         .enable_compile_boost = v.enable_compile_boost.GetValue(),
+        .enable_gpu_frame_log = v.enable_gpu_frame_log.GetValue(),
         .disable_right_eye_render = v.disable_right_eye_render.GetValue(),
         .texture_filter = static_cast<int>(v.texture_filter.GetValue()),
         .use_integer_scaling = v.use_integer_scaling.GetValue(),
         .filter_mode = v.filter_mode.GetValue(),
         .show_fps = v.show_fps.GetValue(),
+        .show_shader_compile_progress = v.show_shader_compile_progress.GetValue(),
         .custom_textures = v.custom_textures.GetValue(),
         .preload_textures = v.preload_textures.GetValue(),
         .dump_textures = v.dump_textures.GetValue(),
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetValue()),
+        .movie_throttle_clock_percentage = GetMovieThrottleClockPercentage(),
+        .movie_throttle_enabled = GetMovieThrottleEnabled(),
+        .gametdb_enabled = GetGameTdbEnabled(),
         .is_new_3ds = v.is_new_3ds.GetValue(),
+        .plugin_loader_enabled = v.plugin_loader_enabled.GetValue(),
+        .allow_plugin_loader = v.allow_plugin_loader.GetValue(),
         .use_cpu_jit = v.use_cpu_jit.GetValue(),
         .fastmem = v.fastmem.GetValue(),
         .region_value = static_cast<int>(v.region_value.GetValue()),
-        .language = static_cast<int>(
-            Service::CFG::GetModule(Core::System::GetInstance())->GetSystemLanguage()),
+        .language = CachedLanguage(),
         .graphics_api = static_cast<int>(Settings::GetWorkingGraphicsAPI()),
         .pointer_source = static_cast<int>(GetPointerSource()),
         .gyro_sensitivity_x = GetGyroSensitivityX(),
@@ -531,49 +570,62 @@ MenuSettings GetMenuSettings() {
 MenuSettings DefaultMenuSettings() {
     const auto& v = Settings::values;
     const int layout_count = GetScreenLayoutCount();
-    const std::uint32_t all_layouts =
-        layout_count >= 32 ? 0xFFFFFFFFu : (1u << layout_count) - 1;
+    const std::uint32_t all_layouts = layout_count >= 32 ? 0xFFFFFFFFu : (1u << layout_count) - 1;
     return MenuSettings{
         .resolution_factor = static_cast<int>(v.resolution_factor.GetDefault()),
+        .layout_preset = 0,
         .use_vsync = v.use_vsync.GetDefault(),
-        .async_gpu_emulation = v.async_gpu_emulation.GetDefault(),
+        // Switch-tuned defaults below - deliberately not v.X.GetDefault() (the shared
+        // common/settings.h compile-time default every frontend, including desktop, would get).
+        // Only affects the "Reset to Default" target and the off-default row highlighting; a
+        // fresh config.ini's actual boot values still come from default_ini.h (PalindromicBreadLoaf's
+        // file - untouched, would need a full rewrite per this project's copyright rule to change).
+        .async_gpu_emulation = false,
         .strict_gpu_sync = v.strict_gpu_sync.GetDefault(),
-        .async_shader_compilation = v.async_shader_compilation.GetDefault(),
-        .use_disk_shader_cache = v.use_disk_shader_cache.GetDefault(),
-        .use_hw_shader = v.use_hw_shader.GetDefault(),
-        .use_ubershaders = v.use_ubershaders.GetDefault(),
+        .async_shader_compilation = true,
+        .use_disk_shader_cache = true,
+        .use_hw_shader = true,
+        .use_ubershaders = false,
         .disable_pipeline_fast_path = v.disable_pipeline_fast_path.GetDefault(),
-        .skip_slow_draw = v.skip_slow_draw.GetDefault(),
-        .skip_texture_copy = v.skip_texture_copy.GetDefault(),
-        .skip_cpu_write = v.skip_cpu_write.GetDefault(),
-        .enable_compile_boost = v.enable_compile_boost.GetDefault(),
-        .disable_right_eye_render = v.disable_right_eye_render.GetDefault(),
+        .skip_slow_draw = false,
+        .skip_texture_copy = false,
+        .skip_cpu_write = false,
+        .enable_compile_boost = false,
+        .enable_gpu_frame_log = v.enable_gpu_frame_log.GetDefault(),
+        .disable_right_eye_render = true,
         .texture_filter = static_cast<int>(v.texture_filter.GetDefault()),
         .use_integer_scaling = v.use_integer_scaling.GetDefault(),
         .filter_mode = v.filter_mode.GetDefault(),
         .show_fps = v.show_fps.GetDefault(),
+        .show_shader_compile_progress = v.show_shader_compile_progress.GetDefault(),
         .custom_textures = v.custom_textures.GetDefault(),
         .preload_textures = v.preload_textures.GetDefault(),
         .dump_textures = v.dump_textures.GetDefault(),
         .cpu_clock_percentage = static_cast<int>(v.cpu_clock_percentage.GetDefault()),
-        .is_new_3ds = v.is_new_3ds.GetDefault(),
-        .use_cpu_jit = v.use_cpu_jit.GetDefault(),
-        .fastmem = v.fastmem.GetDefault(),
+        .movie_throttle_clock_percentage = 45,
+        .movie_throttle_enabled = true,
+        .gametdb_enabled = false,
+        .is_new_3ds = false,
+        .plugin_loader_enabled = false,
+        .allow_plugin_loader = true,
+        .use_cpu_jit = true,
+        .fastmem = true,
         .region_value = static_cast<int>(v.region_value.GetDefault()),
-        // Console/NAND setting and compile-time-fixed backend respectively — not reset.
-        .language = static_cast<int>(
-            Service::CFG::GetModule(Core::System::GetInstance())->GetSystemLanguage()),
+        .language = CachedLanguage(),
         .graphics_api = static_cast<int>(Settings::GetWorkingGraphicsAPI()),
-        .pointer_source = 0,      // Left stick, per default_ini.h.
+        .pointer_source = 0,
         .gyro_sensitivity_x = 100,
         .gyro_sensitivity_y = 100,
-        .layout_cycle_mask = all_layouts, // Every preset enabled, per default_ini.h.
+        .layout_cycle_mask = all_layouts,
     };
 }
 
-void SetMenuSettings(const MenuSettings& s) {
+void ApplyMenuSettings(const MenuSettings& s) {
     auto& v = Settings::values;
     v.resolution_factor = static_cast<u32>(std::clamp(s.resolution_factor, 0, 10));
+    if (s.layout_preset != GetScreenLayoutIndex()) {
+        SetScreenLayoutPreset(s.layout_preset);
+    }
     v.use_vsync = s.use_vsync;
     v.async_gpu_emulation = s.async_gpu_emulation;
     v.strict_gpu_sync = s.strict_gpu_sync;
@@ -586,35 +638,43 @@ void SetMenuSettings(const MenuSettings& s) {
     v.skip_texture_copy = s.skip_texture_copy;
     v.skip_cpu_write = s.skip_cpu_write;
     v.enable_compile_boost = s.enable_compile_boost;
+    v.enable_gpu_frame_log = s.enable_gpu_frame_log;
     v.disable_right_eye_render = s.disable_right_eye_render;
-    v.texture_filter =
-        static_cast<Settings::TextureFilter>(std::clamp(s.texture_filter, 0, 5));
+    v.texture_filter = static_cast<Settings::TextureFilter>(std::clamp(s.texture_filter, 0, 5));
     v.use_integer_scaling = s.use_integer_scaling;
     v.filter_mode = s.filter_mode;
     v.show_fps = s.show_fps;
+    v.show_shader_compile_progress = s.show_shader_compile_progress;
     v.custom_textures = s.custom_textures;
     v.preload_textures = s.preload_textures;
     v.dump_textures = s.dump_textures;
     v.cpu_clock_percentage = std::clamp(s.cpu_clock_percentage, 5, 400);
+    SetMovieThrottleClockPercentage(s.movie_throttle_clock_percentage);
+    SetMovieThrottleEnabled(s.movie_throttle_enabled);
+    SetGameTdbEnabled(s.gametdb_enabled);
     v.is_new_3ds = s.is_new_3ds;
+    v.plugin_loader_enabled = s.plugin_loader_enabled;
+    v.allow_plugin_loader = s.allow_plugin_loader;
     v.use_cpu_jit = s.use_cpu_jit;
     v.fastmem = s.fastmem;
     v.region_value = std::clamp(s.region_value, -1, 6);
-    SetPointerSource(static_cast<PointerSource>(
-        std::clamp(s.pointer_source, 0, NumPointerSources - 1)));
+    SetPointerSource(static_cast<PointerSource>(std::clamp(s.pointer_source, 0, NumPointerSources - 1)));
     SetGyroSensitivity(s.gyro_sensitivity_x, s.gyro_sensitivity_y);
     SetLayoutCycleMask(s.layout_cycle_mask);
-    SaveConfig();
 
-    // The 3DS system language lives in the CFG NAND savegame rather than config.ini,
-    // so it's written straight through the CFG module.
+    s_cached_language = std::clamp(s.language, 0, 11);
+
     auto cfg = Service::CFG::GetModule(Core::System::GetInstance());
-    const auto language =
-        static_cast<Service::CFG::SystemLanguage>(std::clamp(s.language, 0, 11));
+    const auto language = static_cast<Service::CFG::SystemLanguage>(std::clamp(s.language, 0, 11));
     if (cfg->GetSystemLanguage() != language) {
         cfg->SetSystemLanguage(language);
         cfg->UpdateConfigNANDSavegame();
     }
+}
+
+void SetMenuSettings(const MenuSettings& s) {
+    ApplyMenuSettings(s);
+    SaveConfig();
 }
 
 } // namespace SwitchFrontend

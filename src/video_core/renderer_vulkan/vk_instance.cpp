@@ -403,7 +403,11 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT,
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT,
         vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR,
-        vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
+        vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
+        vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT,
+        vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT,
+        vk::PhysicalDeviceDynamicRenderingFeaturesKHR,
+        vk::PhysicalDeviceShaderObjectFeaturesEXT>();
     const vk::StructureChain properties_chain =
         physical_device
             .getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties,
@@ -421,7 +425,10 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    boost::container::static_vector<const char*, 13> enabled_extensions;
+    // Capacity must cover every add_extension() call site below (20, after memory_budget) --
+    // static_vector overflows silently past capacity, so this must be >= that count even though
+    // not all extensions will be available/enabled on every device.
+    boost::container::static_vector<const char*, 20> enabled_extensions;
     const auto add_extension = [&](std::string_view extension, bool blacklist = false,
                                    std::string_view reason = "") -> bool {
         const auto result =
@@ -480,6 +487,26 @@ bool Instance::CreateDevice() {
     // permutation count (huge win for shader-compile stutter, esp. the generic ubershader).
     const bool has_extended_dynamic_state3 =
         add_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+    // EDS2's dynamic logic-op *value* (separate from EDS3's logic-op-enable below) -- the last
+    // piece needed to exclude the whole blending struct from the pipeline key.
+    const bool has_extended_dynamic_state2 =
+        add_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);
+    // Dynamic vertex input state: excludes vertex_layout (bindings/attributes) from the pipeline
+    // key -- the single biggest remaining static-key contributor once EDS1+EDS3 already exclude
+    // rasterization/depth-stencil/blend, since every distinct mesh/model's vertex attribute set
+    // otherwise forces its own pipeline permutation.
+    const bool has_vertex_input_dynamic_state =
+        add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+    // Dynamic rendering: infrastructure for a future GPL or shader-object attempt, no benefit on
+    // its own -- see docs/DYNAMIC_RENDERING_HANDOFF.md. Classic render-pass path stays as the
+    // fallback for drivers without support.
+    const bool has_dynamic_rendering = add_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
+    // Shader objects: infrastructure for eliminating pipeline objects entirely -- see
+    // docs/SHADER_OBJECT_HANDOFF.md. Hard-depends on dynamic rendering above (confirmed against
+    // the Vulkan registry). Classic pipeline path stays as the fallback for drivers without it.
+    const bool has_shader_object = add_extension(VK_EXT_SHADER_OBJECT_EXTENSION_NAME);
+    display_timing = add_extension(VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME);
+    memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
 
     const auto family_properties = physical_device.getQueueFamilyProperties();
     if (family_properties.empty()) {
@@ -539,6 +566,10 @@ bool Instance::CreateDevice() {
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT{},
         vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR{},
         vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT{},
+        vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT{},
+        vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT{},
+        vk::PhysicalDeviceDynamicRenderingFeaturesKHR{},
+        vk::PhysicalDeviceShaderObjectFeaturesEXT{},
     };
 
 #define PROP_GET(structName, prop, property) property = properties_chain.get<structName>().prop;
@@ -590,23 +621,70 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     }
 
-    // EDS3: we make blend equation + write-mask dynamic (the many-combo fields). Require both; if
-    // either is missing, fall back to baking blend into the pipeline (extended_dynamic_state3 stays
-    // false). blend_enable stays static, so we don't need its dynamic feature.
+    // EDS3: we make blend equation, write-mask, blend-enable, and logic-op-enable all dynamic --
+    // between them (plus EDS2's dynamic logic-op value below) that's the whole blending struct.
+    // Require all four; if any is missing, fall back to baking blend into the pipeline
+    // (extended_dynamic_state3 stays false).
     if (has_extended_dynamic_state3 &&
         feature_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
             .extendedDynamicState3ColorBlendEquation &&
         feature_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
-            .extendedDynamicState3ColorWriteMask) {
+            .extendedDynamicState3ColorWriteMask &&
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
+            .extendedDynamicState3ColorBlendEnable &&
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>()
+            .extendedDynamicState3LogicOpEnable) {
         extended_dynamic_state3 = true;
         auto& eds3 = device_chain.get<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
         eds3.extendedDynamicState3ColorBlendEquation = true;
         eds3.extendedDynamicState3ColorWriteMask = true;
+        eds3.extendedDynamicState3ColorBlendEnable = true;
+        eds3.extendedDynamicState3LogicOpEnable = true;
         LOG_INFO(Render_Vulkan, "EDS3 dynamic blend ENABLED (blend excluded from pipeline key)");
     } else {
         extended_dynamic_state3 = false;
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();
         LOG_INFO(Render_Vulkan, "EDS3 dynamic blend UNAVAILABLE (blend baked into pipelines)");
+    }
+
+    // EDS2: only the dynamic logic-op *value* is wanted here (extendedDynamicState2 itself covers
+    // unrelated state -- primitive restart / rasterizer discard -- this fork doesn't use
+    // dynamically, so it's deliberately not requested).
+    if (has_extended_dynamic_state2 &&
+        feature_chain.get<vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>()
+            .extendedDynamicState2LogicOp) {
+        extended_dynamic_state2_logic_op = true;
+        device_chain.get<vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>()
+            .extendedDynamicState2LogicOp = true;
+    } else {
+        extended_dynamic_state2_logic_op = false;
+        device_chain.unlink<vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT>();
+    }
+
+    if (has_vertex_input_dynamic_state) {
+        FEAT_SET(vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT, vertexInputDynamicState,
+                 vertex_input_dynamic_state)
+    } else {
+        device_chain.unlink<vk::PhysicalDeviceVertexInputDynamicStateFeaturesEXT>();
+    }
+
+    if (has_dynamic_rendering) {
+        FEAT_SET(vk::PhysicalDeviceDynamicRenderingFeaturesKHR, dynamicRendering,
+                 dynamic_rendering)
+        LOG_INFO(Render_Vulkan, "Dynamic rendering: {}", dynamic_rendering);
+    } else {
+        device_chain.unlink<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>();
+    }
+
+    // Hard-depends on dynamic_rendering (confirmed against the Vulkan registry) -- don't request
+    // the feature if dynamic rendering didn't actually end up enabled, even if the extension
+    // itself was reported available, or device creation could fail on a driver that enforces it.
+    if (has_shader_object && dynamic_rendering) {
+        FEAT_SET(vk::PhysicalDeviceShaderObjectFeaturesEXT, shaderObject, shader_object)
+        LOG_INFO(Render_Vulkan, "Shader objects: {}", shader_object);
+    } else {
+        shader_object = false;
+        device_chain.unlink<vk::PhysicalDeviceShaderObjectFeaturesEXT>();
     }
 
     if (has_custom_border_color) {
@@ -684,6 +762,8 @@ void Instance::CreateAllocator() {
     };
 
     const VmaAllocatorCreateInfo allocator_info = {
+        .flags = memory_budget ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT
+                                : static_cast<VmaAllocatorCreateFlags>(0),
         .physicalDevice = physical_device,
         .device = GetDevice(),
         .pVulkanFunctions = &functions,

@@ -4,6 +4,7 @@
 
 #include <chrono>
 #include <thread>
+#include "common/gpu_frame_log.h"
 #include "common/horizon_thread.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -355,7 +356,6 @@ void PresentWindow::PresentThread(std::stop_token token) {
     // See VulkanWorker: park presentation alongside submission — PinGraphicsSupportThread also
     // knows to spread out from the async GPU thread's core when that's enabled.
     Common::Horizon::PinGraphicsSupportThread(Settings::values.async_gpu_emulation.GetValue());
-    constexpr std::chrono::milliseconds kSlowPresentGapThreshold{100};
     auto last_present = std::chrono::steady_clock::now();
     while (!token.stop_requested()) {
         std::unique_lock lock{queue_mutex};
@@ -379,19 +379,15 @@ void PresentWindow::PresentThread(std::stop_token token) {
         lock.unlock();
 
         const auto copy_start = std::chrono::steady_clock::now();
-        const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(copy_start - last_present);
+        const auto gap = std::chrono::duration_cast<std::chrono::microseconds>(copy_start - last_present);
         CopyToSwapchain(frame);
         last_present = std::chrono::steady_clock::now();
         const auto copy_duration =
-            std::chrono::duration_cast<std::chrono::milliseconds>(last_present - copy_start);
-        if (gap > kSlowPresentGapThreshold || copy_duration > kSlowPresentGapThreshold) {
-            const auto progress = Common::ShaderCompileStats::GetProgress();
-            LOG_WARNING(Render_Vulkan,
-                        "Present gap {}ms, CopyToSwapchain took {}ms (compiling {}/{})",
-                        gap.count(), copy_duration.count(),
-                        progress ? progress->done : 0, progress ? progress->total : 0);
-        }
-
+            std::chrono::duration_cast<std::chrono::microseconds>(last_present - copy_start);
+        const auto progress = Common::ShaderCompileStats::GetProgress();
+        Common::GpuFrameLog::LogFrame(gap.count() / 1000.0, copy_duration.count() / 1000.0,
+                                      progress ? progress->done : 0, progress ? progress->total : 0,
+                                      progress ? progress->stall_time_us : 0);
         // Free the frame for reuse
         std::scoped_lock fl{free_mutex};
         free_queue.push(frame);

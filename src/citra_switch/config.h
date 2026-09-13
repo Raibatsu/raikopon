@@ -66,12 +66,12 @@ void PrepareSystemFileSetup(SystemFileSetupMode mode);
 bool GetUseArticBaseController();
 void SetUseArticBaseController(bool enabled);
 
-// The dekopon directory this session actually booted from.
+// The Raika Azahar directory this session actually booted from.
 const std::string& GetActiveUserDir();
 
 // The built-in locations offered as a reset target in the UI.
 std::string GetDefaultUserDir();
-std::string GetDefaultRomsDir(const std::string& user_dir);
+std::string GetDefaultRomsDir();
 
 // Serialises the current Settings::values back to config.ini.
 void SaveConfig();
@@ -118,6 +118,12 @@ void RequestFramebufferRelayout();
 // The name of the currently selected screen layout preset.
 const char* CurrentScreenLayoutName();
 
+// The index of the currently selected screen layout preset.
+int GetScreenLayoutIndex();
+
+// Sets the screen layout preset by index and applies it live.
+void SetScreenLayoutPreset(int index);
+
 // The number of screen layout presets R3 and the quick menu can select.
 int GetScreenLayoutCount();
 
@@ -132,6 +138,10 @@ void SetLayoutCycleMask(std::uint32_t mask);
 // core/hle/service/ldr_ro/ldr_ro.cpp). Adjustable from the quick menu; clamped to [10, 100].
 std::int32_t GetMovieThrottleClockPercentage();
 void SetMovieThrottleClockPercentage(std::int32_t percentage);
+
+// Whether the above throttle is applied at all. Adjustable from the quick menu.
+bool GetMovieThrottleEnabled();
+void SetMovieThrottleEnabled(bool enabled);
 
 // True if the most recent BootRom never reached a successful system.Load.
 bool LoadFailed();

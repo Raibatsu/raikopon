@@ -540,6 +540,10 @@ struct Values {
     Setting<bool> renderer_debug{false, Keys::renderer_debug};
     Setting<bool> pica_debugging{false, Keys::pica_debugging};
     Setting<bool> dump_command_buffers{false, Keys::dump_command_buffers};
+    // Runtime toggle for the frame-blocking investigation's instrumentation (gpu_frame_log.log +
+    // dynarmic_jit.log) -- lets it be flipped on/off from Settings without a rebuild. Takes effect
+    // on next boot (both logs are opened lazily on first use per session).
+    Setting<bool> enable_gpu_frame_log{false, Keys::enable_gpu_frame_log};
     SwitchableSetting<bool> spirv_shader_gen{true, Keys::spirv_shader_gen};
     SwitchableSetting<bool> disable_spirv_optimizer{true, Keys::disable_spirv_optimizer};
     SwitchableSetting<bool> disable_pipeline_fast_path{false, Keys::disable_pipeline_fast_path};
@@ -566,9 +570,9 @@ struct Values {
     SwitchableSetting<bool> use_display_refresh_rate_detection{
         true, Keys::use_display_refresh_rate_detection};
     Setting<bool> use_shader_jit{true, Keys::use_shader_jit};
-    // Draws an on-screen frame-rate counter in the top-left corner during gameplay.
     SwitchableSetting<bool> show_fps{false, Keys::show_fps};
-    SwitchableSetting<u32, true> resolution_factor{1, 0, 10, Keys::resolution_factor};
+    Setting<bool> show_shader_compile_progress{true, Keys::show_shader_compile_progress};
+    SwitchableSetting<u32, true> resolution_factor{1, 0, 18, Keys::resolution_factor};
     SwitchableSetting<bool> use_integer_scaling{false, Keys::use_integer_scaling};
     SwitchableSetting<double, true> frame_limit{100, 0, 1000, Keys::frame_limit};
     SwitchableSetting<double, true> turbo_limit{200, 0, 1000, Keys::turbo_limit};
@@ -606,6 +610,12 @@ struct Values {
     Setting<u16> custom_bottom_y{500, Keys::custom_bottom_y};
     Setting<u16> custom_bottom_width{640, Keys::custom_bottom_width};
     Setting<u16> custom_bottom_height{480, Keys::custom_bottom_height};
+    Setting<u16> custom_top_rotation{0, Keys::custom_top_rotation};
+    Setting<u16> custom_bottom_rotation{0, Keys::custom_bottom_rotation};
+    // Which screen draws last (i.e. on top, where the two custom rects overlap) - only meaningful
+    // for CustomLayout, where rects can actually overlap; other layout options keep using
+    // swap_screen for draw order since their screens never overlap in the first place.
+    Setting<bool> custom_top_screen_on_top{true, Keys::custom_top_screen_on_top};
     Setting<u16> custom_second_layer_opacity{100, Keys::custom_second_layer_opacity};
     // Independent per-screen opacity (Custom Layout only), additional to the scalar above —
     // 100 (fully opaque) is a no-op, so leaving these untouched doesn't change existing

@@ -55,7 +55,10 @@ struct Rect {
 enum class Grab { None, Top, Bottom };
 
 bool s_active = false;
+bool s_standalone = false;
+LayoutEditorPreview s_preview{};
 bool s_aspect_locked = true;
+bool s_rotation_mode = false;
 Grab s_grabbed = Grab::None;
 
 // Offset from the grabbed screen's origin to the finger, so dragging doesn't snap the corner
@@ -148,6 +151,21 @@ void SetOpacity(Grab which, int percent) {
     }
 }
 
+int GetRotation(Grab which) {
+    return which == Grab::Top ? Settings::values.custom_top_rotation.GetValue()
+                              : Settings::values.custom_bottom_rotation.GetValue();
+}
+
+void SetRotation(Grab which, int degrees) {
+    const int normalized = ((degrees % 360) + 360) % 360;
+    const auto value = static_cast<u16>(normalized);
+    if (which == Grab::Top) {
+        Settings::values.custom_top_rotation = value;
+    } else {
+        Settings::values.custom_bottom_rotation = value;
+    }
+}
+
 // Deadzone-adjusted axis value in [-1, 1], scaled linearly past the deadzone.
 float Axis(std::int32_t v) {
     if (std::abs(v) <= kStickDeadzone) {
@@ -188,8 +206,29 @@ void ApplyDefaults() {
     SetOpacity(Grab::Bottom, 100);
 }
 
-// Publishes the rects so the renderer can outline them and show which one is grabbed.
 void Publish() {
+    if (s_standalone) {
+        LayoutEditorPreview preview;
+        preview.visible = s_active;
+        if (s_active) {
+            const Rect top = GetTopRect();
+            const Rect bottom = GetBottomRect();
+            preview.top = {top.x, top.y, top.w, top.h, GetOpacity(Grab::Top),
+                          GetRotation(Grab::Top)};
+            preview.bottom = {bottom.x, bottom.y, bottom.w, bottom.h, GetOpacity(Grab::Bottom),
+                              GetRotation(Grab::Bottom)};
+            preview.canvas_width = kCanvasWidth;
+            preview.canvas_height = kCanvasHeight;
+            preview.selected_top = s_grabbed == Grab::Top;
+            preview.selected_bottom = s_grabbed == Grab::Bottom;
+            preview.aspect_locked = s_aspect_locked;
+            preview.rotation_mode = s_rotation_mode;
+            preview.top_on_top = Settings::values.custom_top_screen_on_top.GetValue();
+        }
+        s_preview = preview;
+        return;
+    }
+
     VideoCore::LayoutEditorState state;
     state.visible = s_active;
     if (s_active) {
@@ -202,6 +241,10 @@ void Publish() {
         state.selected_top = s_grabbed == Grab::Top;
         state.selected_bottom = s_grabbed == Grab::Bottom;
         state.aspect_locked = s_aspect_locked;
+        state.rotation_mode = s_rotation_mode;
+        state.top_rotation_degrees = GetRotation(Grab::Top);
+        state.bottom_rotation_degrees = GetRotation(Grab::Bottom);
+        state.top_on_top = Settings::values.custom_top_screen_on_top.GetValue();
         // The hint bar itself (button chips + short labels, not a single long sentence) is built
         // directly in RendererVulkan::PrepareLayoutEditor from aspect_locked above — see that
         // function for why plain text got too wide to fit the screen.
@@ -282,26 +325,25 @@ void UpdateLayoutEditorFromController(const InputState& state, const LayoutEdito
 } // namespace
 
 bool IsLayoutEditorOpen() {
-    return s_active;
+    return s_active && !s_standalone;
 }
 
-void OpenLayoutEditor() {
-    if (s_active) {
-        return;
-    }
-    auto& system = Core::System::GetInstance();
-    if (!system.IsPoweredOn()) {
-        return;
-    }
+bool IsLayoutEditorStandaloneOpen() {
+    return s_active && s_standalone;
+}
 
+LayoutEditorPreview GetLayoutEditorPreview() {
+    return s_preview;
+}
+
+namespace {
+
+void OpenLayoutEditorCommon() {
     auto& v = Settings::values;
     s_entry_layout = v.layout_option.GetValue();
     s_entry_top = GetTopRect();
     s_entry_bottom = GetBottomRect();
 
-    // A fresh profile has the desktop defaults (bottom at y=500, past the 720 canvas), which would
-    // open the editor with the bottom screen jammed against the edge. Treat anything that doesn't
-    // fit as unset and start from the built-in arrangement instead.
     const Rect top = Clamp(s_entry_top);
     const Rect bottom = Clamp(s_entry_bottom);
     const bool fits = top.x == s_entry_top.x && top.y == s_entry_top.y &&
@@ -309,6 +351,7 @@ void OpenLayoutEditor() {
                       bottom.x == s_entry_bottom.x && bottom.y == s_entry_bottom.y &&
                       bottom.w == s_entry_bottom.w && bottom.h == s_entry_bottom.h;
     if (!fits) {
+        LOG_WARNING(Frontend, "Layout editor: entry rects out of canvas bounds, applying defaults");
         ApplyDefaults();
     }
 
@@ -319,11 +362,45 @@ void OpenLayoutEditor() {
     s_grabbed = Grab::None;
     s_pinching = false;
     s_was_touching = false;
+    s_rotation_mode = false;
     s_last_update = std::chrono::steady_clock::now();
     PauseEmulation();
     Relayout();
     Publish();
-    LOG_INFO(Frontend, "Layout editor opened");
+}
+
+} // namespace
+
+void OpenLayoutEditor() {
+    LOG_INFO(Frontend, "OpenLayoutEditor: active={}", s_active);
+    if (s_active) {
+        return;
+    }
+    auto& system = Core::System::GetInstance();
+    if (!system.IsPoweredOn()) {
+        LOG_WARNING(Frontend, "OpenLayoutEditor: no core running, ignoring");
+        return;
+    }
+
+    s_standalone = false;
+    OpenLayoutEditorCommon();
+    LOG_INFO(Frontend, "Layout editor opened (in-game)");
+}
+
+void OpenLayoutEditorStandalone() {
+    LOG_INFO(Frontend, "OpenLayoutEditorStandalone: active={}", s_active);
+    if (s_active) {
+        return;
+    }
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        LOG_WARNING(Frontend, "OpenLayoutEditorStandalone: a core is running, ignoring");
+        return;
+    }
+
+    s_standalone = true;
+    OpenLayoutEditorCommon();
+    LOG_INFO(Frontend, "Layout editor opened (standalone)");
 }
 
 void CloseLayoutEditor(bool save) {
@@ -350,13 +427,15 @@ void CloseLayoutEditor(bool save) {
     Publish();
     Relayout();
     ResumeEmulation();
-    LOG_INFO(Frontend, "Layout editor closed ({})", save ? "saved" : "discarded");
+    LOG_INFO(Frontend, "Layout editor closed ({}, {})", save ? "saved" : "discarded",
+             s_standalone ? "standalone" : "in-game");
 }
 
 void ResetLayoutEditor() {
     ApplyDefaults();
     s_grabbed = Grab::None;
     s_pinching = false;
+    s_rotation_mode = false;
     Relayout();
     Publish();
 }
@@ -389,7 +468,47 @@ void UpdateLayoutEditor(const InputState& state, const LayoutEditorNav& nav) {
         // nothing selected before ever touching the screen.
         s_grabbed = s_grabbed == Grab::Top ? Grab::Bottom : Grab::Top;
         s_pinching = false;
+        s_rotation_mode = false;
         Publish();
+    }
+    if (nav.toggle_rotation) {
+        LOG_INFO(Frontend, "Layout editor: toggle_rotation pressed (currently {}, grabbed={})",
+                 s_rotation_mode ? "on" : "off",
+                 s_grabbed == Grab::Top ? "top" : s_grabbed == Grab::Bottom ? "bottom" : "none");
+        if (s_rotation_mode) {
+            s_rotation_mode = false;
+            Publish();
+            return;
+        }
+        if (s_grabbed != Grab::None) {
+            s_rotation_mode = true;
+            Publish();
+            return;
+        }
+    }
+    if (s_rotation_mode) {
+        if (nav.rotate_cw) {
+            SetRotation(s_grabbed, GetRotation(s_grabbed) + 90);
+            Relayout();
+            Publish();
+        }
+        if (nav.rotate_ccw) {
+            SetRotation(s_grabbed, GetRotation(s_grabbed) - 90);
+            Relayout();
+            Publish();
+        }
+        const std::uint32_t rotation_touches = std::min<std::uint32_t>(state.touch_count, 2);
+        const bool rotation_touching = rotation_touches > 0 && state.touches[0].pressed;
+        if (rotation_touching && !s_was_touching) {
+            const Rect grabbed_rect = s_grabbed == Grab::Top ? GetTopRect() : GetBottomRect();
+            const float mid_x = grabbed_rect.x + grabbed_rect.w * 0.5f;
+            const int dir = static_cast<float>(state.touches[0].x) < mid_x ? -90 : 90;
+            SetRotation(s_grabbed, GetRotation(s_grabbed) + dir);
+            Relayout();
+            Publish();
+        }
+        s_was_touching = rotation_touching;
+        return;
     }
     // Opacity has no touch gesture of its own, so D-pad Left/Right work the same regardless of
     // whether the player is also touching a screen right now — unlike move/resize, which fully
@@ -399,6 +518,22 @@ void UpdateLayoutEditor(const InputState& state, const LayoutEditorNav& nav) {
         const int delta = StepAccumulator(s_opacity_accum, dir * kOpacityPercentPerSecond * dt);
         if (delta != 0) {
             SetOpacity(s_grabbed, GetOpacity(s_grabbed) + delta);
+            Relayout();
+            Publish();
+        }
+    }
+    // D-pad Up/Down: bring the selected screen to the front or send it to the back where the two
+    // rects overlap. Edge-triggered (a single press picks the final state directly) rather than
+    // held, unlike opacity - there are only two possible states, not a range to scrub.
+    if (s_grabbed != Grab::None && (nav.layer_front || nav.layer_back)) {
+        bool top_on_top = Settings::values.custom_top_screen_on_top.GetValue();
+        if (s_grabbed == Grab::Top) {
+            top_on_top = nav.layer_front ? true : false;
+        } else {
+            top_on_top = nav.layer_front ? false : true;
+        }
+        if (top_on_top != Settings::values.custom_top_screen_on_top.GetValue()) {
+            Settings::values.custom_top_screen_on_top = top_on_top;
             Relayout();
             Publish();
         }
@@ -422,19 +557,25 @@ void UpdateLayoutEditor(const InputState& state, const LayoutEditorNav& nav) {
     const int x0 = static_cast<int>(state.touches[0].x);
     const int y0 = static_cast<int>(state.touches[0].y);
 
-    // A new contact picks a screen. Bottom is tested first so it wins where the two overlap,
-    // matching the draw order.
+    // A new contact picks a screen. Whichever one currently draws on top is tested first so it
+    // wins where the two overlap, matching the actual draw order (see DrawScreens/
+    // custom_top_screen_on_top) rather than a hardcoded assumption.
     if (!s_was_touching) {
         const Rect bottom = GetBottomRect();
         const Rect top = GetTopRect();
-        if (Contains(bottom, x0, y0)) {
-            s_grabbed = Grab::Bottom;
-            s_drag_offset_x = x0 - bottom.x;
-            s_drag_offset_y = y0 - bottom.y;
-        } else if (Contains(top, x0, y0)) {
-            s_grabbed = Grab::Top;
-            s_drag_offset_x = x0 - top.x;
-            s_drag_offset_y = y0 - top.y;
+        const bool top_on_top = Settings::values.custom_top_screen_on_top.GetValue();
+        const Rect& first = top_on_top ? top : bottom;
+        const Rect& second = top_on_top ? bottom : top;
+        const Grab first_grab = top_on_top ? Grab::Top : Grab::Bottom;
+        const Grab second_grab = top_on_top ? Grab::Bottom : Grab::Top;
+        if (Contains(first, x0, y0)) {
+            s_grabbed = first_grab;
+            s_drag_offset_x = x0 - first.x;
+            s_drag_offset_y = y0 - first.y;
+        } else if (Contains(second, x0, y0)) {
+            s_grabbed = second_grab;
+            s_drag_offset_x = x0 - second.x;
+            s_drag_offset_y = y0 - second.y;
         } else {
             s_grabbed = Grab::None;
         }

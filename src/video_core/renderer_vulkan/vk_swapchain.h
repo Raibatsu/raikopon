@@ -75,6 +75,10 @@ public:
         return present_ready[image_index];
     }
 
+    u64 GetRefreshDuration() const {
+        return refresh_duration_ns;
+    }
+
 private:
     /// Selects the best available swapchain image format
     void FindPresentFormat();
@@ -94,6 +98,9 @@ private:
     /// Creates the image acquired and present ready semaphores
     void RefreshSemaphores();
 
+    void QueryRefreshDuration();
+    void ProcessPresentTiming();
+
 private:
     const Instance& instance;
     vk::SwapchainKHR swapchain{VK_NULL_HANDLE};
@@ -111,8 +118,11 @@ private:
     u32 image_count = 0;
     u32 image_index = 0;
     u32 frame_index = 0;
+    u32 present_id = 0;
+    u64 refresh_duration_ns = 16'666'667;
     bool needs_recreation = true;
     bool low_refresh_rate;
+    bool display_timing_active = false;
 };
 
 } // namespace Vulkan

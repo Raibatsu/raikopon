@@ -278,6 +278,16 @@ public:
         return ResultStatus::ErrorNotImplemented;
     }
 
+    /**
+     * Get the product code of the application (e.g. "CTR-P-BNDE"), used to key external game
+     * databases (GameTDB) for box art. Not every loader has one (e.g. raw ELF/3DSX homebrew).
+     * @param product_code Reference to store the product code into
+     * @return ResultStatus result of function
+     */
+    virtual ResultStatus ReadProductCode([[maybe_unused]] std::string& product_code) {
+        return ResultStatus::ErrorNotImplemented;
+    }
+
     virtual bool SupportsSaveStates() {
         return true;
     }

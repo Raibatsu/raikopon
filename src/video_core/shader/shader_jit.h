@@ -13,6 +13,7 @@
 #include "video_core/shader/shader.h"
 #ifdef __SWITCH__
 #include <atomic>
+#include <chrono>
 #include <mutex>
 #include "common/thread_worker.h"
 #include "video_core/pica/shader_setup.h"
@@ -39,7 +40,8 @@ private:
     };
 
     void CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
-                      std::shared_ptr<const SwizzleData> swizzle_data, bool boosted);
+                      std::shared_ptr<const SwizzleData> swizzle_data, bool boosted,
+                      u64 cache_key, std::chrono::steady_clock::time_point queued_at);
 
     std::unordered_map<u64, std::unique_ptr<CacheEntry>> cache;
     std::mutex cache_mutex;

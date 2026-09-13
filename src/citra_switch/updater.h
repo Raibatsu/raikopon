@@ -23,6 +23,12 @@
 // This header itself stays plain-C++ so it's safe to include from either side.
 namespace SwitchFrontend {
 
+// Idempotent curl_global_init() wrapper, safe to call from any thread/file - curl_global_init()
+// itself is documented as not thread-safe and not safe to call more than once while another
+// thread might already be using libcurl, so every caller anywhere in the app (the updater, the
+// GameTDB fetcher, ...) must share this single std::once_flag rather than keeping its own.
+void EnsureCurlInitialized();
+
 // Must be called once, at the very top of main(), with argv[0] before anything else here is used.
 // If path is empty, HasOwnNroPath() returns false and every entry point below refuses rather than
 // guessing a fallback location to read/write.
@@ -43,6 +49,9 @@ struct UpdateInfo {
     std::string nro_download_url;
     std::string sha256_download_url;
     std::uint64_t nro_size{};
+    // Extracted from the release body's "## ... ##" block, if present - see ExtractChangelog() in
+    // updater.cpp. Empty if the release has no such block.
+    std::string changelog;
 };
 
 struct UpdateCheckOutcome {
@@ -76,7 +85,7 @@ enum class DownloadResult {
 DownloadResult DownloadAndInstallUpdate(
     const UpdateInfo& info, const std::function<void(std::size_t, std::size_t)>& progress);
 
-// Where DownloadAndInstallUpdate() stages a verified download - <dir>/raikopon.nro.new, same
+// Where DownloadAndInstallUpdate() stages a verified download - <dir>/RaikaAzahar.nro.new, same
 // directory as the live .nro (required for FileUtil::Rename's same-filesystem guarantee). A fixed
 // name, not one unique per download cycle: an earlier version of this code used a
 // timestamp-suffixed name (and a whole separate staging-boot/relaunch dance around it) to work
@@ -123,7 +132,7 @@ void RemountRomfsAfterFailedSelfReplace();
 
 // Equivalent to RelaunchInto(GetOwnNroPath()) - reloads the current .nro from disk. Used both
 // after a successful FinishInstall() (to boot into the just-installed update) and for every other
-// restart-required case (a settings change, the dekopon folder having moved, ...).
+// restart-required case (a settings change, the Raika Azahar folder having moved, ...).
 [[noreturn]] void RelaunchSelf();
 
 } // namespace SwitchFrontend

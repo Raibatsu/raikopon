@@ -369,6 +369,11 @@ bool BlitHelper::BlitDepthStencil(Surface& source, Surface& dest,
         LOG_ERROR(Render_Vulkan, "Unable to emulate depth stencil images");
         return false;
     }
+    if (!source.Image() || !dest.Image()) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan,
+                     "Skipping depth stencil blit with a null source or destination image");
+        return false;
+    }
 
     const vk::Rect2D dst_render_area = {
         .offset = {0, 0},
@@ -379,12 +384,18 @@ bool BlitHelper::BlitDepthStencil(Surface& source, Surface& dest,
     update_queue.AddImageSampler(descriptor_set, 0, 0, source.DepthView(), nearest_sampler);
     update_queue.AddImageSampler(descriptor_set, 1, 0, source.StencilView(), nearest_sampler);
 
-    const RenderPass depth_pass = {
-        .framebuffer = dest.Framebuffer(),
-        .render_pass =
-            renderpass_cache.GetRenderpass(PixelFormat::Invalid, dest.pixel_format, false),
+    RenderPass depth_pass = {
         .render_area = dst_render_area,
     };
+    if (instance.IsDynamicRenderingSupported()) {
+        depth_pass.depth_view = dest.ImageView(ViewType::Mip0);
+        depth_pass.depth_format = instance.GetTraits(dest.pixel_format).native;
+        depth_pass.has_stencil = dest.pixel_format == PixelFormat::D24S8;
+    } else {
+        depth_pass.framebuffer = dest.Framebuffer();
+        depth_pass.render_pass =
+            renderpass_cache.GetRenderpass(PixelFormat::Invalid, dest.pixel_format, false);
+    }
     renderpass_cache.BeginRendering(depth_pass);
 
     scheduler.Record([blit, descriptor_set, &dest, this](vk::CommandBuffer cmdbuf) {
@@ -401,6 +412,12 @@ bool BlitHelper::BlitDepthStencil(Surface& source, Surface& dest,
 
 bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
                                       const VideoCore::TextureCopy& copy) {
+    if (!source.Image() || !dest.Image()) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan,
+                     "Skipping D24S8->RGBA8 conversion with a null source or destination image");
+        return false;
+    }
+
     const auto descriptor_set = compute_provider.Commit();
     update_queue.AddImageSampler(descriptor_set, 0, 0, source.DepthView(), VK_NULL_HANDLE,
                                  vk::ImageLayout::eDepthStencilReadOnlyOptimal);
@@ -512,6 +529,11 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
 
 bool BlitHelper::DepthToBuffer(Surface& source, vk::Buffer buffer,
                                const VideoCore::BufferTextureCopy& copy) {
+    if (!source.Image()) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan, "Skipping depth-to-buffer copy with a null source image");
+        return false;
+    }
+
     const auto descriptor_set = compute_buffer_provider.Commit();
     update_queue.AddImageSampler(descriptor_set, 0, 0, source.DepthView(), nearest_sampler,
                                  vk::ImageLayout::eDepthStencilReadOnlyOptimal);
@@ -602,9 +624,19 @@ vk::Pipeline BlitHelper::MakeComputePipeline(vk::ShaderModule shader, vk::Pipeli
 
 vk::Pipeline BlitHelper::MakeDepthStencilBlitPipeline() {
     const std::array stages = MakeStages(full_screen_vert, blit_depth_stencil_frag);
-    const auto renderpass = renderpass_cache.GetRenderpass(VideoCore::PixelFormat::Invalid,
+    const bool dynamic_rendering = instance.IsDynamicRenderingSupported();
+    // D24S8 is the only depth format this fork sends here, and it's always combined depth+stencil.
+    const vk::Format depth_format = instance.GetTraits(VideoCore::PixelFormat::D24S8).native;
+    const vk::PipelineRenderingCreateInfoKHR rendering_create_info = {
+        .depthAttachmentFormat = depth_format,
+        .stencilAttachmentFormat = depth_format,
+    };
+    const vk::RenderPass renderpass =
+        dynamic_rendering ? vk::RenderPass{}
+                          : renderpass_cache.GetRenderpass(VideoCore::PixelFormat::Invalid,
                                                            VideoCore::PixelFormat::D24S8, false);
     vk::GraphicsPipelineCreateInfo depth_stencil_info = {
+        .pNext = dynamic_rendering ? &rendering_create_info : nullptr,
         .stageCount = static_cast<u32>(stages.size()),
         .pStages = stages.data(),
         .pVertexInputState = &PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -637,6 +669,10 @@ bool BlitHelper::Filter(Surface& surface, const VideoCore::TextureBlit& blit) {
     }
     if (blit.src_level != 0) {
         return true;
+    }
+    if (!surface.Image()) [[unlikely]] {
+        LOG_CRITICAL(Render_Vulkan, "Skipping texture filter with a null surface image");
+        return false;
     }
 
     switch (filter) {
@@ -708,11 +744,20 @@ vk::Pipeline BlitHelper::MakeFilterPipeline(vk::ShaderModule fragment_shader,
     }
 
     const std::array stages = MakeStages(full_screen_vert, fragment_shader);
-    // Use the provided color format for render pass compatibility
-    const auto renderpass =
-        renderpass_cache.GetRenderpass(color_format, VideoCore::PixelFormat::Invalid, false);
+    const bool dynamic_rendering = instance.IsDynamicRenderingSupported();
+    // Use the provided color format for render pass / pipeline-rendering compatibility
+    const vk::Format color_attachment_format = instance.GetTraits(color_format).native;
+    const vk::PipelineRenderingCreateInfoKHR rendering_create_info = {
+        .colorAttachmentCount = 1,
+        .pColorAttachmentFormats = &color_attachment_format,
+    };
+    const vk::RenderPass renderpass =
+        dynamic_rendering ? vk::RenderPass{}
+                          : renderpass_cache.GetRenderpass(color_format,
+                                                           VideoCore::PixelFormat::Invalid, false);
 
     vk::GraphicsPipelineCreateInfo pipeline_info = {
+        .pNext = dynamic_rendering ? &rendering_create_info : nullptr,
         .stageCount = static_cast<u32>(stages.size()),
         .pStages = stages.data(),
         .pVertexInputState = &PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -746,18 +791,21 @@ void BlitHelper::FilterPass(Surface& surface, vk::Pipeline pipeline, vk::Pipelin
                                  surface.ImageView(ViewType::Sample, Type::Base), linear_sampler,
                                  vk::ImageLayout::eGeneral);
 
-    const auto renderpass = renderpass_cache.GetRenderpass(surface.pixel_format,
-                                                           VideoCore::PixelFormat::Invalid, false);
-
-    const RenderPass render_pass = {
-        .framebuffer = surface.Framebuffer(),
-        .render_pass = renderpass,
+    RenderPass render_pass = {
         .render_area =
             {
                 .offset = {0, 0},
                 .extent = {surface.GetScaledWidth(), surface.GetScaledHeight()},
             },
     };
+    if (instance.IsDynamicRenderingSupported()) {
+        render_pass.color_view = surface.ImageView(ViewType::Mip0);
+        render_pass.color_format = instance.GetTraits(surface.pixel_format).native;
+    } else {
+        render_pass.framebuffer = surface.Framebuffer();
+        render_pass.render_pass = renderpass_cache.GetRenderpass(
+            surface.pixel_format, VideoCore::PixelFormat::Invalid, false);
+    }
     renderpass_cache.BeginRendering(render_pass);
     const float src_scale = static_cast<float>(surface.GetResScale());
     // Calculate normalized texture coordinates like OpenGL does
@@ -831,18 +879,21 @@ void BlitHelper::FilterPassThreeTextures(Surface& surface, vk::Pipeline pipeline
                                  surface.ImageView(ViewType::Sample, Type::Base), linear_sampler,
                                  vk::ImageLayout::eGeneral);
 
-    const auto renderpass = renderpass_cache.GetRenderpass(surface.pixel_format,
-                                                           VideoCore::PixelFormat::Invalid, false);
-
-    const RenderPass render_pass = {
-        .framebuffer = surface.Framebuffer(),
-        .render_pass = renderpass,
+    RenderPass render_pass = {
         .render_area =
             {
                 .offset = {0, 0},
                 .extent = {surface.GetScaledWidth(), surface.GetScaledHeight()},
             },
     };
+    if (instance.IsDynamicRenderingSupported()) {
+        render_pass.color_view = surface.ImageView(ViewType::Mip0);
+        render_pass.color_format = instance.GetTraits(surface.pixel_format).native;
+    } else {
+        render_pass.framebuffer = surface.Framebuffer();
+        render_pass.render_pass = renderpass_cache.GetRenderpass(
+            surface.pixel_format, VideoCore::PixelFormat::Invalid, false);
+    }
     renderpass_cache.BeginRendering(render_pass);
 
     const float src_scale = static_cast<float>(surface.GetResScale());

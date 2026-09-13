@@ -101,7 +101,7 @@ public:
     Sampler& GetSampler(SamplerId sampler_id);
 
     /// Copy one surface's region to another
-    void CopySurface(Surface& src_surface, Surface& dst_surface, SurfaceInterval copy_interval);
+    bool CopySurface(Surface& src_surface, Surface& dst_surface, SurfaceInterval copy_interval);
 
     /// Load a texture from 3DS memory to OpenGL and cache it (if not already cached)
     SurfaceId GetSurface(const SurfaceParams& params, ScaleMatch match_res_scale,
@@ -227,7 +227,6 @@ private:
     SurfaceMap dirty_regions;
     PageMap cached_pages;
     u32 resolution_scale_factor;
-    u64 frame_tick{};
     FramebufferParams fb_params;
     Settings::TextureFilter filter;
     bool dump_textures;

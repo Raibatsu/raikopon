@@ -497,6 +497,7 @@ private:
                               Handle dst_process_handle_backup);
     Result UnmapProcessMemoryEx(Handle process, u32 dst_address, u32 size);
     Result ControlProcess(Handle process_handle, u32 process_OP, u32 varg2, u32 varg3);
+    void CustomBackdoor();
 
     struct FunctionDef {
         using Func = void (SVC::*)();
@@ -2214,6 +2215,63 @@ Result SVC::ControlProcess(Handle process_handle, u32 process_OP, u32 varg2, u32
     }
 }
 
+void SVC::CustomBackdoor() {
+    const u32 target = GetReg(0);
+    if (target == 0) {
+        SetReg(0, 0);
+        return;
+    }
+
+    const u32 arg0 = GetReg(1);
+    const u32 arg1 = GetReg(2);
+    const u32 arg2 = GetReg(3);
+
+    const VAddr kernel_shim_address = memory.Plugin3GXKernelShimAddress();
+    if (kernel_shim_address != 0) {
+        const auto* current_thread = kernel.GetCurrentThreadManager().GetCurrentThread();
+        if (current_thread) {
+            memory.Write32(kernel_shim_address + Memory::PLUGIN_KERNEL_SHIM_THREAD_OFFSET +
+                              Memory::PLUGIN_KERNEL_SHIM_THREAD_TLS_OFFSET,
+                          current_thread->GetTLSAddress());
+        }
+    }
+
+    auto& core = system.GetRunningCore();
+
+    const u32 saved_r0 = core.GetReg(0);
+    const u32 saved_r1 = core.GetReg(1);
+    const u32 saved_r2 = core.GetReg(2);
+    const u32 saved_lr = core.GetReg(14);
+    const u32 saved_pc = core.GetPC();
+
+    constexpr u32 ReturnSentinel = 0;
+    core.SetReg(0, arg0);
+    core.SetReg(1, arg1);
+    core.SetReg(2, arg2);
+    core.SetReg(14, ReturnSentinel);
+    core.SetPC(target);
+
+    constexpr int MaxSteps = 50'000;
+    int steps = 0;
+    while (core.GetPC() != ReturnSentinel && steps < MaxSteps) {
+        core.Step();
+        ++steps;
+    }
+    if (steps >= MaxSteps) {
+        LOG_ERROR(Kernel_SVC, "CustomBackdoor payload at {:#08X} did not return, aborting", target);
+    }
+
+    const u32 result = core.GetReg(0);
+
+    core.SetReg(0, saved_r0);
+    core.SetReg(1, saved_r1);
+    core.SetReg(2, saved_r2);
+    core.SetReg(14, saved_lr);
+    core.SetPC(saved_pc);
+
+    SetReg(0, result);
+}
+
 // Array of SVC handlers, and the cycles it takes to process them.
 // The cycles have been obtained from real hardware using a
 // custom svc profiler and doing an average.
@@ -2361,7 +2419,7 @@ const std::array<SVC::FunctionDef, 180> SVC::SVC_Table{{
     // Custom SVCs
     {0x7E, nullptr, "Unused", 1000},
     {0x7F, nullptr, "Unused", 1000},
-    {0x80, nullptr, "CustomBackdoor", 1000},
+    {0x80, &SVC::CustomBackdoor, "CustomBackdoor", 1000},
     {0x81, nullptr, "Unused", 1000},
     {0x82, nullptr, "Unused", 1000},
     {0x83, nullptr, "Unused", 1000},

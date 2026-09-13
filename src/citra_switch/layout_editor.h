@@ -33,17 +33,48 @@ struct LayoutEditorNav {
     bool shrink{};        // ZL held - scale the selected screen down, aspect always locked
     bool opacity_up{};    // D-pad Right held - raise the selected screen's opacity
     bool opacity_down{};  // D-pad Left held - lower the selected screen's opacity
+    bool toggle_rotation{};
+    bool rotate_cw{};
+    bool rotate_ccw{};
+    bool layer_front{};  // D-pad Up - bring the selected screen to the front where they overlap
+    bool layer_back{};   // D-pad Down - send the selected screen to the back
 };
 
 // Switches to the Custom preset, seeding its rects from the current arrangement the first time,
 // and pauses emulation. No-op if no game is running.
 void OpenLayoutEditor();
 
+void OpenLayoutEditorStandalone();
+
 // `save` keeps the edited rects and records them as a per-game override; otherwise the rects from
 // the moment the editor opened are put back. Either way emulation resumes.
 void CloseLayoutEditor(bool save);
 
 bool IsLayoutEditorOpen();
+
+bool IsLayoutEditorStandaloneOpen();
+
+struct LayoutEditorPreviewRect {
+    int x{}, y{}, w{}, h{};
+    int opacity_percent{100};
+    int rotation_degrees{};
+};
+
+struct LayoutEditorPreview {
+    bool visible{};
+    LayoutEditorPreviewRect top;
+    LayoutEditorPreviewRect bottom;
+    int canvas_width{};
+    int canvas_height{};
+    bool selected_top{};
+    bool selected_bottom{};
+    bool aspect_locked{};
+    bool rotation_mode{};
+    // True if the top screen draws last (i.e. on top, where the two rects overlap).
+    bool top_on_top{};
+};
+
+LayoutEditorPreview GetLayoutEditorPreview();
 
 // Drives the editor from the input thread.
 void UpdateLayoutEditor(const InputState& state, const LayoutEditorNav& nav);

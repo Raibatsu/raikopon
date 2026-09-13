@@ -30,6 +30,7 @@ struct GameOverrides {
     std::optional<int> gyro_sensitivity_y;
     std::optional<int> pointer_source;
     std::optional<int> movie_throttle_clock_percentage;
+    std::optional<bool> movie_throttle_enabled;
     std::optional<int> cpu_clock_percentage;
     std::optional<bool> enable_compile_boost;
     // The in-game settings screen additionally exposes these — everything the library's
@@ -58,6 +59,8 @@ struct GameOverrides {
     std::optional<int> custom_bottom_y;
     std::optional<int> custom_bottom_width;
     std::optional<int> custom_bottom_height;
+    std::optional<int> custom_top_rotation;
+    std::optional<int> custom_bottom_rotation;
     std::optional<int> top_screen_opacity;
     std::optional<int> bottom_screen_opacity;
 };
@@ -73,6 +76,7 @@ enum class OverrideField {
     GyroSensitivity, // X and Y together — Adjust() always changes just one, but both are always present once either is customized.
     PointerSource,
     MovieThrottleClock,
+    MovieThrottleEnabled,
     CpuClock,
     EnableCompileBoost,
     Resolution,
@@ -131,5 +135,19 @@ void ResetGameOverridesToLibrary();
 // source, movie throttle) to whatever they were before this session's overrides applied. Call
 // once the game has fully shut down.
 void EndGameOverrides();
+
+struct PlaytimeRecord {
+    std::uint64_t total_seconds{};
+    std::uint64_t last_played{};
+};
+
+// Reads <config dir>/game_settings/<TITLEID>.playtime.ini, or a zeroed record if the title has
+// never been played. Kept in its own file rather than the Overrides one above so a playtime
+// flush (every game exit) can never clobber a settings override that hasn't been re-read since.
+PlaytimeRecord LoadPlaytime(std::uint64_t program_id);
+
+// Adds `seconds_played` to the title's stored total and stamps last_played to now. No-op for
+// program_id 0 (title never resolved).
+void AddPlaytime(std::uint64_t program_id, std::uint64_t seconds_played);
 
 } // namespace SwitchFrontend

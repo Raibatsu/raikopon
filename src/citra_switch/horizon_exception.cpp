@@ -65,7 +65,7 @@ extern "C" bool HorizonExceptionDispatch(ThreadExceptionDump* ctx) {
 // Reached through the crash trampoline in the entry stub when nothing claimed the fault. Expected to
 // terminate the process.
 extern "C" void __libnx_exception_handler(ThreadExceptionDump* ctx) {
-    std::fprintf(stderr, "Dekopon: unhandled CPU exception\n");
+    std::fprintf(stderr, "Raika Azahar: unhandled CPU exception\n");
 
     if (threadExceptionIsAArch64(ctx)) {
         std::fprintf(stderr, "  error_desc=%08" PRIx32 " esr=%08" PRIx32 "\n", ctx->error_desc,

@@ -5,9 +5,11 @@
 #include <csignal>
 #include <cstring>
 #include <dynarmic/interface/A32/a32.h>
+#include <dynarmic/interface/jit_log.h>
 #include <dynarmic/interface/optimization_flags.h>
 #include "common/assert.h"
 #include "common/microprofile.h"
+#include "common/settings.h"
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #include "core/arm/dynarmic/arm_dynarmic_cp15.h"
 #include "core/arm/dynarmic/arm_exclusive_monitor.h"
@@ -359,6 +361,12 @@ void ARM_Dynarmic::ServeBreak([[maybe_unused]] int signal) {
 }
 
 std::unique_ptr<Dynarmic::A32::Jit> ARM_Dynarmic::MakeJit() {
+    // Propagate the Settings toggle into dynarmic's JIT-compile logging (see
+    // backend/arm64/address_space.cpp) -- dynarmic can't read Settings itself, this is the one
+    // place that links against both. Harmless to repeat on every call; the flag is process-wide,
+    // not per-Jit-instance.
+    Dynarmic::SetJitCompileLogEnabled(Settings::values.enable_gpu_frame_log.GetValue());
+
     Dynarmic::A32::UserConfig config;
     config.callbacks = cb.get();
     if (current_page_table) {
@@ -373,6 +381,7 @@ std::unique_ptr<Dynarmic::A32::Jit> ARM_Dynarmic::MakeJit() {
     }
     config.coprocessors[15] = std::make_shared<DynarmicCP15>(cp15_state);
     config.define_unpredictable_behaviour = true;
+    config.arch_version = Dynarmic::A32::ArchVersion::v6K;
 
 #ifdef __SWITCH__
     config.hook_hint_instructions = true;

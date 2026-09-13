@@ -59,41 +59,6 @@ struct DrawParams {
     return std::min(max_size, TEXTURE_BUFFER_SIZE);
 }
 
-struct DiagBufferSlot {
-    const char* name;
-    PAddr addr;
-};
-
-std::array<DiagBufferSlot, 8> DiagAllBufferSlots(const Pica::PicaCore& pica) {
-    const auto& top = pica.regs.framebuffer_config[0];
-    const auto& bottom = pica.regs.framebuffer_config[1];
-    return {{
-        {"top-left1", top.address_left1},
-        {"top-left2", top.address_left2},
-        {"top-right1", top.address_right1},
-        {"top-right2", top.address_right2},
-        {"bottom-left1", bottom.address_left1},
-        {"bottom-left2", bottom.address_left2},
-        {"bottom-right1", bottom.address_right1},
-        {"bottom-right2", bottom.address_right2},
-    }};
-}
-
-// Unlike the narrow "is this the currently scanned-out address" check, this matches
-// against ALL known top/bottom buffer slots (active AND back), so it also catches
-// draws/blits that target a screen buffer before it becomes the active scan-out target.
-const char* DiagClassifyAddress(const Pica::PicaCore& pica, PAddr addr) {
-    if (addr == 0) {
-        return nullptr;
-    }
-    for (const auto& slot : DiagAllBufferSlots(pica)) {
-        if (slot.addr == addr) {
-            return slot.name;
-        }
-    }
-    return nullptr;
-}
-
 } // Anonymous namespace
 
 RasterizerVulkan::RasterizerVulkan(Memory::MemorySystem& memory, Pica::PicaCore& pica,
@@ -680,7 +645,7 @@ bool RasterizerVulkan::Draw(bool accelerate, bool is_indexed) {
 
     const auto fb_helper = res_cache.GetFramebufferSurfaces(using_color_fb, using_depth_fb);
     const Framebuffer* framebuffer = fb_helper.Framebuffer();
-    if (!framebuffer->Handle()) {
+    if (!framebuffer->IsValid()) {
         return true;
     }
 
@@ -793,10 +758,23 @@ void RasterizerVulkan::SyncTextureUnits(const Framebuffer* framebuffer) {
 
         // If the texture unit is disabled bind a null surface to it
         if (!texture.enabled) {
-            Surface& null_surface = res_cache.GetSurface(VideoCore::NULL_SURFACE_ID);
-            const Sampler& null_sampler = res_cache.GetSampler(VideoCore::NULL_SAMPLER_ID);
-            update_queue.AddImageSampler(texture_set, texture_index, 0, null_surface.ImageView(),
-                                         null_sampler.Handle());
+            switch (texture.config.type.Value()) {
+            case TextureType::TextureCube:
+            case TextureType::ShadowCube: {
+                Surface& null_surface = res_cache.GetSurface(VideoCore::NULL_SURFACE_CUBE_ID);
+                const Sampler& null_sampler = res_cache.GetSampler(VideoCore::NULL_SURFACE_CUBE_ID);
+                update_queue.AddImageSampler(texture_set, texture_index, 0,
+                                             null_surface.ImageView(), null_sampler.Handle());
+                break;
+            }
+            default: {
+                Surface& null_surface = res_cache.GetSurface(VideoCore::NULL_SURFACE_ID);
+                const Sampler& null_sampler = res_cache.GetSampler(VideoCore::NULL_SURFACE_ID);
+                update_queue.AddImageSampler(texture_set, texture_index, 0,
+                                             null_surface.ImageView(), null_sampler.Handle());
+                break;
+            }
+            }
             continue;
         }
 
@@ -909,49 +887,16 @@ void RasterizerVulkan::ClearAll(bool flush) {
     res_cache.ClearAll(flush);
 }
 
-namespace {
-bool DiagIsScanOut(const Pica::PicaCore& pica, PAddr addr) {
-    return DiagClassifyAddress(pica, addr) != nullptr;
-}
-} // namespace
-
 bool RasterizerVulkan::AccelerateDisplayTransfer(const Pica::DisplayTransferConfig& config) {
-    const PAddr out_addr = config.GetPhysicalOutputAddress();
-    const bool diag_targets_scan_out = DiagIsScanOut(pica, out_addr);
-    const bool ok = res_cache.AccelerateDisplayTransfer(config);
-    if (diag_targets_scan_out) {
-        LOG_WARNING(Render_Vulkan,
-                    "SCREENDIAG DisplayTransfer -> scan-out out_addr=0x{:08x} in_addr=0x{:08x} "
-                    "ok={} thread=0x{:x}",
-                    out_addr, config.GetPhysicalInputAddress(), ok,
-                    std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    }
-    return ok;
+    return res_cache.AccelerateDisplayTransfer(config);
 }
 
 bool RasterizerVulkan::AccelerateTextureCopy(const Pica::DisplayTransferConfig& config) {
-    const PAddr out_addr = config.GetPhysicalOutputAddress();
-    const bool diag_targets_scan_out = DiagIsScanOut(pica, out_addr);
-    const bool ok = res_cache.AccelerateTextureCopy(config);
-    if (diag_targets_scan_out) {
-        LOG_WARNING(Render_Vulkan,
-                    "SCREENDIAG TextureCopy -> scan-out out_addr=0x{:08x} in_addr=0x{:08x} ok={} "
-                    "thread=0x{:x}",
-                    out_addr, config.GetPhysicalInputAddress(), ok,
-                    std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    }
-    return ok;
+    return res_cache.AccelerateTextureCopy(config);
 }
 
 bool RasterizerVulkan::AccelerateFill(const Pica::MemoryFillConfig& config) {
-    const PAddr start_addr = config.GetStartAddress();
-    const bool diag_targets_scan_out = DiagIsScanOut(pica, start_addr);
-    const bool ok = res_cache.AccelerateFill(config);
-    if (diag_targets_scan_out) {
-        LOG_WARNING(Render_Vulkan, "SCREENDIAG Fill -> scan-out addr=0x{:08x} ok={} thread=0x{:x}",
-                    start_addr, ok, std::hash<std::thread::id>{}(std::this_thread::get_id()));
-    }
-    return ok;
+    return res_cache.AccelerateFill(config);
 }
 
 bool RasterizerVulkan::AccelerateDisplay(const Pica::FramebufferConfig& config,
@@ -998,47 +943,9 @@ bool RasterizerVulkan::AccelerateDisplay(const Pica::FramebufferConfig& config,
         const bool covers_bot = in_range(bot_cfg.address_left1) || in_range(bot_cfg.address_left2) ||
                                 in_range(bot_cfg.address_right1) || in_range(bot_cfg.address_right2);
         if (covers_top && covers_bot && screen_info.image_view) {
-            static u64 diag_hold = 0;
-            if (++diag_hold % 60 == 1) {
-                LOG_WARNING(Render_Vulkan,
-                            "SCREENDIAG bleed-guard HELD screen (buffers overlap) req_addr=0x{:08x} "
-                            "surface [0x{:08x}..0x{:08x}) count={}",
-                            framebuffer_addr, s_addr, s_end, diag_hold);
-            }
             // Leave screen_info untouched -> holds this screen's last good frame. Returning true
             // keeps the caller from falling back to its own reset-to-blank path.
             return true;
-        }
-
-        // Combat-bleed hunt: detect when the GPU image resolved for THIS screen is the same image
-        // the OTHER screen used on its most recent resolve -- i.e. the surface cache handed one
-        // screen an image whose pixels belong to the other (content contamination with no address
-        // or view-alias signal). is_bottom is decided from which config's addresses match.
-        const auto img = reinterpret_cast<std::uintptr_t>(static_cast<VkImage>(src_surface.Image()));
-        const bool is_bottom =
-            framebuffer_addr == bot_cfg.address_left1 || framebuffer_addr == bot_cfg.address_left2 ||
-            framebuffer_addr == bot_cfg.address_right1 || framebuffer_addr == bot_cfg.address_right2;
-        static std::array<std::uintptr_t, 2> last_img{};
-        const u32 role = is_bottom ? 1 : 0;
-        if (img != 0 && img == last_img[1 - role]) {
-            static u64 diag_recycle = 0;
-            if (++diag_recycle % 30 == 1) {
-                LOG_CRITICAL(Render_Vulkan,
-                            "SCREENDIAG RECYCLE this={} shares img=0x{:x} with other screen; "
-                            "req_addr=0x{:08x} surface [0x{:08x}..0x{:08x}) count={}",
-                            is_bottom ? "bottom" : "top", img, framebuffer_addr, s_addr, s_end,
-                            diag_recycle);
-            }
-        }
-        last_img[role] = img;
-
-        static u64 diag_disp = 0;
-        if (++diag_disp % 200 == 1) {
-            LOG_WARNING(Render_Vulkan,
-                        "SCREENDIAG display {} req_addr=0x{:08x} active_fb={} surface "
-                        "[0x{:08x}..0x{:08x}) size={} img=0x{:x} covers(top={},bot={})",
-                        is_bottom ? "bottom" : "top", framebuffer_addr, config.active_fb, s_addr,
-                        s_end, src_surface.size, img, covers_top, covers_bot);
         }
     }
 

@@ -106,6 +106,7 @@ void LogSettings() {
     log_setting("Renderer_EnableCompileBoost", values.enable_compile_boost.GetValue());
     log_setting("Renderer_Debug", values.renderer_debug.GetValue());
     log_setting("Renderer_PicaDebugging", values.pica_debugging.GetValue());
+    log_setting("Renderer_EnableGpuFrameLog", values.enable_gpu_frame_log.GetValue());
     log_setting("Renderer_UseHwShader", values.use_hw_shader.GetValue());
     log_setting("Renderer_ShadersAccurateMul", values.shaders_accurate_mul.GetValue());
     log_setting("Renderer_UseShaderJit", values.use_shader_jit.GetValue());

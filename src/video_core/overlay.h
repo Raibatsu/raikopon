@@ -25,6 +25,11 @@ struct LayoutEditorState {
     bool selected_top{};
     bool selected_bottom{};
     bool aspect_locked{};
+    bool rotation_mode{};
+    int top_rotation_degrees{};
+    int bottom_rotation_degrees{};
+    // True if the top screen draws last (i.e. on top, where the two rects overlap).
+    bool top_on_top{};
 };
 
 void SetLayoutEditorState(const LayoutEditorState& state);

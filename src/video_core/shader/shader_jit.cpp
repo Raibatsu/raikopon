@@ -5,9 +5,11 @@
 #include "common/arch.h"
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
 
+#include <chrono>
 #include <exception>
 #include <new>
 #include "common/assert.h"
+#include "common/gpu_frame_log.h"
 #include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -33,7 +35,12 @@ JitEngine::JitEngine()
 JitEngine::~JitEngine() = default;
 
 void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCode> program_code,
-                             std::shared_ptr<const SwizzleData> swizzle_data, bool boosted) {
+                             std::shared_ptr<const SwizzleData> swizzle_data, bool boosted,
+                             u64 cache_key, std::chrono::steady_clock::time_point queued_at) {
+    const auto queue_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - queued_at);
+    const auto compile_start = std::chrono::steady_clock::now();
+
     std::unique_ptr<JitShader> shader;
     if (!exec_memory_exhausted.load(std::memory_order_relaxed)) {
         try {
@@ -52,6 +59,11 @@ void JitEngine::CompileEntry(CacheEntry* entry, std::shared_ptr<const ProgramCod
     }
     entry->shader = std::move(shader);
     entry->ready.store(true, std::memory_order_release);
+
+    const auto compile_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - compile_start);
+    Common::GpuFrameLog::LogShaderEvent("done", Common::GpuFrameLog::CurrentFrame(), "PICA_VS",
+                                        cache_key, queue_wait_us.count(), compile_us.count());
     Common::ShaderCompileStats::EndCompile(boosted);
 }
 
@@ -85,8 +97,12 @@ void JitEngine::SetupBatch(ShaderSetup& setup, u32 entry_point) {
         auto swizzle_data = std::make_shared<SwizzleData>(setup.GetSwizzleData());
         const bool boosted = Common::ShaderCompileStats::BeginCompile(
             Settings::values.enable_compile_boost.GetValue());
-        compile_workers.QueueWork([this, entry, program_code, swizzle_data, boosted] {
-            CompileEntry(entry, program_code, swizzle_data, boosted);
+        Common::GpuFrameLog::LogShaderEvent("queued", Common::GpuFrameLog::CurrentFrame(),
+                                            "PICA_VS", cache_key);
+        const auto queued_at = std::chrono::steady_clock::now();
+        compile_workers.QueueWork([this, entry, program_code, swizzle_data, boosted, cache_key,
+                                   queued_at] {
+            CompileEntry(entry, program_code, swizzle_data, boosted, cache_key, queued_at);
         });
     }
 
@@ -145,7 +161,8 @@ MICROPROFILE_DECLARE(GPU_Shader);
 
 void JitEngine::Run(const ShaderSetup& setup, ShaderUnit& state) const {
     if (setup.cached_shader == nullptr) {
-        // This shader has no compiled code.
+        // This shader has no compiled code (JIT still compiling it, or compilation failed).
+        Common::GpuFrameLog::RecordInterpreterFallback();
         interpreter->Run(setup, state);
         return;
     }

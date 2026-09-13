@@ -2,8 +2,12 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <chrono>
+
 #include "common/common_paths.h"
 #include "common/file_util.h"
+#include "common/gpu_frame_log.h"
+#include "common/hash.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "common/shader_compile_stats.h"
@@ -17,6 +21,7 @@
 #include "video_core/shader/generator/glsl_shader_gen.h"
 #include "video_core/shader/generator/shader_gen.h"
 #include "video_core/shader/generator/spv_fs_shader_gen.h"
+#include "video_core/shader/generator/spv_vs_shader_gen.h"
 
 #define MALFORMED_DISK_CACHE                                                                       \
     do {                                                                                           \
@@ -104,16 +109,36 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
 
         ExtraVSConfig extra_config = parent.CalcExtraConfig(config);
 
-        auto program =
-            Common::HashableString(GLSL::GenerateVertexShader(setup, config, extra_config));
+        // The SPIRV generator only knows how to emit branchless vertex programs (see
+        // spv_vs_shader_gen.h) and doesn't implement the geometry-shader varying-output path;
+        // anything else falls back to GLSL+glslang like before.
+        const bool use_spirv =
+            parent.profile.vk_use_spirv_generator && !extra_config.use_geometry_shader &&
+            SPIRV::CanGenerateVertexShader(setup.GetProgramCode(), config.state.main_offset);
 
-        if (program.empty()) {
-            LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
-            programmable_vertex_map.erase(config_hash);
-            return {};
+        std::vector<u32> direct_spirv;
+        auto program = Common::HashableString();
+        u64 spirv_id;
+
+        if (use_spirv) {
+            direct_spirv = SPIRV::GenerateVertexShader(setup, config, extra_config);
+            if (direct_spirv.empty()) {
+                LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
+                programmable_vertex_map.erase(config_hash);
+                return {};
+            }
+            spirv_id =
+                Common::ComputeHash64(direct_spirv.data(), direct_spirv.size() * sizeof(u32));
+        } else {
+            program =
+                Common::HashableString(GLSL::GenerateVertexShader(setup, config, extra_config));
+            if (program.empty()) {
+                LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
+                programmable_vertex_map.erase(config_hash);
+                return {};
+            }
+            spirv_id = program.Hash();
         }
-
-        const u64 spirv_id = program.Hash();
 
         auto [iter_prog, new_program] =
             programmable_vertex_cache.try_emplace(spirv_id, parent.instance);
@@ -122,16 +147,47 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseProgrammableVer
         if (new_program) {
             LOG_NEW_OBJECT(Render_Vulkan, "New VS SPIRV {:016X}", spirv_id);
 
-            shader.program = std::move(program);
             const vk::Device device = parent.instance.GetDevice();
             const bool boosted = Common::ShaderCompileStats::BeginCompile(
                 Settings::values.enable_compile_boost.GetValue());
-            parent.shader_workers.QueueWork([device, &shader, this, spirv_id, boosted] {
-                auto spirv = CompileGLSL(shader.program, vk::ShaderStageFlagBits::eVertex);
-                AppendVSSPIRV(vs_cache, spirv, spirv_id);
-                shader.program.clear();
-                shader.module = CompileSPV(spirv, device);
+            Common::GpuFrameLog::LogShaderEvent("queued", Common::GpuFrameLog::CurrentFrame(),
+                                                "VS", spirv_id);
+            const auto queued_at = std::chrono::steady_clock::now();
+
+            if (use_spirv) {
+                shader.spirv = std::move(direct_spirv);
+            } else {
+                shader.program = std::move(program);
+            }
+
+            parent.shader_workers.QueueWork([device, &shader, this, spirv_id, boosted, queued_at,
+                                             use_spirv] {
+                const auto queue_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - queued_at);
+                const auto compile_start = std::chrono::steady_clock::now();
+                if (use_spirv) {
+                    OptimizeSpirv(shader.spirv, vk::ShaderStageFlagBits::eVertex);
+                } else {
+                    shader.spirv = CompileGLSL(shader.program, vk::ShaderStageFlagBits::eVertex);
+                    shader.program.clear();
+                }
+                AppendVSSPIRV(vs_cache, shader.spirv, spirv_id);
+                shader.module = CompileSPV(shader.spirv, device);
+                if (parent.instance.IsShaderObjectSupported()) {
+                    // May or may not be followed by a fixed geometry shader (see
+                    // UseFixedGeometryShader vs UseTrivialGeometryShader) -- nextStage covers
+                    // both. See docs/SHADER_OBJECT_HANDOFF.md item 3.
+                    shader.CreateShaderObject(
+                        vk::ShaderStageFlagBits::eVertex,
+                        vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment,
+                        parent.descriptor_set_layouts);
+                }
                 shader.MarkDone();
+                const auto compile_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - compile_start);
+                Common::GpuFrameLog::LogShaderEvent("done", Common::GpuFrameLog::CurrentFrame(),
+                                                    "VS", spirv_id, queue_wait_us.count(),
+                                                    compile_us.count());
                 Common::ShaderCompileStats::EndCompile(boosted);
             });
         }
@@ -164,12 +220,19 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
 
         const bool boosted = Common::ShaderCompileStats::BeginCompile(
             Settings::values.enable_compile_boost.GetValue());
+        Common::GpuFrameLog::LogShaderEvent("queued", Common::GpuFrameLog::CurrentFrame(), "FS",
+                                            fs_config_hash);
+        const auto queued_at = std::chrono::steady_clock::now();
         parent.shader_workers.QueueWork([fs_config, user, this, &shader, fs_config_hash,
-                                         boosted]() {
-            std::vector<u32> spirv;
+                                         boosted, queued_at]() {
+            const auto queue_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - queued_at);
+            const auto compile_start = std::chrono::steady_clock::now();
+            std::vector<u32>& spirv = shader.spirv;
             const bool use_spirv = parent.profile.vk_use_spirv_generator;
             if (use_spirv && !fs_config.UsesSpirvIncompatibleConfig()) {
                 spirv = SPIRV::GenerateFragmentShader(fs_config, parent.profile);
+                OptimizeSpirv(spirv, vk::ShaderStageFlagBits::eFragment);
                 shader.module = CompileSPV(spirv, parent.instance.GetDevice());
             } else {
                 const std::string code =
@@ -177,7 +240,17 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFragmentShader(
                 spirv = CompileGLSL(code, vk::ShaderStageFlagBits::eFragment);
                 shader.module = CompileSPV(spirv, parent.instance.GetDevice());
             }
+            if (parent.instance.IsShaderObjectSupported()) {
+                // Fragment is always the last stage in this fork (no tessellation/mesh shaders).
+                shader.CreateShaderObject(vk::ShaderStageFlagBits::eFragment, {},
+                                          parent.descriptor_set_layouts);
+            }
             shader.MarkDone();
+            const auto compile_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - compile_start);
+            Common::GpuFrameLog::LogShaderEvent("done", Common::GpuFrameLog::CurrentFrame(), "FS",
+                                                fs_config_hash, queue_wait_us.count(),
+                                                compile_us.count());
 
             if (user.IsCacheable()) {
                 // Only cache to disk if the user config is cacheable
@@ -223,18 +296,35 @@ std::optional<std::pair<u64, Shader* const>> ShaderDiskCache::UseFixedGeometrySh
 
             const bool boosted = Common::ShaderCompileStats::BeginCompile(
                 Settings::values.enable_compile_boost.GetValue());
+            Common::GpuFrameLog::LogShaderEvent("queued", Common::GpuFrameLog::CurrentFrame(),
+                                                "GS", gs_config_hash);
+            const auto queued_at = std::chrono::steady_clock::now();
             parent.shader_workers.QueueWork([gs_config, this, &shader, gs_config_hash,
-                                             boosted]() {
+                                             boosted, queued_at]() {
+                const auto queue_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - queued_at);
+                const auto compile_start = std::chrono::steady_clock::now();
                 ExtraFixedGSConfig extra;
                 extra.use_clip_planes = parent.profile.has_clip_planes;
                 extra.separable_shader = true;
 
                 const auto code = GLSL::GenerateFixedGeometryShader(gs_config, extra);
-                const auto spirv = CompileGLSL(code, vk::ShaderStageFlagBits::eGeometry);
-                shader.module = CompileSPV(spirv, parent.instance.GetDevice());
+                shader.spirv = CompileGLSL(code, vk::ShaderStageFlagBits::eGeometry);
+                shader.module = CompileSPV(shader.spirv, parent.instance.GetDevice());
+                if (parent.instance.IsShaderObjectSupported()) {
+                    // Always followed by the fragment stage in this fork.
+                    shader.CreateShaderObject(vk::ShaderStageFlagBits::eGeometry,
+                                              vk::ShaderStageFlagBits::eFragment,
+                                              parent.descriptor_set_layouts);
+                }
                 shader.MarkDone();
+                const auto compile_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - compile_start);
+                Common::GpuFrameLog::LogShaderEvent("done", Common::GpuFrameLog::CurrentFrame(),
+                                                    "GS", gs_config_hash, queue_wait_us.count(),
+                                                    compile_us.count());
 
-                AppendGSSPIRV(gs_cache, spirv, gs_config_hash);
+                AppendGSSPIRV(gs_cache, shader.spirv, gs_config_hash);
                 GSConfigEntry entry{
                     .version = GSConfigEntry::EXPECTED_VERSION,
                     .gs_config = gs_config,
@@ -743,7 +833,22 @@ bool ShaderDiskCache::InitVSCache(const std::atomic_bool& stop_loading,
                     const auto spirv = std::span<const u32>(
                         reinterpret_cast<const u32*>(spirv_data), spirv_size / sizeof(u32));
 
+                    // Retain the SPIR-V (CreateShaderObject needs it) -- disk-cache replay
+                    // previously left shader_object null forever for every shader loaded this
+                    // way, since only the runtime/first-compile path created one. On a warm boot
+                    // reusing an existing disk cache, that's nearly every shader, so
+                    // AreShaderObjectsReady() was permanently false and BindPipeline (which never
+                    // falls back to the classic pipeline when shader objects are supported)
+                    // silently no-op'd almost every draw -- grey screens with the emulated game
+                    // still running fine underneath. See docs/SHADER_OBJECT_HANDOFF.md.
+                    iter_prog->second.spirv.assign(spirv.begin(), spirv.end());
                     iter_prog->second.module = CompileSPV(spirv, parent.instance.GetDevice());
+                    if (iter_prog->second.module && parent.instance.IsShaderObjectSupported()) {
+                        iter_prog->second.CreateShaderObject(
+                            vk::ShaderStageFlagBits::eVertex,
+                            vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment,
+                            parent.descriptor_set_layouts);
+                    }
                     iter_prog->second.MarkDone();
 
                     if (!iter_prog->second.module) {
@@ -880,15 +985,35 @@ bool ShaderDiskCache::InitVSCache(const std::atomic_bool& stop_loading,
 
                 ExtraVSConfig extra_config = parent.CalcExtraConfig(entry->vs_config);
 
-                auto program_glsl = Common::HashableString(
-                    GLSL::GenerateVertexShader(*shader_setup, entry->vs_config, extra_config));
-                if (program_glsl.empty()) {
-                    LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
-                    programmable_vertex_map.erase(iter_config);
-                    continue;
-                }
+                const bool use_spirv =
+                    parent.profile.vk_use_spirv_generator && !extra_config.use_geometry_shader &&
+                    SPIRV::CanGenerateVertexShader(shader_setup->GetProgramCode(),
+                                                   entry->vs_config.state.main_offset);
 
-                const u64 spirv_id = program_glsl.Hash();
+                std::vector<u32> direct_spirv;
+                auto program_glsl = Common::HashableString();
+                u64 spirv_id;
+
+                if (use_spirv) {
+                    direct_spirv =
+                        SPIRV::GenerateVertexShader(*shader_setup, entry->vs_config, extra_config);
+                    if (direct_spirv.empty()) {
+                        LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
+                        programmable_vertex_map.erase(iter_config);
+                        continue;
+                    }
+                    spirv_id = Common::ComputeHash64(direct_spirv.data(),
+                                                     direct_spirv.size() * sizeof(u32));
+                } else {
+                    program_glsl = Common::HashableString(GLSL::GenerateVertexShader(
+                        *shader_setup, entry->vs_config, extra_config));
+                    if (program_glsl.empty()) {
+                        LOG_ERROR(Render_Vulkan, "Failed to retrieve programmable vertex shader");
+                        programmable_vertex_map.erase(iter_config);
+                        continue;
+                    }
+                    spirv_id = program_glsl.Hash();
+                }
 
                 auto [iter_prog, new_spirv] =
                     programmable_vertex_cache.try_emplace(spirv_id, parent.instance);
@@ -898,14 +1023,27 @@ bool ShaderDiskCache::InitVSCache(const std::atomic_bool& stop_loading,
                 if (new_spirv) {
                     LOG_DEBUG(Render_Vulkan, "    compiling SPIRV.");
 
-                    auto spirv = CompileGLSL(program_glsl, vk::ShaderStageFlagBits::eVertex);
+                    if (use_spirv) {
+                        OptimizeSpirv(direct_spirv, vk::ShaderStageFlagBits::eVertex);
+                        iter_prog->second.spirv = std::move(direct_spirv);
+                    } else {
+                        iter_prog->second.spirv =
+                            CompileGLSL(program_glsl, vk::ShaderStageFlagBits::eVertex);
+                    }
 
-                    iter_prog->second.module = CompileSPV(spirv, parent.instance.GetDevice());
+                    iter_prog->second.module =
+                        CompileSPV(iter_prog->second.spirv, parent.instance.GetDevice());
+                    if (iter_prog->second.module && parent.instance.IsShaderObjectSupported()) {
+                        iter_prog->second.CreateShaderObject(
+                            vk::ShaderStageFlagBits::eVertex,
+                            vk::ShaderStageFlagBits::eGeometry | vk::ShaderStageFlagBits::eFragment,
+                            parent.descriptor_set_layouts);
+                    }
                     iter_prog->second.MarkDone();
 
                     if (regenerate_file) {
                         // If we are regenerating, save the new spirv to disk.
-                        AppendVSSPIRV(*regenerate_file, spirv, spirv_id);
+                        AppendVSSPIRV(*regenerate_file, iter_prog->second.spirv, spirv_id);
                     }
                 }
 
@@ -1044,7 +1182,14 @@ bool ShaderDiskCache::InitFSCache(const std::atomic_bool& stop_loading,
                     const auto spirv = std::span<const u32>(
                         reinterpret_cast<const u32*>(spirv_data), spirv_size / sizeof(u32));
 
+                    // See the matching comment in InitVSCache: disk-cache replay must create a
+                    // shader object too, not just the runtime/first-compile path.
+                    iter_spirv->second.spirv.assign(spirv.begin(), spirv.end());
                     iter_spirv->second.module = CompileSPV(spirv, parent.instance.GetDevice());
+                    if (iter_spirv->second.module && parent.instance.IsShaderObjectSupported()) {
+                        iter_spirv->second.CreateShaderObject(vk::ShaderStageFlagBits::eFragment,
+                                                              {}, parent.descriptor_set_layouts);
+                    }
                     iter_spirv->second.MarkDone();
 
                     if (!iter_spirv->second.module) {
@@ -1116,6 +1261,7 @@ bool ShaderDiskCache::InitFSCache(const std::atomic_bool& stop_loading,
             // Use SPIRV generator directly
 
             spirv = SPIRV::GenerateFragmentShader(entry->fs_config, parent.profile);
+            OptimizeSpirv(spirv, vk::ShaderStageFlagBits::eFragment);
             shader.module = CompileSPV(spirv, parent.instance.GetDevice());
         } else {
             // Use GLSL generator then convert to SPIRV
@@ -1132,6 +1278,11 @@ bool ShaderDiskCache::InitFSCache(const std::atomic_bool& stop_loading,
 
             spirv = CompileGLSL(code_glsl, vk::ShaderStageFlagBits::eFragment);
             shader.module = CompileSPV(spirv, parent.instance.GetDevice());
+        }
+        shader.spirv = spirv;
+        if (shader.module && parent.instance.IsShaderObjectSupported()) {
+            shader.CreateShaderObject(vk::ShaderStageFlagBits::eFragment, {},
+                                      parent.descriptor_set_layouts);
         }
         shader.MarkDone();
 
@@ -1277,7 +1428,15 @@ bool ShaderDiskCache::InitGSCache(const std::atomic_bool& stop_loading,
                     const auto spirv = std::span<const u32>(
                         reinterpret_cast<const u32*>(spirv_data), spirv_size / sizeof(u32));
 
+                    // See the matching comment in InitVSCache: disk-cache replay must create a
+                    // shader object too, not just the runtime/first-compile path.
+                    iter_spirv->second.spirv.assign(spirv.begin(), spirv.end());
                     iter_spirv->second.module = CompileSPV(spirv, parent.instance.GetDevice());
+                    if (iter_spirv->second.module && parent.instance.IsShaderObjectSupported()) {
+                        iter_spirv->second.CreateShaderObject(vk::ShaderStageFlagBits::eGeometry,
+                                                              vk::ShaderStageFlagBits::eFragment,
+                                                              parent.descriptor_set_layouts);
+                    }
                     iter_spirv->second.MarkDone();
 
                     if (!iter_spirv->second.module) {
@@ -1359,6 +1518,12 @@ bool ShaderDiskCache::InitGSCache(const std::atomic_bool& stop_loading,
 
         spirv = CompileGLSL(code_glsl, vk::ShaderStageFlagBits::eGeometry);
         shader.module = CompileSPV(spirv, parent.instance.GetDevice());
+        shader.spirv = spirv;
+        if (shader.module && parent.instance.IsShaderObjectSupported()) {
+            shader.CreateShaderObject(vk::ShaderStageFlagBits::eGeometry,
+                                      vk::ShaderStageFlagBits::eFragment,
+                                      parent.descriptor_set_layouts);
+        }
         shader.MarkDone();
 
         if (regenerate_file) {

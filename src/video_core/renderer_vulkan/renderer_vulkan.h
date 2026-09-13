@@ -102,6 +102,11 @@ private:
     void ReloadPipeline(Settings::StereoRenderOption render_3d);
     void CompileShaders();
     void CreateOverlayFont();
+    // Uploads Common::LoadingIcon::Get() (set by the frontend just before booting) into its own
+    // texture/descriptor set, reusing overlay_descriptor_layout/overlay_pipeline - see the .cpp.
+    // A no-op leaving loading_icon_available false if nothing was set (e.g. booted a title the
+    // frontend never scanned, straight from a CLI path).
+    void CreateLoadingIcon();
     void BuildLayouts();
     void BuildPipelines();
     void ConfigureFramebufferTexture(TextureInfo& texture,
@@ -136,6 +141,12 @@ private:
             std::array<float, 4> color;
             u32 first; // Vertex offset from base_vertex.
             u32 count;
+            // Left default (null handle) for the overwhelming majority of batches, which all
+            // share overlay_descriptor_set - RecordOverlay substitutes it in when this is null.
+            // Only the loading screen's icon background sets this explicitly, to a different set.
+            vk::DescriptorSet descriptor_set{};
+            // See vulkan_overlay.frag's PushConstants.mode.
+            s32 mode = 0;
         };
         std::vector<Batch> batches;
         u32 base_vertex{};
@@ -146,6 +157,10 @@ private:
     OverlayDraw PrepareShaderCompileOverlay(const Layout::FramebufferLayout& layout);
 
     OverlayDraw PrepareLoadingOverlay(const Layout::FramebufferLayout& layout);
+
+    OverlayDraw PrepareIngameSettingsOverlay(const Layout::FramebufferLayout& layout);
+
+    OverlayDraw PrepareHoldProgressRing(const Layout::FramebufferLayout& layout);
 
     OverlayDraw PrepareLayoutEditor(const Layout::FramebufferLayout& layout);
 
@@ -173,6 +188,15 @@ private:
     // multiple hours of debugging to figure out the menu was eating itself.
     // See the note in renderer_vulkan.cpp regarding why.
     StreamBuffer overlay_vertex_buffer;
+    // Tracks how long the in-game quick settings overlay has been continuously open, purely for
+    // PrepareIngameSettingsOverlay's own open-animation - render-thread-local, never touched
+    // cross-thread (Common::IngameOverlay::State has no animation fields of its own).
+    std::chrono::steady_clock::time_point overlay_open_since{};
+    bool overlay_was_open_last_frame = false;
+    // Same idea for the hold-progress ring's own quick pop-in, independent of the ~1s hold
+    // duration itself - starts the instant hold progress leaves 0.
+    std::chrono::steady_clock::time_point hold_ring_pop_since{};
+    bool hold_ring_was_active_last_frame = false;
     DescriptorUpdateQueue update_queue;
     RasterizerVulkan rasterizer;
     std::unique_ptr<PresentWindow> secondary_present_window_ptr;
@@ -205,6 +229,18 @@ private:
     vk::UniqueDescriptorSetLayout overlay_descriptor_layout{};
     vk::UniqueDescriptorPool overlay_descriptor_pool{};
     vk::DescriptorSet overlay_descriptor_set{};
+
+    // The loading screen's background - the launched title's icon, uploaded once at construction
+    // time from Common::LoadingIcon::Get(). Reuses overlay_descriptor_layout/overlay_pipeline
+    // (see CreateLoadingIcon), so no separate shader or pipeline exists for it. Only valid (and
+    // only destroyed in ~RendererVulkan) when loading_icon_available is true.
+    vk::Image loading_icon_image{};
+    VmaAllocation loading_icon_allocation{};
+    vk::ImageView loading_icon_view{};
+    vk::Sampler loading_icon_sampler{};
+    vk::UniqueDescriptorPool loading_icon_descriptor_pool{};
+    vk::DescriptorSet loading_icon_descriptor_set{};
+    bool loading_icon_available = false;
 
     float overlay_game_fps = 0.0f;
     std::chrono::steady_clock::time_point overlay_last_update{};

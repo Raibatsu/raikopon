@@ -317,6 +317,13 @@ public:
     Loader::ResultStatus ReadProgramId(u64_le& program_id);
 
     /**
+     * Get the Product Code of the NCCH container (e.g. "CTR-P-BNDE"), as printed on the cart/case
+     * and used by external game databases (GameTDB) to key artwork.
+     * @return ResultStatus result of function
+     */
+    Loader::ResultStatus ReadProductCode(std::string& product_code);
+
+    /**
      * Get the Extdata ID of the NCCH container
      * @return ResultStatus result of function
      */

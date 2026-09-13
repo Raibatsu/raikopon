@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <span>
 #include "common/common_types.h"
 #include "common/hash.h"
 #include "common/thread_worker.h"
@@ -201,6 +202,13 @@ struct VertexLayout {
     std::array<VertexBinding, MAX_VERTEX_BINDINGS> bindings;
     std::array<VertexAttribute, MAX_VERTEX_ATTRIBUTES> attributes;
 
+    bool operator==(const VertexLayout& other) const noexcept {
+        return std::memcmp(this, &other, sizeof(VertexLayout)) == 0;
+    }
+    bool operator!=(const VertexLayout& other) const noexcept {
+        return !operator==(other);
+    }
+
     static consteval u64 StructHash() {
         constexpr u64 STRUCT_VERSION = 0;
 
@@ -311,6 +319,12 @@ enum class PipelineWaitMode {
     Blocking,
 };
 
+// Emits the given vertex layout via vkCmdSetVertexInputEXT. Only valid to call when
+// Instance::IsVertexInputDynamicStateSupported() is true; shared between GraphicsPipeline::Build()
+// (VK_DYNAMIC_STATE_VERTEX_INPUT_EXT case is a no-op there) and PipelineCache::BindPipeline (the
+// actual per-draw emission), so the binding/attribute conversion logic lives in one place.
+void EmitVertexInput(vk::CommandBuffer cmdbuf, const Instance& instance, const VertexLayout& layout);
+
 struct Shader : public Common::AsyncHandle {
     explicit Shader(const Instance& instance);
     explicit Shader(const Instance& instance, vk::ShaderStageFlagBits stage, std::string code);
@@ -320,9 +334,26 @@ struct Shader : public Common::AsyncHandle {
         return module;
     }
 
+    /// Creates the VK_EXT_shader_object equivalent of this shader (see docs/SHADER_OBJECT_HANDOFF.md).
+    /// Requires spirv to be populated (only the GLSL-source constructor currently retains it) and
+    /// must be called after set_layouts exist. next_stage is the stage(s) allowed to consume this
+    /// shader's output ({} for the last stage, e.g. fragment with no geometry after it). Created
+    /// "unlinked" (no VK_SHADER_CREATE_LINK_STAGE_BIT_EXT) so it can be freely mixed with any other
+    /// unlinked shader object for the adjoining stage -- matches how shaders are already
+    /// independently cached/reused across pipeline permutations today. Reasoned from the extension's
+    /// registry entry, not verified against full spec prose -- confirm before relying on it broadly.
+    void CreateShaderObject(vk::ShaderStageFlagBits stage, vk::ShaderStageFlags next_stage,
+                            std::span<const vk::DescriptorSetLayout> set_layouts);
+
+    [[nodiscard]] vk::ShaderEXT ShaderObjectHandle() const noexcept {
+        return shader_object;
+    }
+
     vk::ShaderModule module;
+    vk::ShaderEXT shader_object{};
     vk::Device device;
     std::string program;
+    std::vector<u32> spirv;
 };
 
 class GraphicsPipeline : public Common::AsyncHandle {
@@ -339,6 +370,11 @@ public:
 
     [[nodiscard]] vk::Pipeline Handle() const noexcept {
         return *pipeline;
+    }
+
+    // Stable identity for correlating this pipeline's GpuFrameLog rows.
+    [[nodiscard]] u64 Hash() const noexcept {
+        return info.Hash();
     }
 
 private:

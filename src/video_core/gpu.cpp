@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <limits>
 #include <type_traits>
@@ -502,8 +503,13 @@ u32 GPU::ReadReg(VAddr addr) {
         impl->shadow_regs.reg_array[index] = value;
         return value;
     }
-    default:
-        UNREACHABLE_MSG("Read from unknown GPU address {:#08X}", addr);
+    default: {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true, std::memory_order_relaxed)) {
+            LOG_ERROR(HW_GPU, "Read from unknown GPU address {:#08X} (further occurrences suppressed)", addr);
+        }
+        return 0;
+    }
     }
 }
 
@@ -558,8 +564,13 @@ GPU::RegWriteInfo GPU::PrepareWriteReg(VAddr addr, u32 data, u32 mask) {
         }
         break;
     }
-    default:
-        UNREACHABLE_MSG("Write to unknown GPU address {:#08X}", addr);
+    default: {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true, std::memory_order_relaxed)) {
+            LOG_ERROR(HW_GPU, "Write to unknown GPU address {:#08X} (further occurrences suppressed)", addr);
+        }
+        break;
+    }
     }
 
     return info;
@@ -875,8 +886,13 @@ void GPU::ProcessWriteReg(const WriteRegCommand& data) {
         }
         break;
     }
-    default:
-        UNREACHABLE();
+    default: {
+        static std::atomic<bool> logged{false};
+        if (!logged.exchange(true, std::memory_order_relaxed)) {
+            LOG_ERROR(HW_GPU, "Write to unknown GPU address {:#08X} (further occurrences suppressed)", data.addr);
+        }
+        break;
+    }
     }
 }
 

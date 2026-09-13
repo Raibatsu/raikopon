@@ -31,22 +31,27 @@ use_vsync =
 async_gpu_emulation = false
 # Drain after each GPU trigger for compatibility testing (0, default).
 strict_gpu_sync = false
-# Compile shaders on a background thread to reduce hitching (0, default).
-async_shader_compilation =
+# Compile shaders on a background thread to reduce hitching (1, default).
+async_shader_compilation = true
 # Persist compiled shaders to the SD card to cut post first-run stutter (1, default).
 use_disk_shader_cache =
 # Use hardware-accelerated PICA shaders instead of the software shader interpreter (1, default).
 use_hw_shader =
-use_ubershaders =
-disable_pipeline_fast_path =
+# Render draws with a generic shader instead of skipping them, removing screen bleed (0, default).
+use_ubershaders = false
+# Hidden from the Settings UI and pinned off in config.cpp's ReadValues() - this value is ignored.
+disable_pipeline_fast_path = false
 skip_slow_draw = false
 skip_texture_copy = false
 skip_cpu_write = false
 # Raise the CPU clock (at the cost of dropping the GPU clock) while shaders/pipelines are
-# compiling in-game, dramatically speeding up compile time (1, default). Boot-time loading screen
+# compiling in-game, dramatically speeding up compile time (0, default). Boot-time loading screen
 # compiles always use this regardless of the setting, since nothing is being rendered to lose GPU
 # performance from yet.
-enable_compile_boost = true
+enable_compile_boost = false
+# Frame-blocking investigation instrumentation: writes sdmc:/switch/azahar/gpu_frame_log.log and
+# dynarmic_jit.log. Off by default; restart required to take effect (0, default).
+enable_gpu_frame_log = false
 # Texture upscaling filter: 0: None (default), 1: Anime4K, 2: Bicubic, 3: ScaleForce, 4: xBRZ, 5: MMPX.
 texture_filter =
 # Scale the screen by whole-number factors only, avoiding uneven pixel stretching (0, default).
@@ -77,6 +82,7 @@ top_screen_opacity = 100
 bottom_screen_opacity = 100
 # Show an on-screen frame-rate counter (0, default).
 show_fps = false
+show_shader_compile_progress = true
 # Compile PICA vertex shaders to native code instead of interpreting them (1, default).
 # Only affects draws that fall back to the CPU shader engine.
 # Has chance of crashing on some games, although should be safe.
@@ -102,8 +108,8 @@ region_value =
 log_filter =
 
 [Switch]
-# Directory scanned for titles. Defaults to "roms/" under the dekopon directory when unset.
-# The dekopon directory itself is set from sdmc:/switch/dekopon/user_dir.txt
+# Directory scanned for titles. Defaults to sdmc:/switch/azahar/roms/ when unset.
+# The Raika Azahar directory itself is set from sdmc:/switch/azahar/user_dir.txt
 roms_dir =
 # Descend into the ROM directory's subfolders when scanning (1, default).
 scan_recursive =
@@ -119,6 +125,8 @@ layout_cycle_mask =
 # Core Clock percentage used while a movie-library CRO is loaded, e.g. Pokémon cutscenes
 # (45, default). Editable from the quick menu. 10-100.
 movie_throttle_clock_percentage =
+# Whether the above throttle is applied at all (true, default). Editable from the quick menu.
+movie_throttle_enabled =
 # Last address used for Artic Base or the Artic Setup Tool.
 last_artic_base_addr =
 # In-app updater channel: 0 = Stable (GitHub releases), 1 = Experimental (GitHub pre-releases).

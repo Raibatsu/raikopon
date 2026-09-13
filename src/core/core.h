@@ -104,11 +104,12 @@ public:
         ErrorSystemFiles,                     ///< Error in finding system files
         ErrorSavestate,                       ///< Error saving or loading
         ErrorArticDisconnected,               ///< Error when artic base disconnects
-        ErrorN3DSApplication,       ///< Error launching New 3DS application in Old 3DS mode
-        ErrorCoreExceptionRaised,   ///< The CPU emulation raised an exception
-        ErrorMemoryExceptionRaised, ///< Unmmaped memory was accessed
-        ShutdownRequested,          ///< Emulated program requested a system shutdown
-        ErrorUnknown                ///< Any other error
+        ErrorN3DSApplication,        ///< Error launching New 3DS application in Old 3DS mode
+        ErrorCoreExceptionRaised,    ///< The CPU emulation raised an exception
+        ErrorMemoryExceptionRaised,  ///< Unmmaped memory was accessed
+        ErrorSavestateBuildMismatch, ///< Tried to load savestate from a different Azahar version
+        ShutdownRequested,           ///< Emulated program requested a system shutdown
+        ErrorUnknown                 ///< Any other error
     };
 
     explicit System();
@@ -482,7 +483,7 @@ private:
     std::unique_ptr<AudioCore::DspInterface> dsp_core;
 
     /// When true, signals that a reschedule should happen
-    bool reschedule_pending{};
+    bool curr_core_reschedule_pending{};
 
     std::unique_ptr<VideoCore::GPU> gpu;
 

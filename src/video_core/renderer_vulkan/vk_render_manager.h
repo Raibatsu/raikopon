@@ -25,11 +25,20 @@ struct RenderPass {
     vk::Rect2D render_area;
     vk::ClearValue clear;
     u32 do_clear;
+    // VK_KHR_dynamic_rendering path -- populated instead of framebuffer/render_pass when the
+    // instance supports it (see RenderManager::BeginRendering). Null color/depth_view means that
+    // attachment isn't present (e.g. shadow rendering, which writes via image store and needs a
+    // rendering scope with zero attachments, matching the classic path's 0-attachment framebuffer).
+    vk::ImageView color_view;
+    vk::ImageView depth_view;
+    vk::Format color_format{vk::Format::eUndefined};
+    vk::Format depth_format{vk::Format::eUndefined};
+    bool has_stencil{};
 
     bool operator==(const RenderPass& other) const noexcept {
-        return std::tie(framebuffer, render_pass, render_area, do_clear) ==
+        return std::tie(framebuffer, render_pass, render_area, do_clear, color_view, depth_view) ==
                    std::tie(other.framebuffer, other.render_pass, other.render_area,
-                            other.do_clear) &&
+                            other.do_clear, other.color_view, other.depth_view) &&
                std::memcmp(&clear, &other.clear, sizeof(vk::ClearValue)) == 0;
     }
 };
@@ -69,6 +78,7 @@ private:
     std::array<vk::ImageAspectFlags, 2> aspects;
     bool shadow_rendering{};
     RenderPass pass{};
+    bool active{};
     u32 num_draws{};
 };
 

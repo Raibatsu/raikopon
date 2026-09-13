@@ -41,7 +41,11 @@ add_library(citra_common STATIC EXCLUDE_FROM_ALL
     hacks/hack_list.cpp
     hacks/hack_manager.h
     hacks/hack_manager.cpp
+    ingame_overlay.cpp
+    ingame_overlay.h
     literals.h
+    loading_icon.cpp
+    loading_icon.h
     logging/backend.cpp
     logging/backend.h
     logging/filter.cpp

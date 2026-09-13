@@ -78,7 +78,10 @@ struct Handle {
         return *this;
     }
 
-    void Create(u32 width, u32 height, u32 levels, VideoCore::TextureType type, vk::Format format,
+    // Returns false if the underlying image/view failed to allocate (e.g. out of device memory
+    // at high resolution scale factors) - callers must not commit scale/state changes or record
+    // Vulkan commands referencing this handle's image when this returns false.
+    bool Create(u32 width, u32 height, u32 levels, VideoCore::TextureType type, vk::Format format,
                 vk::ImageUsageFlags usage, vk::ImageCreateFlags flags, vk::ImageAspectFlags aspect,
                 bool need_format_list, std::string_view debug_name = {});
 
@@ -125,8 +128,9 @@ public:
         return renderpass_cache;
     }
 
-    /// Returns the removal threshold ticks for the garbage collector
-    u32 RemoveThreshold();
+    /// Gets an opaque tick-value used to indicate to the garbage collector when a surface was made.
+    /// Incrementing this variable indicates that all previous resource ticks can be safely deleted.
+    u64 GetResourceTick();
 
     /// Submits and waits for current GPU work.
     void Finish();
@@ -266,7 +270,7 @@ public:
 
 private:
     /// Performs blit between the scaled/unscaled images
-    void BlitScale(const VideoCore::TextureBlit& blit, bool up_scale);
+    bool BlitScale(const VideoCore::TextureBlit& blit, bool up_scale);
 
     /// Downloads scaled depth stencil data
     void DepthStencilDownload(const VideoCore::BufferTextureCopy& download,
@@ -306,7 +310,8 @@ public:
           formats(std::exchange(
               other.formats, {VideoCore::PixelFormat::Invalid, VideoCore::PixelFormat::Invalid})),
           width(std::exchange(other.width, 0)), height(std::exchange(other.height, 0)),
-          res_scale(std::exchange(other.res_scale, 1)) {}
+          res_scale(std::exchange(other.res_scale, 1)),
+          valid(std::exchange(other.valid, false)) {}
 
     Framebuffer& operator=(Framebuffer&& other) noexcept {
         VideoCore::FramebufferParams::operator=(std::move(other));
@@ -321,6 +326,7 @@ public:
         width = std::exchange(other.width, 0);
         height = std::exchange(other.height, 0);
         res_scale = std::exchange(other.res_scale, 1);
+        valid = std::exchange(other.valid, false);
 
         return *this;
     }
@@ -349,6 +355,14 @@ public:
         return render_pass;
     }
 
+    /// Returns true if this framebuffer targets a real render surface. Handle()/RenderPass() are
+    /// fallback-path-only (null under dynamic rendering even for a valid framebuffer), so callers
+    /// needing a general validity check (e.g. RasterizerVulkan::Draw's early-out) must use this
+    /// instead of `!Handle()`.
+    [[nodiscard]] bool IsValid() const noexcept {
+        return valid;
+    }
+
     u32 Scale() const noexcept {
         return res_scale;
     }
@@ -366,6 +380,7 @@ private:
     u32 width{};
     u32 height{};
     u32 res_scale{1};
+    bool valid{};
 };
 
 class Sampler {

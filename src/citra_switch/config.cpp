@@ -22,9 +22,11 @@
 
 namespace {
 
-constexpr const char* kDefaultUserDir = "sdmc:/switch/dekopon/";
+constexpr const char* kDefaultUserDir = "sdmc:/switch/azahar/";
 
-constexpr const char* kUserDirPointer = "sdmc:/switch/dekopon/user_dir.txt";
+constexpr const char* kUserDirPointer = "sdmc:/switch/azahar/user_dir.txt";
+
+constexpr const char* kDefaultRomsDir = "sdmc:/switch/azahar/roms/";
 
 std::string WithTrailingSlash(std::string path) {
     if (!path.empty() && path.back() != '/') {
@@ -148,6 +150,8 @@ private:
         ReadSetting("Core", Settings::values.cpu_clock_percentage);
         Settings::values.is_new_3ds =
             config->GetBoolean("Core", Settings::values.is_new_3ds.GetLabel(), false);
+        ReadSetting("Core", Settings::values.plugin_loader_enabled);
+        ReadSetting("Core", Settings::values.allow_plugin_loader);
 
         // Renderer
         ReadSetting("Renderer", Settings::values.graphics_api);
@@ -160,12 +164,18 @@ private:
         ReadSetting("Renderer", Settings::values.use_disk_shader_cache);
         ReadSetting("Renderer", Settings::values.use_hw_shader);
         ReadSetting("Renderer", Settings::values.use_ubershaders);
-        ReadSetting("Renderer", Settings::values.disable_pipeline_fast_path);
+        // Deliberately not read from config.ini (unlike the other Renderer settings above/below) -
+        // the row is hidden from the Settings UI and this setting is pinned off, since testing
+        // found toggling it made no measurable difference (see docs/FORK_OVERVIEW.md). This also
+        // resets anyone who had it on from earlier testing back to off.
+        Settings::values.disable_pipeline_fast_path = false;
         ReadSetting("Renderer", Settings::values.skip_slow_draw);
         ReadSetting("Renderer", Settings::values.skip_texture_copy);
         ReadSetting("Renderer", Settings::values.skip_cpu_write);
         ReadSetting("Renderer", Settings::values.enable_compile_boost);
+        ReadSetting("Renderer", Settings::values.enable_gpu_frame_log);
         ReadSetting("Renderer", Settings::values.show_fps);
+        ReadSetting("Renderer", Settings::values.show_shader_compile_progress);
         ReadSetting("Renderer", Settings::values.use_shader_jit);
         ReadSetting("Renderer", Settings::values.texture_filter);
         ReadSetting("Renderer", Settings::values.use_integer_scaling);
@@ -191,6 +201,7 @@ private:
 
         // Miscellaneous
         ReadSetting("Miscellaneous", Settings::values.log_filter);
+        ReadSetting("Miscellaneous", Settings::values.instant_debug_log);
 
         // The core expects every known service module to have an explicit setting and crashes if not.
         for (const auto& service_module : Service::service_module_map) {
@@ -200,7 +211,7 @@ private:
         s_paths.roms_dir =
             WithTrailingSlash(Common::StripSpaces(config->Get("Switch", "roms_dir", "")));
         if (s_paths.roms_dir.empty()) {
-            s_paths.roms_dir = SwitchFrontend::GetDefaultRomsDir(s_paths.user_dir);
+            s_paths.roms_dir = SwitchFrontend::GetDefaultRomsDir();
         }
         s_paths.scan_recursive = config->GetBoolean("Switch", "scan_recursive", true);
         s_inserted_cartridge =
@@ -231,6 +242,8 @@ private:
 
         SwitchFrontend::SetMovieThrottleClockPercentage(
             config->GetInteger("Switch", "movie_throttle_clock_percentage", 45));
+        SwitchFrontend::SetMovieThrottleEnabled(
+            config->GetBoolean("Switch", "movie_throttle_enabled", true));
 
         // Each control stores the index of the physical Switch button it drives.
         for (int i = 0; i < SwitchFrontend::NumMappableControls; ++i) {
@@ -255,7 +268,11 @@ private:
         ss << "use_cpu_jit = " << (v.use_cpu_jit.GetValue() ? "true" : "false") << '\n';
         ss << "fastmem = " << (v.fastmem.GetValue() ? "true" : "false") << '\n';
         ss << "cpu_clock_percentage = " << v.cpu_clock_percentage.GetValue() << '\n';
-        ss << "is_new_3ds = " << (v.is_new_3ds.GetValue() ? "true" : "false") << "\n\n";
+        ss << "is_new_3ds = " << (v.is_new_3ds.GetValue() ? "true" : "false") << '\n';
+        ss << v.plugin_loader_enabled.GetLabel() << " = "
+           << (v.plugin_loader_enabled.GetValue() ? "true" : "false") << '\n';
+        ss << v.allow_plugin_loader.GetLabel() << " = "
+           << (v.allow_plugin_loader.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[Renderer]\n";
         ss << "graphics_api = " << static_cast<int>(v.graphics_api.GetValue()) << '\n';
@@ -279,7 +296,11 @@ private:
         ss << "skip_cpu_write = " << (v.skip_cpu_write.GetValue() ? "true" : "false") << '\n';
         ss << "enable_compile_boost = " << (v.enable_compile_boost.GetValue() ? "true" : "false")
            << '\n';
+        ss << "enable_gpu_frame_log = "
+           << (v.enable_gpu_frame_log.GetValue() ? "true" : "false") << '\n';
         ss << "show_fps = " << (v.show_fps.GetValue() ? "true" : "false") << '\n';
+        ss << "show_shader_compile_progress = "
+           << (v.show_shader_compile_progress.GetValue() ? "true" : "false") << '\n';
         ss << "use_shader_jit = " << (v.use_shader_jit.GetValue() ? "true" : "false") << '\n';
         ss << "texture_filter = " << static_cast<int>(v.texture_filter.GetValue()) << '\n';
         ss << "use_integer_scaling = " << (v.use_integer_scaling.GetValue() ? "true" : "false")
@@ -306,7 +327,9 @@ private:
         ss << "region_value = " << v.region_value.GetValue() << "\n\n";
 
         ss << "[Miscellaneous]\n";
-        ss << "log_filter = " << v.log_filter.GetValue() << "\n\n";
+        ss << "log_filter = " << v.log_filter.GetValue() << '\n';
+        ss << v.instant_debug_log.GetLabel() << " = "
+           << (v.instant_debug_log.GetValue() ? "true" : "false") << "\n\n";
 
         ss << "[Switch]\n";
         ss << "roms_dir = " << s_paths.roms_dir << '\n';
@@ -323,6 +346,8 @@ private:
         ss << "layout_cycle_mask = " << SwitchFrontend::GetLayoutCycleMask() << '\n';
         ss << "movie_throttle_clock_percentage = "
            << SwitchFrontend::GetMovieThrottleClockPercentage() << '\n';
+        ss << "movie_throttle_enabled = "
+           << (SwitchFrontend::GetMovieThrottleEnabled() ? "true" : "false") << '\n';
         ss << "launch_count = " << launch_count << "\n\n";
 
         ss << "[Controls]\n";
@@ -346,7 +371,7 @@ std::unique_ptr<Config> s_config;
 namespace SwitchFrontend {
 
 int Bootstrap() {
-    // Resolve the dekopon directory and create its standard subdirectories.
+    // Resolve the Raika Azahar directory and create its standard subdirectories.
     FileUtil::SetUserPath(ReadUserDirPointer());
     s_active_user_dir = FileUtil::GetUserPath(FileUtil::UserPath::UserDir);
     s_paths.user_dir = s_active_user_dir;
@@ -356,7 +381,6 @@ int Bootstrap() {
 
     s_config = std::make_unique<Config>();
 
-    // Apply the log filter the config just loaded.
     Common::Log::Filter log_filter;
     log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
     Common::Log::SetGlobalFilter(log_filter);
@@ -364,7 +388,7 @@ int Bootstrap() {
     // Persist the bumped launch count and any defaulted settings for next time.
     s_config->Save();
 
-    LOG_INFO(Frontend, "Dekopon launch #{}", s_config->LaunchCount());
+    LOG_INFO(Frontend, "Raika Azahar launch #{}", s_config->LaunchCount());
     LOG_INFO(Frontend, "User directory: {}", s_active_user_dir);
     LOG_INFO(Frontend, "ROM directory: {} (recursive: {})", s_paths.roms_dir,
              s_paths.scan_recursive);
@@ -385,7 +409,8 @@ void SetPaths(const SwitchPaths& paths) {
     if (user_dir != s_paths.user_dir) {
         s_paths.user_dir = user_dir;
         WriteUserDirPointer(user_dir);
-        LOG_INFO(Frontend, "Dekopon directory set to {}, applies on the next launch", user_dir);
+        LOG_INFO(Frontend, "Raika Azahar directory set to {}, applies on the next launch",
+                 user_dir);
     }
     SaveConfig();
 }
@@ -454,8 +479,8 @@ std::string GetDefaultUserDir() {
     return kDefaultUserDir;
 }
 
-std::string GetDefaultRomsDir(const std::string& user_dir) {
-    return WithTrailingSlash(user_dir.empty() ? kDefaultUserDir : user_dir) + "roms/";
+std::string GetDefaultRomsDir() {
+    return kDefaultRomsDir;
 }
 
 void SaveConfig() {

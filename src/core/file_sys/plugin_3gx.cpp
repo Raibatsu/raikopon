@@ -195,6 +195,9 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     const u32 bootloader_size = bootloader_memory_size;
     const u32 heap_offset = bootloader_offset + bootloader_size;
     const u32 heap_size = block_size - heap_offset;
+    const u32 kernel_shim_offset = block_size;
+    const u32 kernel_shim_vaddr = _3GX_heap_load_addr + heap_size;
+    const u32 total_block_size = block_size + Memory::PLUGIN_KERNEL_SHIM_SIZE;
 
     // Allocate a block of memory for the plugin
     std::optional<u32> offset;
@@ -203,21 +206,22 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
          plg_context.user_load_parameters.plugin_memory_strategy ==
              Service::PLGLDR::PLG_LDR::PluginMemoryStrategy::PLG_STRATEGY_MODE3)) {
         // Allocate memory block from the end of the APPLICATION region
-        offset =
-            kernel.GetMemoryRegion(Kernel::MemoryRegion::APPLICATION)->RLinearAllocate(block_size);
+        offset = kernel.GetMemoryRegion(Kernel::MemoryRegion::APPLICATION)
+                     ->RLinearAllocate(total_block_size);
 
         // If the reported available APP mem equals the actual size, remove the plugin block size.
         if (offset) {
             auto& config_mem = kernel.GetConfigMemHandler();
             if (config_mem.GetConfigMem().app_mem_alloc ==
                 kernel.GetMemoryRegion(Kernel::MemoryRegion::APPLICATION)->size) {
-                config_mem.GetConfigMem().app_mem_alloc -= block_size;
+                config_mem.GetConfigMem().app_mem_alloc -= total_block_size;
             }
         }
         plg_context.memory_region = Kernel::MemoryRegion::APPLICATION;
     } else {
         // Allocate memory block from the start of the SYSTEM region
-        offset = kernel.GetMemoryRegion(Kernel::MemoryRegion::SYSTEM)->LinearAllocate(block_size);
+        offset =
+            kernel.GetMemoryRegion(Kernel::MemoryRegion::SYSTEM)->LinearAllocate(total_block_size);
         plg_context.memory_region = Kernel::MemoryRegion::SYSTEM;
     }
 
@@ -290,11 +294,24 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     ASSERT(vma_heap.Succeeded());
     process.vm_manager.Reprotect(vma_heap.Unwrap(), Kernel::VMAPermission::ReadWriteExecute);
 
+    // Map a small shim block for the fake kernel-object addresses (0xFFFF9000/0xFFFF9004) that
+    // some plugin frameworks read directly, expecting Luma3DS's linear-mapped kernel objects.
+    auto backing_memory_kernel_shim = kernel.memory.GetFCRAMRef(fcram_offset + kernel_shim_offset);
+    std::fill(backing_memory_kernel_shim.GetPtr(),
+             backing_memory_kernel_shim.GetPtr() + Memory::PLUGIN_KERNEL_SHIM_SIZE, 0);
+
+    auto vma_kernel_shim = process.vm_manager.MapBackingMemory(
+        kernel_shim_vaddr, backing_memory_kernel_shim, Memory::PLUGIN_KERNEL_SHIM_SIZE,
+        is_mem_private ? Kernel::MemoryState::Private : Kernel::MemoryState::Shared);
+    ASSERT(vma_kernel_shim.Succeeded());
+    process.vm_manager.Reprotect(vma_kernel_shim.Unwrap(), Kernel::VMAPermission::ReadWrite);
+
     kernel.memory.Plugin3GXFramebufferAddress() = Memory::FCRAM_PADDR + fcram_offset + heap_offset;
+    kernel.memory.Plugin3GXKernelShimAddress() = kernel_shim_vaddr;
     plg_context.plugin_loaded = true;
     plg_context.plugin_process_id = process.process_id;
     plg_context.use_user_load_parameters = false;
-    plg_context.memory_block = {fcram_offset, block_size};
+    plg_context.memory_block = {fcram_offset, total_block_size};
 
     return Loader::ResultStatus::Success;
 }

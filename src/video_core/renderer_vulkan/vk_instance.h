@@ -141,9 +141,22 @@ public:
         return extended_dynamic_state;
     }
 
-    /// Returns true when VK_EXT_extended_dynamic_state3 dynamic color-blend state is supported
+    /// Returns true when VK_EXT_extended_dynamic_state3 dynamic color-blend state is supported.
+    /// Covers color blend equation, write mask, AND blend-enable/logic-op-enable together -- see
+    /// CreateDevice, all four are required as one unit.
     bool IsExtendedDynamicState3Supported() const {
         return extended_dynamic_state3;
+    }
+
+    /// Returns true when VK_EXT_extended_dynamic_state2's dynamic logic-op *value* (not just
+    /// enable, which is covered by IsExtendedDynamicState3Supported) is supported.
+    bool IsDynamicLogicOpSupported() const {
+        return extended_dynamic_state2_logic_op;
+    }
+
+    /// Returns true when VK_EXT_vertex_input_dynamic_state is supported
+    bool IsVertexInputDynamicStateSupported() const {
+        return vertex_input_dynamic_state;
     }
 
     /// Returns true when VK_EXT_custom_border_color is supported
@@ -184,6 +197,29 @@ public:
     /// Returns true when VK_KHR_fragment_shader_barycentric is supported
     bool IsFragmentShaderBarycentricSupported() const {
         return fragment_shader_barycentric;
+    }
+
+    /// Returns true when VK_KHR_dynamic_rendering is supported. Infrastructure for a future
+    /// VK_EXT_graphics_pipeline_library or VK_EXT_shader_object attempt -- see
+    /// docs/DYNAMIC_RENDERING_HANDOFF.md. Not read by any render path yet.
+    bool IsDynamicRenderingSupported() const {
+        return dynamic_rendering;
+    }
+
+    /// Returns true when VK_EXT_shader_object is supported. Eliminates pipeline objects entirely
+    /// (shaders bind independently per stage, all pipeline state becomes command-buffer state) --
+    /// see docs/SHADER_OBJECT_HANDOFF.md. Not read by any render path yet.
+    bool IsShaderObjectSupported() const {
+        return shader_object;
+    }
+
+    bool IsDisplayTimingSupported() const {
+        return display_timing;
+    }
+
+    /// Returns true when VK_EXT_memory_budget is supported
+    bool IsMemoryBudgetSupported() const {
+        return memory_budget;
     }
 
     /// Returns the vendor ID of the physical device
@@ -332,6 +368,8 @@ protected:
     bool timeline_semaphores{};
     bool extended_dynamic_state{};
     bool extended_dynamic_state3{};
+    bool extended_dynamic_state2_logic_op{};
+    bool vertex_input_dynamic_state{};
     bool custom_border_color{};
     bool index_type_uint8{};
     bool fragment_shader_interlock{};
@@ -340,6 +378,10 @@ protected:
     bool fragment_shader_barycentric{};
     bool shader_stencil_export{};
     bool external_memory_host{};
+    bool dynamic_rendering{};
+    bool shader_object{};
+    bool display_timing{};
+    bool memory_budget{};
     u64 min_imported_host_pointer_alignment{};
     bool layered_rendering_supported{true};
     bool tooling_info{};

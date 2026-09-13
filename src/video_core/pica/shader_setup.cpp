@@ -59,7 +59,8 @@ std::optional<u32> ShaderSetup::WriteUniformFloatReg(ShaderRegs& config, u32 val
 
     const auto uniform = uniform_queue.Get(is_float32);
     if (uniform_setup.index >= uniforms.f.size()) {
-        LOG_ERROR(HW_GPU, "Invalid float uniform index {}", uniform_setup.index.Value());
+        // Some games may submit OOB indexes (mainly 0x7F), which is
+        // ignored on real HW.
         return std::nullopt;
     }
 
@@ -90,7 +91,8 @@ std::optional<ShaderSetup::UniformWriteRange> ShaderSetup::WriteUniformFloatRegR
 
         const auto uniform = uniform_queue.Get(is_float32);
         if (uniform_setup.index >= uniforms.f.size()) [[unlikely]] {
-            LOG_ERROR(HW_GPU, "Invalid float uniform index {}", uniform_setup.index.Value());
+            // Some games may submit OOB indexes (mainly 0x7F), which is
+            // ignored on real HW.
             break;
         }
 
@@ -155,22 +157,17 @@ static inline u32 ProcessBlockSSE42(u32* dst, const u32* values) {
     // 0xFFFFFFFF if words at X are equal or 0x0 if words at X differ.
     const __m128i eq = _mm_cmpeq_epi32(old_vals, new_vals);
 
-    // If eq is all F, old_vals and new_vals are equal, return.
-    if (_mm_testc_si128(eq, _mm_set1_epi32(-1))) {
+    const __m128i ones = _mm_set1_epi32(-1);
+
+    if (_mm_testc_si128(eq, ones)) {
         return std::numeric_limits<u32>::max();
     }
 
     // Store the new values to the destination.
     _mm_storeu_si128(reinterpret_cast<__m128i*>(dst), new_vals);
 
-    // Reduce the four 0x0/0xFFFFFFFF words to 4 bits
-    // stored to the 4 LSB of eq_mask.
-    const u32 eq_mask = static_cast<u32>(_mm_movemask_ps(_mm_castsi128_ps(eq)));
-    // Negate the result to make 0 signify equality instead of 1.
-    const u32 neq_mask = (~eq_mask) & 0xFu;
-    // Return the index of the highest 1, which corresponds to the index of the
-    // last new word that differs (taking into account endianness).
-    return HighestSetBitIndex(neq_mask);
+    const u32 res = static_cast<u32>(_mm_movemask_ps(_mm_castsi128_ps(_mm_xor_si128(eq, ones))));
+    return HighestSetBitIndex(res);
 }
 #endif
 
@@ -192,23 +189,9 @@ static inline u32 ProcessBlockNEON(u32* dst, const u32* values) {
     // Store the new values to the destination.
     vst1q_u32(dst, new_vals);
 
-    // Extract the value to an array and check which
-    // entry is the first that differs. Corresponds to
-    // the index of the last new word that differs
-    // (taking into account endianness).
-    // This needs to be done manually due to missing
-    // _mm_movemask_ps equivalent on NEON.
-    u32 neq_arr[4];
-    vst1q_u32(neq_arr, neq);
-    for (int i = 3; i >= 0; --i) {
-        if (neq_arr[i] != 0) {
-            return static_cast<u32>(i);
-        }
-    }
-
-    // Should never happen as otherwise we would have
-    // returned earlier.
-    UNREACHABLE();
+    static constexpr u32 index_arr[4] = {0, 1, 2, 3};
+    const uint32x4_t indices = vld1q_u32(index_arr);
+    return vmaxvq_u32(vandq_u32(neq, indices));
 }
 #endif
 
@@ -312,6 +295,7 @@ void ShaderSetup::DoProgramCodeFixup() {
     // WARNING: If the hashing method is changed, the hashes of the different shaders will need
     // adjustment.
 
+    /*
     if (!requires_fixup || !program_code_pending_fixup) {
         return;
     }
@@ -322,103 +306,9 @@ void ShaderSetup::DoProgramCodeFixup() {
         has_fixup = true;
         program_code_hash_dirty = true;
     };
+    */
 
-    /**
-     * Affected games:
-     * Some Sega 3D Classics games.
-     *
-     * Problem:
-     * The geometry shaders used by some of the Sega 3D Classics have a shader
-     * (gf2_five_color_gshader.vsh) that presents two separate issues.
-     *
-     * - The shader does not have an "end" instruction. This causes the execution
-     *   to be unbounded and start running whatever is in the code buffer after the end of the
-     *   program. Usually this is filled with zeroes, which are add instructions that have no effect
-     *   due to no more vertices being emitted. It's not clear what happens when the PC reaches
-     *   0x3FFC and is incremented. The most likely scenario is that it overflows back to the start,
-     *   where there is an end instruction close by. This causes the game to execute around 4K
-     *   instructions per vertex, which is very slow on emulator.
-     *
-     * - The shader relies on a HW bug or quirk that we do not currently understand or implement.
-     *   The game builds a quad (4 vertices) using two inputs, the upper left coordinate, and the
-     *   bottom right coordinate. The generated vertex coordinates are put in output register o0
-     *   before being emitted. Here is the pseudocode of the shader:
-     *       o0.xyzw = leftTop.xyzw
-     *       emit                       <- Emits the top left vertex
-     *       o0._yzw = leftTop.xyzw
-     *       o0.x___ = rightBottom.xyzw
-     *       emit                       <- Emits the top right vertex
-     *       o0._y__ = rightBottom.xyzw
-     *       emit                       <- Emits the bottom left vertex (!)
-     *       o0.xyzw = rightBottom.xyzw
-     *       emit                       <- Emits the bottom right vertex
-     *
-     *   This shader code has a bug. When the bottom left vertex is emitted, the y element is
-     *   updated to the bottom coordinate, but the x element is left untouched. One would say that
-     *   since the x element was last set to the RIGHT coordinate, the vertex would end up being
-     *   drawn to the bottom RIGHT instead of the intended bottom LEFT (which is what we observe on
-     *   the emulator). But on real HW, the vertex is drawn to the bottom LEFT instead. This
-     *   suggests a HW bug or quirk that is triggered whenever some elements of an output register
-     *   are not written to between emits. In order for the quad to look proper, the xzw elements
-     *   should somehow keep the contents from the first emit, where the top left coordinate was
-     *   written. The specifics of the HW bug that causes this are unknown.
-     *
-     * Solution:
-     * The following patches are made to fix the shaders:
-     *
-     * - An end instruction is inserted at the end of the shader to prevent unbounded execution.
-     *
-     * - Before the third vertex is emited and the y element of o0 is adjusted, a mov o0.xywz
-     *   leftTop.xywz instruction is inserted to update the xzw elements of the output register to
-     *   the expected values. This requires making room in the shader code, but luckily there are no
-     *   jumps that need relocation.
-     *
-     */
-    constexpr u64 SEGA_3D_CLASSICS_THUNDER_BLADE = 0x0797513756f2c8c9;
-    constexpr u64 SEGA_3D_CLASSICS_AFTER_BURNER = 0x188e959fbe31324d;
-    constexpr u64 SEGA_3D_CLASSICS_COLLECTION_TB = 0x5954c8e4d13cdd86;
-    constexpr u64 SEGA_3D_CLASSICS_COLLECTION_PD = 0x27496993b307355b;
-
-    const auto fix_3d_classics_common = [this](u32 offset_base, u32 mov_swizzle) {
-        offset_base /= 4;
-
-        // Make some room to insert an instruction
-        std::memmove(program_code_fixup.data() + offset_base + 1,
-                     program_code_fixup.data() + offset_base, 0x1C);
-
-        // mov o0.xyzw v0.xyzw (out.pos <- vLeftTop)
-        program_code_fixup[offset_base] = 0x4c000000 | mov_swizzle;
-
-        // end
-        program_code_fixup[offset_base + 0x20] = 0x88000000;
-
-        // Adjust biggest program size
-        if (biggest_program_size <= offset_base + 0x20) {
-            biggest_program_size = offset_base + 0x20 + 1;
-        }
-    };
-
-    // Select shader fixup
-    switch (GetProgramCodeHash()) {
-    case SEGA_3D_CLASSICS_THUNDER_BLADE: {
-        prepare_for_fixup();
-        fix_3d_classics_common(0x510, 0xA);
-    } break;
-    case SEGA_3D_CLASSICS_AFTER_BURNER: {
-        prepare_for_fixup();
-        fix_3d_classics_common(0x50C, 0xA);
-    } break;
-    case SEGA_3D_CLASSICS_COLLECTION_TB: {
-        prepare_for_fixup();
-        fix_3d_classics_common(0xAE0, 0xC);
-    } break;
-    case SEGA_3D_CLASSICS_COLLECTION_PD: {
-        prepare_for_fixup();
-        fix_3d_classics_common(0xAF0, 0xC);
-    } break;
-    default:
-        break;
-    }
+    // No games require shader fixups right now
 }
 
 } // namespace Pica

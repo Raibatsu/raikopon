@@ -5,6 +5,8 @@
 #include <boost/container/static_vector.hpp>
 
 #include "common/alignment.h"
+#include "common/assert.h"
+#include "common/gpu_frame_log.h"
 #include "common/hash.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -35,19 +37,80 @@ vk::ShaderStageFlagBits MakeShaderStage(std::size_t index) {
     return vk::ShaderStageFlagBits::eVertex;
 }
 
+const char* WaitModeName(PipelineWaitMode mode) {
+    switch (mode) {
+    case PipelineWaitMode::Async:
+        return "Async";
+    case PipelineWaitMode::Bounded:
+        return "Bounded";
+    case PipelineWaitMode::Blocking:
+        return "Blocking";
+    }
+    return "?";
+}
+
+void EmitVertexInput(vk::CommandBuffer cmdbuf, const Instance& instance,
+                     const VertexLayout& layout) {
+    const u32 stride_alignment = instance.GetMinVertexStrideAlignment();
+    boost::container::static_vector<vk::VertexInputBindingDescription2EXT, MAX_VERTEX_BINDINGS>
+        bindings;
+    for (u32 i = 0; i < layout.binding_count; i++) {
+        const auto& binding = layout.bindings[i];
+        bindings.push_back(vk::VertexInputBindingDescription2EXT{
+            .binding = binding.binding,
+            .stride = Common::AlignUp(binding.byte_count.Value(), stride_alignment),
+            .inputRate = binding.fixed.Value() ? vk::VertexInputRate::eInstance
+                                               : vk::VertexInputRate::eVertex,
+            .divisor = 1,
+        });
+    }
+
+    boost::container::static_vector<vk::VertexInputAttributeDescription2EXT, MAX_VERTEX_ATTRIBUTES>
+        attributes;
+    for (u32 i = 0; i < layout.attribute_count; i++) {
+        const auto& attr = layout.attributes[i];
+        const FormatTraits& traits = instance.GetTraits(attr.type, attr.size);
+        vk::Format format = traits.native;
+        // At the end there's always the fixed binding which takes up
+        // at least 16 bytes so we should always be able to alias.
+        if (traits.needs_emulation) {
+            format = instance.GetTraits(attr.type, 4).native;
+        }
+        attributes.push_back(vk::VertexInputAttributeDescription2EXT{
+            .location = attr.location,
+            .binding = attr.binding,
+            .format = format,
+            .offset = attr.offset,
+        });
+    }
+
+    cmdbuf.setVertexInputEXT(bindings, attributes);
+}
+
 u64 StaticPipelineInfo::OptimizedHash(const Instance& instance) const {
-    // With EDS3 the blend equation (factors/ops) and write-mask are set dynamically, so they must
-    // NOT key the pipeline -- otherwise every blend combo would still be a distinct pipeline,
-    // defeating the point. Keep only the baked bits: blend_enable (feeds static logicOpEnable) and
-    // logic_op.
+    // With EDS3 the blend equation (factors/ops), write-mask, blend-enable, and logic-op-enable
+    // are all set dynamically, so none of them may key the pipeline -- otherwise every blend combo
+    // would still be a distinct pipeline, defeating the point. The one remaining piece, the
+    // logic-op *value* itself, needs EDS2's separate dynamic-logic-op feature; only once both are
+    // available is the whole blending struct excludable.
+    const bool blend_fully_dynamic =
+        instance.IsExtendedDynamicState3Supported() && instance.IsDynamicLogicOpSupported();
     const u64 blend_hash =
-        instance.IsExtendedDynamicState3Supported()
+        blend_fully_dynamic ? 0
+        : instance.IsExtendedDynamicState3Supported()
             ? Common::HashCombine(static_cast<u64>(blending.blend_enable),
                                   static_cast<u64>(blending.logic_op))
             : Common::ComputeStructHash64(blending);
-    u64 info_hash = Common::HashCombine(
-        shader_ids[0], shader_ids[1], shader_ids[2], Common::ComputeStructHash64(vertex_layout),
-        Common::ComputeStructHash64(attachments), blend_hash);
+    // With VK_EXT_vertex_input_dynamic_state the whole binding/attribute layout is set dynamically
+    // via vkCmdSetVertexInputEXT, so it must NOT key the pipeline either -- this was otherwise the
+    // single biggest remaining static-key contributor, since every distinct mesh/model's vertex
+    // attribute set forced its own pipeline.
+    const u64 vertex_layout_hash = instance.IsVertexInputDynamicStateSupported()
+                                       ? 0
+                                       : Common::ComputeStructHash64(vertex_layout);
+    u64 info_hash =
+        Common::HashCombine(shader_ids[0], shader_ids[1], shader_ids[2], vertex_layout_hash,
+                            Common::ComputeStructHash64(attachments), blend_hash);
 
     if (!instance.IsExtendedDynamicStateSupported()) {
         info_hash = Common::HashCombine(info_hash, Common::ComputeStructHash64(rasterization),
@@ -74,13 +137,42 @@ Shader::Shader(const Instance& instance) : device{instance.GetDevice()} {}
 
 Shader::Shader(const Instance& instance, vk::ShaderStageFlagBits stage, std::string code)
     : Shader{instance} {
-    module = Compile(code, stage, instance.GetDevice());
+    // Retain the intermediate SPIR-V (Compile() would discard it) -- CreateShaderObject needs the
+    // raw bytecode and shouldn't have to re-run glslang to get it.
+    spirv = CompileGLSL(code, stage);
+    module = CompileSPV(spirv, instance.GetDevice());
     MarkDone();
 }
 
 Shader::~Shader() {
     if (device && module) {
         device.destroyShaderModule(module);
+    }
+    if (device && shader_object) {
+        device.destroyShaderEXT(shader_object);
+    }
+}
+
+void Shader::CreateShaderObject(vk::ShaderStageFlagBits stage, vk::ShaderStageFlags next_stage,
+                                std::span<const vk::DescriptorSetLayout> set_layouts) {
+    ASSERT_MSG(!spirv.empty(),
+              "CreateShaderObject requires the SPIR-V this shader was compiled from");
+    const vk::ShaderCreateInfoEXT create_info = {
+        .stage = stage,
+        .nextStage = next_stage,
+        .codeType = vk::ShaderCodeTypeEXT::eSpirv,
+        .codeSize = spirv.size() * sizeof(u32),
+        .pCode = spirv.data(),
+        .pName = "main",
+        .setLayoutCount = static_cast<u32>(set_layouts.size()),
+        .pSetLayouts = set_layouts.data(),
+    };
+    const auto result = device.createShaderEXT(create_info);
+    if (result.result == vk::Result::eSuccess) {
+        shader_object = result.value;
+    } else {
+        LOG_CRITICAL(Render_Vulkan, "Shader object creation failed for stage {}!",
+                    static_cast<u32>(stage));
     }
 }
 
@@ -103,9 +195,11 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
         case PipelineWaitMode::Bounded: {
             const auto start = std::chrono::steady_clock::now();
             const bool ready = WaitDoneFor(kBoundedWaitBudget);
-            Common::ShaderCompileStats::RecordStall(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - start));
+            const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - start);
+            Common::ShaderCompileStats::RecordStall(elapsed_us);
+            Common::GpuFrameLog::LogStall("pending_wait", Common::GpuFrameLog::CurrentFrame(),
+                                          "Bounded", elapsed_us.count());
             return ready;
         }
         case PipelineWaitMode::Blocking:
@@ -137,9 +231,11 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
                     break;
                 }
             }
-            Common::ShaderCompileStats::RecordStall(
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - start));
+            const auto elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - start);
+            Common::ShaderCompileStats::RecordStall(elapsed_us);
+            Common::GpuFrameLog::LogStall("shaders_wait", Common::GpuFrameLog::CurrentFrame(),
+                                          "Bounded", elapsed_us.count());
             if (!shaders_ready) {
                 return false;
             }
@@ -183,6 +279,8 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
     // instead used to head-of-line block the whole pool: Build() waits on shader modules from a
     // different pool, so one cross-pool wait froze every other pipeline behind it.
     if (wait_mode == PipelineWaitMode::Blocking) {
+        Common::GpuFrameLog::LogPipelineEvent("start", Common::GpuFrameLog::CurrentFrame(),
+                                              Hash(), "Blocking");
         const bool boosted = Common::ShaderCompileStats::BeginCompile(
             Settings::values.enable_compile_boost.GetValue());
         Build();
@@ -193,7 +291,15 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
     Common::ThreadWorker* const target_worker = priority_worker ? priority_worker : worker;
     const bool boosted =
         Common::ShaderCompileStats::BeginCompile(Settings::values.enable_compile_boost.GetValue());
-    target_worker->QueueWork([this, boosted] {
+    const char* const mode_name = WaitModeName(wait_mode);
+    Common::GpuFrameLog::LogPipelineEvent("queued", Common::GpuFrameLog::CurrentFrame(), Hash(),
+                                          mode_name);
+    const auto queued_at = std::chrono::steady_clock::now();
+    target_worker->QueueWork([this, boosted, mode_name, queued_at] {
+        const auto queue_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - queued_at);
+        Common::GpuFrameLog::LogPipelineEvent("start", Common::GpuFrameLog::CurrentFrame(), Hash(),
+                                              mode_name, queue_wait_us.count());
         Build();
         Common::ShaderCompileStats::EndCompile(boosted);
     });
@@ -216,44 +322,53 @@ bool GraphicsPipeline::TryBuild(PipelineWaitMode wait_mode, Common::ThreadWorker
 
 bool GraphicsPipeline::Build(bool fail_on_compile_required) {
     MICROPROFILE_SCOPE(Vulkan_Pipeline);
+    const auto setup_start = std::chrono::steady_clock::now();
 
+    // With VK_EXT_vertex_input_dynamic_state, the whole layout is supplied per-draw via
+    // vkCmdSetVertexInputEXT (see EmitVertexInput) instead of baked here -- it's excluded from
+    // OptimizedHash() in that case too, so this pipeline may end up shared across draws with
+    // different vertex layouts entirely. pVertexInputState is ignored by the driver whenever
+    // VK_DYNAMIC_STATE_VERTEX_INPUT_EXT is in pDynamicState (left null here to match).
     const u32 stride_alignment = instance.GetMinVertexStrideAlignment();
     std::array<vk::VertexInputBindingDescription, MAX_VERTEX_BINDINGS> bindings;
-    for (u32 i = 0; i < info.state.vertex_layout.binding_count; i++) {
-        const auto& binding = info.state.vertex_layout.bindings[i];
-        bindings[i] = vk::VertexInputBindingDescription{
-            .binding = binding.binding,
-            .stride = Common::AlignUp(binding.byte_count.Value(), stride_alignment),
-            .inputRate = binding.fixed.Value() ? vk::VertexInputRate::eInstance
-                                               : vk::VertexInputRate::eVertex,
-        };
-    }
-
     std::array<vk::VertexInputAttributeDescription, MAX_VERTEX_ATTRIBUTES> attributes;
-    for (u32 i = 0; i < info.state.vertex_layout.attribute_count; i++) {
-        const auto& attr = info.state.vertex_layout.attributes[i];
-        const FormatTraits& traits = instance.GetTraits(attr.type, attr.size);
-        attributes[i] = vk::VertexInputAttributeDescription{
-            .location = attr.location,
-            .binding = attr.binding,
-            .format = traits.native,
-            .offset = attr.offset,
-        };
-
-        // At the end there's always the fixed binding which takes up
-        // at least 16 bytes so we should always be able to alias.
-        if (traits.needs_emulation) {
-            const FormatTraits& comp_four_traits = instance.GetTraits(attr.type, 4);
-            attributes[i].format = comp_four_traits.native;
+    vk::PipelineVertexInputStateCreateInfo vertex_input_info{};
+    if (!instance.IsVertexInputDynamicStateSupported()) {
+        for (u32 i = 0; i < info.state.vertex_layout.binding_count; i++) {
+            const auto& binding = info.state.vertex_layout.bindings[i];
+            bindings[i] = vk::VertexInputBindingDescription{
+                .binding = binding.binding,
+                .stride = Common::AlignUp(binding.byte_count.Value(), stride_alignment),
+                .inputRate = binding.fixed.Value() ? vk::VertexInputRate::eInstance
+                                                   : vk::VertexInputRate::eVertex,
+            };
         }
-    }
 
-    const vk::PipelineVertexInputStateCreateInfo vertex_input_info = {
-        .vertexBindingDescriptionCount = info.state.vertex_layout.binding_count,
-        .pVertexBindingDescriptions = bindings.data(),
-        .vertexAttributeDescriptionCount = info.state.vertex_layout.attribute_count,
-        .pVertexAttributeDescriptions = attributes.data(),
-    };
+        for (u32 i = 0; i < info.state.vertex_layout.attribute_count; i++) {
+            const auto& attr = info.state.vertex_layout.attributes[i];
+            const FormatTraits& traits = instance.GetTraits(attr.type, attr.size);
+            attributes[i] = vk::VertexInputAttributeDescription{
+                .location = attr.location,
+                .binding = attr.binding,
+                .format = traits.native,
+                .offset = attr.offset,
+            };
+
+            // At the end there's always the fixed binding which takes up
+            // at least 16 bytes so we should always be able to alias.
+            if (traits.needs_emulation) {
+                const FormatTraits& comp_four_traits = instance.GetTraits(attr.type, 4);
+                attributes[i].format = comp_four_traits.native;
+            }
+        }
+
+        vertex_input_info = vk::PipelineVertexInputStateCreateInfo{
+            .vertexBindingDescriptionCount = info.state.vertex_layout.binding_count,
+            .pVertexBindingDescriptions = bindings.data(),
+            .vertexAttributeDescriptionCount = info.state.vertex_layout.attribute_count,
+            .pVertexAttributeDescriptions = attributes.data(),
+        };
+    }
 
     const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
         .topology = PicaToVK::PrimitiveTopology(info.state.rasterization.topology),
@@ -316,7 +431,7 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
         .pScissors = &scissor,
     };
 
-    boost::container::static_vector<vk::DynamicState, 17> dynamic_states = {
+    boost::container::static_vector<vk::DynamicState, 20> dynamic_states = {
         vk::DynamicState::eViewport,           vk::DynamicState::eScissor,
         vk::DynamicState::eStencilCompareMask, vk::DynamicState::eStencilWriteMask,
         vk::DynamicState::eStencilReference,   vk::DynamicState::eBlendConstants,
@@ -333,14 +448,28 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
     }
 
     if (instance.IsExtendedDynamicState3Supported()) {
-        // Blend equation (factors + ops) and write-mask become dynamic -- these are the many-combo
-        // fields that otherwise explode the pipeline permutation count. blend_enable stays static
-        // (only 2 variants, and it feeds the static logicOpEnable so it must stay baked).
+        // Blend equation (factors + ops), write-mask, blend-enable, and logic-op-enable all
+        // become dynamic -- these are the many-combo fields that otherwise explode the pipeline
+        // permutation count. See CreateDevice: all four are required together as one unit.
         constexpr std::array eds3 = {
             vk::DynamicState::eColorBlendEquationEXT,
             vk::DynamicState::eColorWriteMaskEXT,
+            vk::DynamicState::eColorBlendEnableEXT,
+            vk::DynamicState::eLogicOpEnableEXT,
         };
         dynamic_states.insert(dynamic_states.end(), eds3.begin(), eds3.end());
+    }
+
+    if (instance.IsDynamicLogicOpSupported()) {
+        // The logic-op *value* itself (separate EDS2 feature from EDS3's enable bit above) --
+        // together they let the whole blending struct be excluded from the pipeline key.
+        dynamic_states.push_back(vk::DynamicState::eLogicOpEXT);
+    }
+
+    if (instance.IsVertexInputDynamicStateSupported()) {
+        // The single biggest remaining static-key contributor once the above are already dynamic:
+        // every distinct mesh/model's vertex attribute set otherwise forces its own pipeline.
+        dynamic_states.push_back(vk::DynamicState::eVertexInputEXT);
     }
 
     const vk::PipelineDynamicStateCreateInfo dynamic_info = {
@@ -365,6 +494,10 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
         .back = stencil_op_state,
     };
 
+    const auto shader_wait_start = std::chrono::steady_clock::now();
+    const auto setup_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        shader_wait_start - setup_start);
+
     u32 shader_count = 0;
     std::array<vk::PipelineShaderStageCreateInfo, MAX_SHADER_STAGES> shader_stages;
     for (std::size_t i = 0; i < stages.size(); i++) {
@@ -381,10 +514,36 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
         };
     }
 
+    const auto shader_wait_us = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now() - shader_wait_start);
+
+    // Under dynamic rendering, pipelines only need attachment *format* compatibility (no render
+    // pass object) -- built here and chained via pNext instead of passing a vk::RenderPass.
+    vk::Format color_attachment_format = vk::Format::eUndefined;
+    if (info.state.attachments.color != VideoCore::PixelFormat::Invalid) {
+        color_attachment_format = instance.GetTraits(info.state.attachments.color).native;
+    }
+    vk::Format depth_attachment_format = vk::Format::eUndefined;
+    if (info.state.attachments.depth != VideoCore::PixelFormat::Invalid) {
+        depth_attachment_format = instance.GetTraits(info.state.attachments.depth).native;
+    }
+    // D24S8 is the only combined depth+stencil format this fork uses -- mirrors
+    // CreateRenderPass's stencilLoadOp handling, which shares one AttachmentDescription for both.
+    const bool has_stencil = info.state.attachments.depth == VideoCore::PixelFormat::D24S8;
+    const vk::PipelineRenderingCreateInfoKHR rendering_create_info = {
+        .colorAttachmentCount = color_attachment_format != vk::Format::eUndefined ? 1u : 0u,
+        .pColorAttachmentFormats = &color_attachment_format,
+        .depthAttachmentFormat = depth_attachment_format,
+        .stencilAttachmentFormat = has_stencil ? depth_attachment_format : vk::Format::eUndefined,
+    };
+    const bool dynamic_rendering = instance.IsDynamicRenderingSupported();
+
     vk::GraphicsPipelineCreateInfo pipeline_info = {
+        .pNext = dynamic_rendering ? &rendering_create_info : nullptr,
         .stageCount = shader_count,
         .pStages = shader_stages.data(),
-        .pVertexInputState = &vertex_input_info,
+        .pVertexInputState =
+            instance.IsVertexInputDynamicStateSupported() ? nullptr : &vertex_input_info,
         .pInputAssemblyState = &input_assembly,
         .pViewportState = &viewport_info,
         .pRasterizationState = &raster_state,
@@ -393,8 +552,10 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
         .pColorBlendState = &color_blending,
         .pDynamicState = &dynamic_info,
         .layout = pipeline_layout,
-        .renderPass = renderpass_cache.GetRenderpass(info.state.attachments.color,
-                                                     info.state.attachments.depth, false),
+        .renderPass = dynamic_rendering
+                          ? VK_NULL_HANDLE
+                          : renderpass_cache.GetRenderpass(info.state.attachments.color,
+                                                           info.state.attachments.depth, false),
     };
 
     if (fail_on_compile_required) {
@@ -419,6 +580,10 @@ bool GraphicsPipeline::Build(bool fail_on_compile_required) {
     }
 
     MarkDone();
+    Common::GpuFrameLog::LogPipelineEvent(
+        "done", Common::GpuFrameLog::CurrentFrame(), Hash(), "-", 0, setup_us.count(),
+        shader_wait_us.count(),
+        std::chrono::duration_cast<std::chrono::microseconds>(compile_elapsed).count());
     return true;
 }
 

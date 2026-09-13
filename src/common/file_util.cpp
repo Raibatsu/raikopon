@@ -972,7 +972,7 @@ void SetUserPath(const std::string& path) {
         g_paths.emplace(UserPath::CacheDir, user_path + CACHE_DIR DIR_SEP);
 #elif defined(__SWITCH__)
         // Default dir for stuff
-        user_path = "sdmc:/switch/dekopon/";
+        user_path = "sdmc:/switch/azahar/";
         FileUtil::CreateFullPath(user_path);
         g_paths.emplace(UserPath::ConfigDir, user_path + CONFIG_DIR DIR_SEP);
         g_paths.emplace(UserPath::CacheDir, user_path + CACHE_DIR DIR_SEP);

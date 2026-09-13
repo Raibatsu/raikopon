@@ -689,6 +689,21 @@ Loader::ResultStatus NCCHContainer::ReadProgramId(u64_le& program_id) {
     return Loader::ResultStatus::Success;
 }
 
+Loader::ResultStatus NCCHContainer::ReadProductCode(std::string& product_code) {
+    Loader::ResultStatus result = LoadHeader();
+    if (result != Loader::ResultStatus::Success)
+        return result;
+
+    if (!has_header)
+        return Loader::ResultStatus::ErrorNotUsed;
+
+    // Null-terminated ASCII, e.g. "CTR-P-BNDE" - product_code[0x10] is fixed-size and may not
+    // itself be null-terminated if the printable text fills the whole field, so cap the scan.
+    const char* raw = reinterpret_cast<const char*>(ncch_header.product_code);
+    product_code.assign(raw, strnlen(raw, sizeof(ncch_header.product_code)));
+    return Loader::ResultStatus::Success;
+}
+
 Loader::ResultStatus NCCHContainer::ReadExtdataId(u64& extdata_id) {
     Loader::ResultStatus result = Load();
     if (result != Loader::ResultStatus::Success)

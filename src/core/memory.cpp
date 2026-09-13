@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <array>
+#include <atomic>
 #include <csignal>
 #include <cstring>
 #include <boost/serialization/array.hpp>
@@ -183,6 +184,7 @@ public:
     std::shared_ptr<BackingMem> dsp_mem;
 
     PAddr plugin_fb_address{};
+    VAddr plugin_kernel_shim_address{};
 
 #ifdef __SWITCH__
     // Guest fastmem arena (Switch only). One 4 GiB host reservation whose pages mirror the guest
@@ -604,6 +606,7 @@ private:
         ar & n3ds_extra_ram_mem;
         ar & dsp_mem;
         ar & plugin_fb_address;
+        ar & plugin_kernel_shim_address;
     }
 };
 
@@ -686,6 +689,10 @@ void MemorySystem::RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode
 
 PAddr& Memory::MemorySystem::Plugin3GXFramebufferAddress() {
     return impl->plugin_fb_address;
+}
+
+VAddr& Memory::MemorySystem::Plugin3GXKernelShimAddress() {
+    return impl->plugin_kernel_shim_address;
 }
 
 void MemorySystem::RegisterWatchpoint(const Kernel::Process& process, VAddr addr, u32 size) {
@@ -862,6 +869,18 @@ void MemorySystem::UnregisterPageTable(std::shared_ptr<PageTable> page_table) {
 
 template <typename T>
 void MemorySystem::UnmappedAccess(const VAddr vaddr, const T value, bool read) {
+    static std::atomic<bool> logged{false};
+    const bool should_log = !logged.exchange(true, std::memory_order_relaxed);
+    const bool should_break =
+#ifdef ENABLE_GDBSTUB
+        GDBStub::IsConnected() ||
+#endif
+        static_cast<bool>(Settings::values.break_on_unmapped_memory_access);
+
+    if (!should_log && !should_break) {
+        return;
+    }
+
     const std::string mode = (read ? "Read" : "Write");
     const std::string value_str = read ? std::string("") : fmt::format(" 0x{:08X}", value);
     const std::string message = fmt::format("unmapped {}{}{} @ 0x{:08X} at PC 0x{:08X}", mode,
@@ -876,7 +895,9 @@ void MemorySystem::UnmappedAccess(const VAddr vaddr, const T value, bool read) {
                                message.c_str());
     }
 
-    LOG_ERROR(HW_Memory, "{}", message);
+    if (should_log) {
+        LOG_ERROR(HW_Memory, "{} (further occurrences suppressed)", message);
+    }
 }
 
 template <typename T>
@@ -913,6 +934,19 @@ T MemorySystem::Read(const std::shared_ptr<PageTable>& page_table, const VAddr v
                 static_cast<VAddr>(paddr) - Memory::IO_AREA_PADDR + 0x1EC00000));
         }
         // Fallthrough: Standard page table lookup
+    }
+
+    // Fake CurrentKThread (0xFFFF9000) / CurrentKProcess (0xFFFF9004) pointers, matching what
+    // real Luma3DS exposes at these fixed addresses. Some 3GX plugin frameworks (e.g.
+    // CTRPluginFramework) dereference them directly instead of only through svcCustomBackdoor.
+    if ((vaddr == 0xFFFF9000 || vaddr == 0xFFFF9004) && impl->plugin_kernel_shim_address != 0)
+        [[unlikely]] {
+        const VAddr shim_addr = vaddr == 0xFFFF9000
+                                    ? impl->plugin_kernel_shim_address +
+                                          Memory::PLUGIN_KERNEL_SHIM_THREAD_OFFSET
+                                    : impl->plugin_kernel_shim_address +
+                                          Memory::PLUGIN_KERNEL_SHIM_PROCESS_OFFSET;
+        return static_cast<ReadType>(shim_addr);
     }
 
     PageType type = page_table->attributes[vaddr >> CITRA_PAGE_BITS];

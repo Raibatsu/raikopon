@@ -13,6 +13,21 @@ namespace Frontend {
 /// We need a global touch state that is shared across the different window instances
 static std::weak_ptr<EmuWindow::TouchState> global_touch_state;
 
+namespace {
+
+int BottomScreenRotationDegrees() {
+    if (Settings::values.layout_option.GetValue() != Settings::LayoutOption::CustomLayout) {
+        return 0;
+    }
+    return Settings::values.custom_bottom_rotation.GetValue();
+}
+
+Common::Rectangle<u32> EffectiveBottomScreen(const Layout::FramebufferLayout& layout) {
+    return Layout::RotatedScreenRect(layout.bottom_screen, BottomScreenRotationDegrees());
+}
+
+} // namespace
+
 GraphicsContext::~GraphicsContext() = default;
 
 class EmuWindow::TouchState : public Input::Factory<Input::TouchDevice>,
@@ -87,37 +102,34 @@ bool EmuWindow::IsWithinTouchscreen(const Layout::FramebufferLayout& layout, uns
     }
 #endif
     Settings::StereoRenderOption render_3d_mode = get3DMode();
+    const Common::Rectangle<u32> bottom_screen = EffectiveBottomScreen(layout);
 
     if (framebuffer_x > layout.width / 2 &&
         render_3d_mode == Settings::StereoRenderOption::SideBySideFull) {
         framebuffer_x = static_cast<unsigned>(framebuffer_x - layout.width / 2);
     }
     if (render_3d_mode == Settings::StereoRenderOption::SideBySide) {
-        return (framebuffer_y >= layout.bottom_screen.top &&
-                framebuffer_y < layout.bottom_screen.bottom &&
-                ((framebuffer_x >= layout.bottom_screen.left / 2 &&
-                  framebuffer_x < layout.bottom_screen.right / 2) ||
-                 (framebuffer_x >= (layout.bottom_screen.left / 2) + (layout.width / 2) &&
-                  framebuffer_x < (layout.bottom_screen.right / 2) + (layout.width / 2))));
+        return (framebuffer_y >= bottom_screen.top && framebuffer_y < bottom_screen.bottom &&
+                ((framebuffer_x >= bottom_screen.left / 2 &&
+                  framebuffer_x < bottom_screen.right / 2) ||
+                 (framebuffer_x >= (bottom_screen.left / 2) + (layout.width / 2) &&
+                  framebuffer_x < (bottom_screen.right / 2) + (layout.width / 2))));
     } else if (render_3d_mode == Settings::StereoRenderOption::CardboardVR) {
-        return (framebuffer_y >= layout.bottom_screen.top &&
-                framebuffer_y < layout.bottom_screen.bottom &&
-                ((framebuffer_x >= layout.bottom_screen.left &&
-                  framebuffer_x < layout.bottom_screen.right) ||
+        return (framebuffer_y >= bottom_screen.top && framebuffer_y < bottom_screen.bottom &&
+                ((framebuffer_x >= bottom_screen.left && framebuffer_x < bottom_screen.right) ||
                  (framebuffer_x >= layout.cardboard.bottom_screen_right_eye + (layout.width / 2) &&
                   framebuffer_x < layout.cardboard.bottom_screen_right_eye +
-                                      layout.bottom_screen.GetWidth() + (layout.width / 2))));
+                                      bottom_screen.GetWidth() + (layout.width / 2))));
     } else {
-        return (framebuffer_y >= layout.bottom_screen.top &&
-                framebuffer_y < layout.bottom_screen.bottom &&
-                framebuffer_x >= layout.bottom_screen.left &&
-                framebuffer_x < layout.bottom_screen.right);
+        return (framebuffer_y >= bottom_screen.top && framebuffer_y < bottom_screen.bottom &&
+                framebuffer_x >= bottom_screen.left && framebuffer_x < bottom_screen.right);
     }
 }
 
 std::tuple<unsigned, unsigned> EmuWindow::ClipToTouchScreen(unsigned new_x, unsigned new_y) const {
 
     Settings::StereoRenderOption render_3d_mode = get3DMode();
+    const Common::Rectangle<u32> bottom_screen = EffectiveBottomScreen(framebuffer_layout);
 
     if (new_x >= framebuffer_layout.width / 2) {
         if (render_3d_mode == Settings::StereoRenderOption::SideBySide ||
@@ -129,15 +141,15 @@ std::tuple<unsigned, unsigned> EmuWindow::ClipToTouchScreen(unsigned new_x, unsi
     }
 
     if (render_3d_mode == Settings::StereoRenderOption::SideBySide) {
-        new_x = std::max(new_x, framebuffer_layout.bottom_screen.left / 2);
-        new_x = std::min(new_x, framebuffer_layout.bottom_screen.right / 2 - 1);
+        new_x = std::max(new_x, bottom_screen.left / 2);
+        new_x = std::min(new_x, bottom_screen.right / 2 - 1);
     } else {
-        new_x = std::max(new_x, framebuffer_layout.bottom_screen.left);
-        new_x = std::min(new_x, framebuffer_layout.bottom_screen.right - 1);
+        new_x = std::max(new_x, bottom_screen.left);
+        new_x = std::min(new_x, bottom_screen.right - 1);
     }
 
-    new_y = std::max(new_y, framebuffer_layout.bottom_screen.top);
-    new_y = std::min(new_y, framebuffer_layout.bottom_screen.bottom - 1);
+    new_y = std::max(new_y, bottom_screen.top);
+    new_y = std::min(new_y, bottom_screen.bottom - 1);
 
     return std::make_tuple(new_x, new_y);
 }
@@ -167,22 +179,37 @@ bool EmuWindow::TouchPressed(unsigned framebuffer_x, unsigned framebuffer_y) {
     }
 
     std::scoped_lock guard(touch_state->mutex);
+    const Common::Rectangle<u32> bottom_screen = EffectiveBottomScreen(framebuffer_layout);
 
     if (render_3d_mode == Settings::StereoRenderOption::SideBySide) {
-        touch_state->touch_x =
-            static_cast<float>(framebuffer_x - framebuffer_layout.bottom_screen.left / 2) /
-            (framebuffer_layout.bottom_screen.right / 2 -
-             framebuffer_layout.bottom_screen.left / 2);
+        touch_state->touch_x = static_cast<float>(framebuffer_x - bottom_screen.left / 2) /
+                               (bottom_screen.right / 2 - bottom_screen.left / 2);
     } else {
-        touch_state->touch_x =
-            static_cast<float>(framebuffer_x - framebuffer_layout.bottom_screen.left) /
-            (framebuffer_layout.bottom_screen.right - framebuffer_layout.bottom_screen.left);
+        touch_state->touch_x = static_cast<float>(framebuffer_x - bottom_screen.left) /
+                               (bottom_screen.right - bottom_screen.left);
     }
-    touch_state->touch_y =
-        static_cast<float>(framebuffer_y - framebuffer_layout.bottom_screen.top) /
-        (framebuffer_layout.bottom_screen.bottom - framebuffer_layout.bottom_screen.top);
+    touch_state->touch_y = static_cast<float>(framebuffer_y - bottom_screen.top) /
+                           (bottom_screen.bottom - bottom_screen.top);
 
-    if (!framebuffer_layout.is_rotated) {
+    const int bottom_rotation = BottomScreenRotationDegrees();
+    if (bottom_rotation != 0) {
+        switch (bottom_rotation) {
+        case 90:
+            std::swap(touch_state->touch_x, touch_state->touch_y);
+            touch_state->touch_x = 1.f - touch_state->touch_x;
+            break;
+        case 180:
+            touch_state->touch_x = 1.f - touch_state->touch_x;
+            touch_state->touch_y = 1.f - touch_state->touch_y;
+            break;
+        case 270:
+            std::swap(touch_state->touch_x, touch_state->touch_y);
+            touch_state->touch_y = 1.f - touch_state->touch_y;
+            break;
+        default:
+            break;
+        }
+    } else if (!framebuffer_layout.is_rotated) {
         std::swap(touch_state->touch_x, touch_state->touch_y);
         if (framebuffer_layout.is_upright_flipped) {
             touch_state->touch_y = 1.f - touch_state->touch_y;

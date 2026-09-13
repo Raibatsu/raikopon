@@ -96,8 +96,10 @@ Result ServerSession::HandleSyncRequest(std::shared_ptr<Thread> thread) {
 
         hle_handler->HandleSyncRequest(*context);
 
-        ASSERT(thread->status == Kernel::ThreadStatus::Running ||
-               thread->status == Kernel::ThreadStatus::WaitHleEvent);
+        ASSERT_MSG(thread->status == Kernel::ThreadStatus::Running ||
+                       thread->status == Kernel::ThreadStatus::WaitHleEvent,
+                   "thread_id={:#x} status={} session={}", thread->thread_id,
+                   static_cast<u32>(thread->status), name);
         // Only write the response immediately if the thread is still running. If the HLE handler
         // put the thread to sleep then the writing of the command buffer will be deferred to the
         // wakeup callback.
