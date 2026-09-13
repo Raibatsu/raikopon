@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://img.shields.io/badge/status-on%20hold-orange?style=for-the-badge" alt="Status: On Hold">
+  <img src="https://img.shields.io/badge/PRs%20%26%20forks-welcome-brightgreen?style=for-the-badge" alt="Forks welcome">
+</p>
 <h1 align="center">Raika Azahar</h1>
 
 <p align="center">
@@ -5,6 +9,25 @@
 </p>
 
 <p align="center"><sub>Logo by Noihs</sub></p>
+
+---
+
+> [!IMPORTANT]
+> ### 🚧 Development Paused
+>
+> I'm unable to continue development on **Raikopon** for now — some personal
+> circumstances have all piled up on top of one another.
+>
+> I've uploaded most of what I've done so far, though **the project may not be in
+> its most stable condition** in the last push, as I was actively in the middle of
+> getting mods to work properly when I had to step away.
+>
+> **Feel free to fork it and continue from where I left off.** I might come back to
+> it when I have the luxury of time in the near future.
+>
+> Thanks to everyone who's followed along. 🙏
+
+
 
 <b>Raika Azahar</b> is an open-source 3DS emulator for the Nintendo Switch, built on top of Azahar.
 
